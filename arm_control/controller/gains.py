@@ -21,3 +21,7 @@ KD_BODY: List[float] = [
 ]
 
 G1_NUM_MOTOR = 29
+
+# 接管锁腰：生产 HAL 腰 yaw kp=60，人手能掰动。锁零时用更高刚度（仍是 PD，不是机械刹车）。
+WAIST_LOCK_KP = 200.0
+WAIST_LOCK_KD = 4.0

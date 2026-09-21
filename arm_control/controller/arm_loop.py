@@ -9,12 +9,12 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from controller.gains import G1_NUM_MOTOR, KD_BODY, KP_BODY
+from controller.gains import G1_NUM_MOTOR, KD_BODY, KP_BODY, WAIST_LOCK_KD, WAIST_LOCK_KP
 from dds.lowstate import LowStateReader
 from dds.sdk import init_channel
 from model.arm_gravity import ArmGravity
 from model.fk_scene import RobotKinematics
-from model.layout import ArmLayout, get_arm
+from model.layout import ArmLayout, WAIST_MOTOR_INDICES, get_arm
 
 TAU_FF_LIMIT = 8.0
 TEACH_KD = 2.0
@@ -60,6 +60,8 @@ class ArmLoop:
         self._grav = ArmGravity(self.layout.name, urdf, base_link)
         self._grav_on = True
         self._float = False
+        self._waist_cmd: Optional[dict] = None
+        self._waist_target: Optional[dict] = None
 
         self._crc = CRC()
         self._cmd = unitree_hg_msg_dds__LowCmd_()
@@ -127,18 +129,42 @@ class ArmLoop:
             _, result = switcher.CheckMode()
         self._released_mode = True
 
+    def _read_waist(self) -> dict:
+        msg, _ = self.reader.latest_msg()
+        if msg is None:
+            raise RuntimeError("no lowstate")
+        return {idx: float(msg.motor_state[idx].q) for idx in WAIST_MOTOR_INDICES}
+
+    def _slew_waist(self) -> None:
+        if not self._waist_cmd or not self._waist_target:
+            return
+        step = self.max_speed * self._dt
+        for idx in WAIST_MOTOR_INDICES:
+            cur = float(self._waist_cmd[idx])
+            tgt = float(self._waist_target[idx])
+            d = tgt - cur
+            if abs(d) <= step:
+                self._waist_cmd[idx] = tgt
+            else:
+                self._waist_cmd[idx] = cur + (step if d > 0 else -step)
+
     def engage(self) -> None:
         self._release_motion_mode()
         q = self._clamp(self._measured())
+        waist_now = self._read_waist()
         with self._lock:
             self._cmd_q = q.copy()
             self._desired_q = q.copy()
             self._float = False
+            self._waist_cmd = waist_now
+            self._waist_target = {idx: 0.0 for idx in WAIST_MOTOR_INDICES}
             self._engaged = True
 
     def release(self) -> None:
         with self._lock:
             self._float = False
+            self._waist_cmd = None
+            self._waist_target = None
             self._engaged = False
 
     def estop_hold(self) -> None:
@@ -179,13 +205,18 @@ class ArmLoop:
         with self._lock:
             engaged = self._engaged
             floating = self._float
+            grav_on = self._grav_on
+            waist_cmd = dict(self._waist_cmd) if self._waist_cmd else None
             cmd = self._cmd_q.tolist()
             desired = self._desired_q.tolist()
         return {
             "engaged": engaged,
             "float": floating,
-            "gravity_ff": self._grav_on,
+            "gravity_ff": grav_on,
             "gravity_mass_kg": self._grav.moving_mass_kg,
+            "waist_locked": waist_cmd is not None,
+            "waist_hold_rad": waist_cmd,
+            "waist_target_rad": {str(i): 0.0 for i in WAIST_MOTOR_INDICES} if waist_cmd is not None else None,
             "arm": self.layout.name,
             "max_speed_rad_s": self.max_speed,
             "cmd_rad": cmd,
@@ -212,6 +243,7 @@ class ArmLoop:
             floating = self._float
             q_arm = q_meas.copy() if self._float else self._cmd_q.copy()
             grav_on = self._grav_on
+            waist_hold = dict(self._waist_cmd) if self._waist_cmd else None
         tau_arm = np.zeros(self.layout.n)
         if grav_on:
             tau_arm = np.clip(self._grav.tau_arm(q_meas), -TAU_FF_LIMIT, TAU_FF_LIMIT)
@@ -230,6 +262,14 @@ class ArmLoop:
             slot.kp = float(self.kp_body[i])
             slot.kd = float(self.kd_body[i])
             slot.tau = 0.0
+        if waist_hold:
+            for idx, q_w in waist_hold.items():
+                slot = self._cmd.motor_cmd[int(idx)]
+                slot.q = float(q_w)
+                slot.dq = 0.0
+                slot.kp = float(WAIST_LOCK_KP)
+                slot.kd = float(WAIST_LOCK_KD)
+                slot.tau = 0.0
         for name, qv, tau in zip(self.layout.joint_names, q_arm, tau_arm):
             idx = self.layout.motor_index(name)
             slot = self._cmd.motor_cmd[idx]
@@ -253,6 +293,7 @@ class ArmLoop:
                     with self._lock:
                         if not self._float:
                             self._slew()
+                        self._slew_waist()
                     self._publish()
                     self._last_err = None
             except Exception as e:

@@ -176,7 +176,9 @@ function applyCtrl(ctrl) {
   $("btn-teach").textContent = ctrl.float ? "结束拖拽" : "拖拽";
   $("grav-on").checked = ctrl.gravity_ff !== false;
   $("engage-state").textContent = allow
-    ? (ctrl.engaged ? (ctrl.float ? `拖拽中 · ${ctrl.arm}` : `已接管 · ${ctrl.arm}`) : "未接管")
+    ? (ctrl.engaged
+        ? `${ctrl.float ? "拖拽中" : "已接管"} · ${ctrl.arm}${ctrl.waist_locked ? " · 腰回零锁" : ""}`
+        : "未接管")
     : "只读（加 --allow-real-motion 后可接管）";
   document.querySelectorAll(".g-q").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
   $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;

@@ -70,6 +70,8 @@ ARMS: Dict[str, ArmLayout] = {"right": RIGHT, "left": LEFT}
 
 WAIST_YAW_JOINT = "torso_Joint"
 WAIST_YAW_MOTOR_INDEX = 12
+# G1 29-DoF 腰组：生产 HAL 在纯臂模式会一起写 12/13/14。G1D 可转的是 torso_Joint@12。
+WAIST_MOTOR_INDICES = (12, 13, 14)
 BASE_LINK = "torso_link"
 
 
