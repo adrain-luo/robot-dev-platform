@@ -42,6 +42,7 @@ const V3 = {
     if (sc.target_links) {
       for (let i = 1; i < sc.target_links.length; i++) this.line(sc.target_links[i - 1], sc.target_links[i], "#60a5fa", 2, [6, 4]);
     }
+    (sc.pose_tips || []).forEach((p, i) => p && this.dot(p, "rgba(110,231,168,0.75)", 2.5, i === 0 ? "姿态集" : undefined));
     const T = sc.wrist_T;
     if (T) {
       const o = [T[0][3], T[1][3], T[2][3]], L = 0.06;
@@ -164,14 +165,19 @@ async function post(path, body) {
   return data;
 }
 
+let currentSet = null;
+let lastCtrl = null;
+
 function applyCtrl(ctrl) {
   if (!ctrl) return;
+  lastCtrl = ctrl;
   const allow = !!ctrl.allow_real_motion;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
   ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "control-arm", "speed", "grav-on"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
+  $("btn-poseset-mirror").disabled = !currentSet;
   if ($("btn-teach")) $("btn-teach").disabled = !allow || !ctrl.engaged;
   $("btn-teach").textContent = ctrl.float ? "结束拖拽" : "拖拽";
   $("grav-on").checked = ctrl.gravity_ff !== false;
@@ -205,6 +211,11 @@ async function poll() {
     $("meta").textContent = `${data.iface} · ${data.topic} · mode_machine=${right?.mode_machine ?? "—"}`;
     applyCtrl(data.ctrl);
     const modeLabel = data.ctrl?.float ? "实测 · 拖拽卸力" : (data.ctrl?.engaged ? "实测 · 已接管" : (data.mode === "real" ? "实测 · 未接管" : "实测 · 只读"));
+    if (currentSet && currentSet.poses) {
+      const tips = currentSet.poses.map((p) => p.tip_xyz).filter(Boolean);
+      const armSc = currentSet.arm === "left" ? left?.scene : right?.scene;
+      if (armSc) armSc.pose_tips = tips;
+    }
     V3.scene = {
       right: right?.scene,
       left: left?.scene,
@@ -221,6 +232,113 @@ async function poll() {
   } finally {
     inflight = false;
   }
+}
+
+function posesetName() {
+  return $("poseset-select").value;
+}
+
+function renderPoseList(list) {
+  const sel = $("poseset-select");
+  const keep = posesetName();
+  sel.innerHTML = "";
+  const opt0 = document.createElement("option");
+  opt0.value = "";
+  opt0.textContent = list.length ? "选择姿态集…" : "还没有姿态集";
+  sel.appendChild(opt0);
+  for (const s of list) {
+    const o = document.createElement("option");
+    o.value = s.name;
+    const side = s.arm === "left" ? "左" : "右";
+    o.textContent = `${s.name} · ${side} · ${s.n}点` + (s.cond != null ? ` · cond ${s.cond}` : "");
+    sel.appendChild(o);
+  }
+  if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+}
+
+function renderChips() {
+  const box = $("pose-chips");
+  box.innerHTML = "";
+  $("pose-cond").textContent = "";
+  if (!currentSet) return;
+  const cond = currentSet.regressor_cond;
+  $("pose-cond").textContent = currentSet.arm === "left" ? "左臂" : "右臂"
+    + (cond != null ? ` · 回归 cond ${cond}` : "")
+    + (currentSet.mirrored_from ? ` · 镜像自 ${currentSet.mirrored_from.name}` : "");
+  (currentSet.poses || []).forEach((p, i) => {
+    const wrap = document.createElement("span");
+    wrap.style.display = "inline-flex";
+    wrap.style.gap = "0";
+    const b = document.createElement("button");
+    b.textContent = p.name || `p${i}`;
+    b.title = (p.q || []).map((q) => Number(q).toFixed(2)).join(", ");
+    b.onclick = () => gotoPose(i);
+    const x = document.createElement("button");
+    x.textContent = "×";
+    x.title = "删除此姿态";
+    x.onclick = (e) => { e.stopPropagation(); deletePose(i); };
+    wrap.appendChild(b);
+    wrap.appendChild(x);
+    box.appendChild(wrap);
+  });
+}
+
+async function refreshPoseList(selectName) {
+  const d = await fetch("/api/posesets").then((r) => r.json());
+  if (!d.ok) throw new Error(d.error);
+  renderPoseList(d.list || []);
+  if (selectName) $("poseset-select").value = selectName;
+  if (posesetName()) await loadCurrentSet();
+  else { currentSet = null; renderChips(); }
+}
+
+async function loadCurrentSet() {
+  const name = posesetName();
+  if (!name) { currentSet = null; renderChips(); return; }
+  const d = await fetch("/api/posesets?name=" + encodeURIComponent(name)).then((r) => r.json());
+  if (!d.ok) throw new Error(d.error);
+  currentSet = d.set;
+  renderChips();
+}
+
+async function gotoPose(i) {
+  if (!currentSet) return;
+  fillQ(currentSet.poses[i].q);
+  const ctrl = lastCtrl;
+  if (!ctrl?.allow_real_motion || !ctrl.engaged || ctrl.float) {
+    flash("已填入该姿态角（需接管且非拖拽才能走过去）", true);
+    return;
+  }
+  if (ctrl.arm !== currentSet.arm) {
+    flash(`姿态集是${currentSet.arm === "left" ? "左" : "右"}臂，请先切控制臂`, false);
+    return;
+  }
+  try {
+    await post("/api/posesets/goto", { name: currentSet.name, index: i });
+    flash(`正在去 ${currentSet.poses[i].name}`, true);
+  } catch (e) { flash(String(e), false); }
+}
+
+async function deletePose(i) {
+  if (!currentSet) return;
+  if (!confirm(`删除 ${currentSet.poses[i].name}？`)) return;
+  try {
+    const d = await post("/api/posesets/delete-pose", { name: currentSet.name, index: i });
+    currentSet = d.set;
+    renderChips();
+    await refreshPoseList(currentSet.name);
+  } catch (e) { flash(String(e), false); }
+}
+
+async function recordPose() {
+  if (!posesetName()) { flash("先新建或选择姿态集", false); return; }
+  try {
+    const d = await post("/api/posesets/record", { name: posesetName() });
+    currentSet = d.set;
+    renderChips();
+    await refreshPoseList(currentSet.name);
+    flash(`已记录 ${d.pose.name}（${currentSet.arm === "left" ? "左" : "右"}臂实测）`, true);
+  } catch (e) { flash(String(e), false); }
 }
 
 ensureGotoInputs();
@@ -273,5 +391,55 @@ $("control-arm").onchange = async () => {
   try { await post("/api/control-arm", { arm: $("control-arm").value }); flash("控制臂已切换", true); }
   catch (e) { flash(String(e), false); }
 };
+$("poseset-select").onchange = () => loadCurrentSet().catch((e) => flash(String(e), false));
+$("btn-poseset-new").onclick = async () => {
+  const name = $("poseset-new").value.trim();
+  if (!name) { flash("填一个姿态集名字", false); return; }
+  const arm = $("poseset-arm").value;
+  try {
+    const d = await post("/api/posesets/create", { name, arm });
+    $("poseset-new").value = "";
+    await refreshPoseList(d.set.name);
+    flash(`已建「${d.set.name}」${arm === "left" ? "左" : "右"}臂`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-poseset-del").onclick = async () => {
+  const name = posesetName();
+  if (!name) return;
+  if (!confirm(`删除姿态集「${name}」？`)) return;
+  try {
+    await post("/api/posesets/delete", { name });
+    currentSet = null;
+    await refreshPoseList();
+    flash("已删集", true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-poseset-record").onclick = () => recordPose();
+$("btn-poseset-mirror").onclick = async () => {
+  if (!currentSet) { flash("先选姿态集", false); return; }
+  const dst = currentSet.arm === "left" ? "右" : "左";
+  if (!confirm(`把「${currentSet.name}」关于 y=0 镜像成${dst}臂姿态集？关节角会改符号，不是原样复制。`)) return;
+  try {
+    const d = await post("/api/posesets/mirror", { src: currentSet.name });
+    await refreshPoseList(d.set.name);
+    flash(`已镜像为「${d.set.name}」${dst}臂 ${d.set.poses.length} 点`, true);
+  } catch (e) {
+    if (String(e).includes("已存在") && confirm("对侧集已存在，覆盖？")) {
+      try {
+        const d = await post("/api/posesets/mirror", { src: currentSet.name, force: true });
+        await refreshPoseList(d.set.name);
+        flash(`已覆盖镜像「${d.set.name}」`, true);
+      } catch (e2) { flash(String(e2), false); }
+    } else flash(String(e), false);
+  }
+};
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" && e.key !== " ") return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+  e.preventDefault();
+  recordPose();
+});
+refreshPoseList().catch(() => {});
 setInterval(poll, 100);
 poll();

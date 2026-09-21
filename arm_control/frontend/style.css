@@ -42,4 +42,7 @@ table { width: 100%; border-collapse: collapse; font: 12px/1.4 ui-monospace, mon
 td, th { padding: 3px 8px; border-bottom: 1px solid #22262c; text-align: right; white-space: nowrap; }
 td:first-child, th:first-child { text-align: left; }
 th { color: #9aa3ad; font-weight: 500; }
-.dq-live { color: #60a5fa; }
+#pose-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+#pose-chips button { padding: 1px 7px; font: 11px ui-monospace, monospace; }
+#pose-chips button.cur { background: #2f6feb; border-color: #2f6feb; }
+#poseset-new { width: 140px; }

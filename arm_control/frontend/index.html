@@ -50,6 +50,23 @@
       </div>
       <div class="row" id="goto-inputs"></div>
     </div>
+    <div class="panel" id="panel-poses">
+      <h2>姿态集（示教 · 左右镜像） <span id="pose-cond" class="meta"></span></h2>
+      <p class="meta">接管后拖拽到位，空格或「记录」记下该臂实测角。镜像关于躯干矢状面 y=0：看起来左右对称，不是复制同一组关节角（roll/yaw 反号，pitch 同号）。</p>
+      <div class="row">
+        <select id="poseset-select"></select>
+        <select id="poseset-arm">
+          <option value="right">新建→右</option>
+          <option value="left">新建→左</option>
+        </select>
+        <input id="poseset-new" placeholder="新名字" maxlength="48">
+        <button id="btn-poseset-new">新建</button>
+        <button id="btn-poseset-del">删集</button>
+        <button id="btn-poseset-record" class="primary">记录</button>
+        <button id="btn-poseset-mirror">镜像到对侧</button>
+      </div>
+      <div id="pose-chips"></div>
+    </div>
     <div class="panel">
       <h2>关节（视图所选；双臂时显示控制臂）</h2>
       <table id="joints-table">

@@ -27,6 +27,7 @@ from controller.arm_loop import ArmLoop, PermissionErrorMotion
 from dds.lowstate import LowStateReader
 from model.fk_scene import RobotKinematics
 from model.layout import ARMS, get_arm, short_joint_label
+import poses as posesets
 
 FRONTEND = HERE / "frontend"
 
@@ -78,6 +79,47 @@ class App:
             return base
         base.update(self.loop.status())
         return base
+
+    def _urdf(self):
+        return self.settings.urdf, self.settings.base_link
+
+    def handle_poseset_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        urdf, base = self._urdf()
+        if path == "/api/posesets/create":
+            d = posesets.create_set(str(body["name"]), str(body.get("arm") or "right"), str(body.get("note") or ""))
+            return {"ok": True, "set": d, "list": posesets.list_sets()}
+        if path == "/api/posesets/delete":
+            posesets.delete_set(str(body["name"]))
+            return {"ok": True, "list": posesets.list_sets()}
+        if path == "/api/posesets/record":
+            name = str(body["name"])
+            d = posesets.load_set(name)
+            st = self.reader().read_arm(d["arm"])
+            r = posesets.add_pose(name, st.q, urdf, base, body.get("pose_name"), "teach")
+            return {"ok": True, "set": r["set"], "pose": r["pose"]}
+        if path == "/api/posesets/delete-pose":
+            d = posesets.delete_pose(str(body["name"]), int(body["index"]), urdf, base)
+            return {"ok": True, "set": d}
+        if path == "/api/posesets/mirror":
+            d = posesets.mirror_set(
+                str(body["src"]),
+                urdf,
+                base,
+                name=body.get("name"),
+                force=bool(body.get("force", False)),
+            )
+            return {"ok": True, "set": d, "list": posesets.list_sets()}
+        if path == "/api/posesets/goto":
+            loop = self.require_loop()
+            d = posesets.load_set(str(body["name"]))
+            i = int(body["index"])
+            if not (0 <= i < len(d["poses"])):
+                raise IndexError("姿态下标越界")
+            if loop.arm != d["arm"]:
+                raise PermissionErrorMotion(f"当前控制臂是{loop.arm}，姿态集是{d['arm']}，请先释放并切换")
+            loop.set_target(d["poses"][i]["q"])
+            return {"ok": True, "ctrl": self.ctrl_status()}
+        raise FileNotFoundError(path)
 
     def snapshot(self, arm: str) -> Dict[str, Any]:
         layout = get_arm(arm)
@@ -205,6 +247,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/scene":
                 _json(self, 200, APP.both_scenes())
                 return
+            if path == "/api/posesets":
+                q = parse_qs(parsed.query)
+                name = (q.get("name") or [None])[0]
+                if name:
+                    _json(self, 200, {"ok": True, "set": posesets.load_set(name)})
+                else:
+                    arm = (q.get("arm") or [None])[0]
+                    _json(self, 200, {"ok": True, "list": posesets.list_sets(arm)})
+                return
             self.send_error(404)
         except Exception as e:
             traceback.print_exc()
@@ -215,6 +266,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = _read_json(self)
+            if path.startswith("/api/posesets"):
+                _json(self, 200, APP.handle_poseset_post(path, body))
+                return
             loop = APP.require_loop()
             if path == "/api/engage":
                 loop.engage()

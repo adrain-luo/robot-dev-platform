@@ -90,6 +90,7 @@ class ArmGravity:
         self.bodies = {ln: inertials[ln] for sub in self._downstream for ln in sub}
         self._fk_root = self._chain[0]
         self.model = URDFRobotModel(str(urdf_path), base_link, self.tip_link)
+        self.limits = self.model.joint_limits()
         self.moving_mass_kg = float(sum(m for m, _ in self.bodies.values()))
 
     def _subtree(self, link: str) -> List[str]:
@@ -161,3 +162,24 @@ class ArmGravity:
                 tot += self.bodies[ln][0] * float(g @ np.cross(zs[i], coms[ln] - ps[i]))
             tau[i] = -tot
         return tau
+
+    def payload_regressor(self, q) -> np.ndarray:
+        q = np.asarray(q, float).reshape(-1)
+        g = np.array([0.0, 0.0, -G_ACCEL])
+        fk = self._fk(q)
+        zs, ps = [], []
+        for j in self._chain:
+            T = fk[j.child]
+            zs.append(T[:3, :3] @ j.axis)
+            ps.append(T[:3, 3])
+        TL = fk[self.tip_link]
+        pL, RL = TL[:3, 3], TL[:3, :3]
+        Y = np.zeros((self.n, 4))
+        for i in range(self.n):
+            Y[i, 0] = -float(g @ np.cross(zs[i], pL - ps[i]))
+            for k in range(3):
+                Y[i, 1 + k] = -float(g @ np.cross(zs[i], RL[:, k]))
+        return Y
+
+    def tip_T(self, q) -> np.ndarray:
+        return self.model.fk_T(q)
