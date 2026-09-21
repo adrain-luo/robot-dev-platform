@@ -1,0 +1,55 @@
+# 人读对照样例。运行时请改 config/g1d.json（stdlib json，无需 PyYAML）。
+# 关节表代码源：model/layout.py。环境变量：ARM_DDS_INTERFACE / UNITREE_SDK2PY_PATH
+#
+# 索引来源：vision_arm_control …/g1d_joint_layout.py；unitree-joint-control-ab/config/robot.yaml
+# 顺序：肩 pitch → roll → yaw → 肘 → 腕 roll → pitch → yaw
+
+robot: g1d
+network_interface: enp86s0
+
+# 含 unitree_sdk2py/ 的 SDK 根目录；null 时用 UNITREE_SDK2PY_PATH 或常见候选路径
+unitree_sdk_path: /home/robot/vision_arm_control_coupled_ik_fast_v6_2_20260911/unitree_sdk2_python
+
+command_topic: rt/lowcmd
+state_topic: rt/lowstate
+
+urdf: /home/robot/vision_arm_control_coupled_ik_fast_v6_2_20260911/g1_d.urdf
+base_link: torso_link
+
+# 可选：腰（耦合 IK 用；纯臂控可忽略）
+waist:
+  yaw_joint: torso_Joint
+  yaw_motor_index: 12
+  # motor 13/14 为腰另外两轴；生产 HAL 在纯臂模式会 mask
+
+arms:
+  right:
+    tip_link: right_wrist_yaw_link
+    joint_names:
+      - right_shoulder_pitch_joint
+      - right_shoulder_roll_joint
+      - right_shoulder_yaw_joint
+      - right_elbow_joint
+      - right_wrist_roll_joint
+      - right_wrist_pitch_joint
+      - right_wrist_yaw_joint
+    motor_indices: [22, 23, 24, 25, 26, 27, 28]
+
+  left:
+    tip_link: left_wrist_yaw_link
+    joint_names:
+      - left_shoulder_pitch_joint
+      - left_shoulder_roll_joint
+      - left_shoulder_yaw_joint
+      - left_elbow_joint
+      - left_wrist_roll_joint
+      - left_wrist_pitch_joint
+      - left_wrist_yaw_joint
+    motor_indices: [15, 16, 17, 18, 19, 20, 21]
+
+defaults:
+  max_speed_rad_s: 0.15
+  # 增益待真机标定；此处先留空，实现时再对接生产 Kp/Kd 或 joint-control-ab 默认值
+  kp: null
+  kd: null
+  allow_real_motion: false

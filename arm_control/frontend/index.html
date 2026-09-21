@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>G1D 臂控</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>G1D 臂控 <span id="mode-badge" class="badge ro">…</span></h1>
+  <div class="group">
+    <span class="title">视图</span>
+    <select id="arm-select">
+      <option value="right">右臂</option>
+      <option value="left">左臂</option>
+      <option value="both">双臂</option>
+    </select>
+  </div>
+  <div class="group" id="ctrl-group">
+    <span class="title">控制臂</span>
+    <select id="control-arm">
+      <option value="right">右</option>
+      <option value="left">左</option>
+    </select>
+    <button id="btn-engage" class="primary">接管</button>
+    <button id="btn-release">释放</button>
+    <button id="btn-hold" class="danger">急停(保持)</button>
+    <span id="engage-state" class="meta"></span>
+  </div>
+  <span id="pill" class="pill">连接中…</span>
+  <span id="meta" class="meta"></span>
+</header>
+
+<main>
+  <section id="left">
+    <div id="msg">推实物手臂对照 3D。发令需用 --allow-real-motion 启动，并点接管。</div>
+    <div id="viewer">
+      <canvas id="scene3d"></canvas>
+      <div class="hint">拖动=旋转 · 右键/Shift=平移 · 滚轮=缩放 · 双击=复位 · 实线实测 · 灰虚线指令 · 蓝虚线目标</div>
+    </div>
+    <div class="panel" id="panel-motion">
+      <h2>单点到位</h2>
+      <div class="row">
+        <label>限速 <input id="speed" type="number" step="0.05" min="0.02" max="1.0" value="0.15"> rad/s</label>
+        <button id="btn-speed">设</button>
+        <button id="btn-fill">填入当前角</button>
+        <button id="btn-goto" class="primary">出发</button>
+      </div>
+      <div class="row" id="goto-inputs"></div>
+    </div>
+    <div class="panel">
+      <h2>关节（视图所选；双臂时显示控制臂）</h2>
+      <table id="joints-table">
+        <thead>
+          <tr><th>关节</th><th>电机</th><th>q (deg)</th><th>dq</th><th>τ_est</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
