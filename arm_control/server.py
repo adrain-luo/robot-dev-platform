@@ -60,6 +60,8 @@ class App:
                         sdk_path=self.settings.unitree_sdk_path,
                         dds_domain=self.settings.dds_domain,
                         network_interface=self.settings.network_interface,
+                        urdf_path=self.settings.urdf,
+                        base_link=self.settings.base_link,
                     )
             return self._reader
 
@@ -67,6 +69,8 @@ class App:
         base = {
             "allow_real_motion": self.allow_real_motion,
             "engaged": False,
+            "float": False,
+            "gravity_ff": True,
             "arm": self.loop.arm if self.loop else "right",
             "max_speed_rad_s": self.settings.max_speed_rad_s,
         }
@@ -218,6 +222,13 @@ class Handler(BaseHTTPRequestHandler):
                 loop.release()
             elif path == "/api/hold":
                 loop.estop_hold()
+            elif path == "/api/teach":
+                if bool(body.get("enabled", True)):
+                    loop.enable_teach()
+                else:
+                    loop.disable_teach()
+            elif path == "/api/gravity":
+                loop.set_gravity_ff(bool(body.get("enabled", True)))
             elif path == "/api/speed":
                 loop.set_max_speed(float(body["max_speed_rad_s"]))
                 APP.settings.max_speed_rad_s = loop.max_speed

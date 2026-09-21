@@ -169,13 +169,17 @@ function applyCtrl(ctrl) {
   const allow = !!ctrl.allow_real_motion;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-speed", "btn-goto", "btn-fill", "control-arm", "speed"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "control-arm", "speed", "grav-on"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
-  document.querySelectorAll(".g-q").forEach((el) => { el.disabled = !allow; });
+  if ($("btn-teach")) $("btn-teach").disabled = !allow || !ctrl.engaged;
+  $("btn-teach").textContent = ctrl.float ? "结束拖拽" : "拖拽";
+  $("grav-on").checked = ctrl.gravity_ff !== false;
   $("engage-state").textContent = allow
-    ? (ctrl.engaged ? `已接管 · ${ctrl.arm}` : "未接管")
+    ? (ctrl.engaged ? (ctrl.float ? `拖拽中 · ${ctrl.arm}` : `已接管 · ${ctrl.arm}`) : "未接管")
     : "只读（加 --allow-real-motion 后可接管）";
+  document.querySelectorAll(".g-q").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
+  $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;
   if (ctrl.max_speed_rad_s) $("speed").value = ctrl.max_speed_rad_s;
   if (ctrl.arm) $("control-arm").value = ctrl.arm;
 }
@@ -198,7 +202,7 @@ async function poll() {
     setPill(fresh, fresh ? `lowstate OK  ${age.toFixed(3)} s` : `信号陈旧  ${age.toFixed(2)} s`, fresh ? "ok" : "warn");
     $("meta").textContent = `${data.iface} · ${data.topic} · mode_machine=${right?.mode_machine ?? "—"}`;
     applyCtrl(data.ctrl);
-    const modeLabel = data.ctrl?.engaged ? "实测 · 已接管" : (data.mode === "real" ? "实测 · 未接管" : "实测 · 只读");
+    const modeLabel = data.ctrl?.float ? "实测 · 拖拽卸力" : (data.ctrl?.engaged ? "实测 · 已接管" : (data.mode === "real" ? "实测 · 未接管" : "实测 · 只读"));
     V3.scene = {
       right: right?.scene,
       left: left?.scene,
@@ -235,7 +239,21 @@ $("btn-release").onclick = async () => {
   try { await post("/api/release", {}); flash("已释放", true); } catch (e) { flash(String(e), false); }
 };
 $("btn-hold").onclick = async () => {
-  try { await post("/api/hold", {}); flash("急停保持：目标=当前实测", true); } catch (e) { flash(String(e), false); }
+  try { await post("/api/hold", {}); flash("急停：退出拖拽，保持当前角", true); } catch (e) { flash(String(e), false); }
+};
+$("btn-teach").onclick = async () => {
+  const on = $("btn-teach").textContent !== "结束拖拽";
+  if (on && !confirm("将卸力拖拽（kp=0，保留重力前馈）。请先扶住手臂。继续？")) return;
+  try {
+    await post("/api/teach", { enabled: on });
+    flash(on ? "拖拽中：手推手臂；急停可立刻变硬" : "已结束拖拽并锁在当前角", true);
+  } catch (e) { flash(String(e), false); }
+};
+$("grav-on").onchange = async () => {
+  try {
+    await post("/api/gravity", { enabled: $("grav-on").checked });
+    flash($("grav-on").checked ? "重力前馈开（α=1）" : "重力前馈关", true);
+  } catch (e) { flash(String(e), false); $("grav-on").checked = !$("grav-on").checked; }
 };
 $("btn-speed").onclick = async () => {
   try {

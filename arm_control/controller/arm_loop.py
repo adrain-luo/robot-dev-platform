@@ -12,8 +12,12 @@ import numpy as np
 from controller.gains import G1_NUM_MOTOR, KD_BODY, KP_BODY
 from dds.lowstate import LowStateReader
 from dds.sdk import init_channel
+from model.arm_gravity import ArmGravity
 from model.fk_scene import RobotKinematics
 from model.layout import ArmLayout, get_arm
+
+TAU_FF_LIMIT = 8.0
+TEACH_KD = 2.0
 
 
 class PermissionErrorMotion(PermissionError):
@@ -33,6 +37,8 @@ class ArmLoop:
         sdk_path: Optional[Path] = None,
         dds_domain: int = 0,
         network_interface: str = "enp86s0",
+        urdf_path: Optional[Path] = None,
+        base_link: str = "torso_link",
     ) -> None:
         if command_topic != "rt/lowcmd":
             raise ValueError(f"Only rt/lowcmd is implemented, got {command_topic}")
@@ -50,6 +56,10 @@ class ArmLoop:
         self.limits = self.kin.arms[self.layout.name].model.joint_limits()
         self.kp_body = list(KP_BODY)
         self.kd_body = list(KD_BODY)
+        urdf = Path(urdf_path) if urdf_path is not None else self.kin.urdf_path
+        self._grav = ArmGravity(self.layout.name, urdf, base_link)
+        self._grav_on = True
+        self._float = False
 
         self._crc = CRC()
         self._cmd = unitree_hg_msg_dds__LowCmd_()
@@ -80,6 +90,8 @@ class ArmLoop:
         with self._lock:
             self.layout = layout
             self.limits = self.kin.arms[layout.name].model.joint_limits()
+            self._grav = ArmGravity(layout.name, self._grav.model.urdf_path, self._grav.base_link)
+            self._float = False
             self._cmd_q = q0.copy()
             self._desired_q = q0.copy()
 
@@ -121,17 +133,36 @@ class ArmLoop:
         with self._lock:
             self._cmd_q = q.copy()
             self._desired_q = q.copy()
+            self._float = False
             self._engaged = True
 
     def release(self) -> None:
         with self._lock:
+            self._float = False
             self._engaged = False
 
     def estop_hold(self) -> None:
         q = self._clamp(self._measured())
         with self._lock:
+            self._float = False
             self._cmd_q = q.copy()
             self._desired_q = q.copy()
+
+    def enable_teach(self) -> None:
+        with self._lock:
+            if not self._engaged:
+                raise PermissionErrorMotion("先接管再拖拽")
+            self._float = True
+
+    def disable_teach(self) -> None:
+        q = self._clamp(self._measured())
+        with self._lock:
+            self._float = False
+            self._cmd_q = q.copy()
+            self._desired_q = q.copy()
+
+    def set_gravity_ff(self, on: bool) -> None:
+        self._grav_on = bool(on)
 
     def set_target(self, q: Sequence[float]) -> None:
         arr = np.asarray(q, dtype=float).reshape(-1)
@@ -140,15 +171,21 @@ class ArmLoop:
         with self._lock:
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再设目标")
+            if self._float:
+                raise PermissionErrorMotion("先急停退出拖拽，再走点")
             self._desired_q = self._clamp(arr)
 
     def status(self) -> dict:
         with self._lock:
             engaged = self._engaged
+            floating = self._float
             cmd = self._cmd_q.tolist()
             desired = self._desired_q.tolist()
         return {
             "engaged": engaged,
+            "float": floating,
+            "gravity_ff": self._grav_on,
+            "gravity_mass_kg": self._grav.moving_mass_kg,
             "arm": self.layout.name,
             "max_speed_rad_s": self.max_speed,
             "cmd_rad": cmd,
@@ -169,6 +206,16 @@ class ArmLoop:
         msg, _ = self.reader.latest_msg()
         if msg is None:
             raise RuntimeError("no lowstate")
+        st = self.reader.read_arm(self.layout)
+        q_meas = np.asarray(st.q, dtype=float)
+        with self._lock:
+            floating = self._float
+            q_arm = q_meas.copy() if self._float else self._cmd_q.copy()
+            grav_on = self._grav_on
+        tau_arm = np.zeros(self.layout.n)
+        if grav_on:
+            tau_arm = np.clip(self._grav.tau_arm(q_meas), -TAU_FF_LIMIT, TAU_FF_LIMIT)
+
         self._cmd.mode_pr = 0
         self._cmd.mode_machine = int(getattr(msg, "mode_machine", 0))
         n_state = len(msg.motor_state)
@@ -183,16 +230,18 @@ class ArmLoop:
             slot.kp = float(self.kp_body[i])
             slot.kd = float(self.kd_body[i])
             slot.tau = 0.0
-        with self._lock:
-            q_arm = self._cmd_q.copy()
-        for name, qv in zip(self.layout.joint_names, q_arm):
+        for name, qv, tau in zip(self.layout.joint_names, q_arm, tau_arm):
             idx = self.layout.motor_index(name)
             slot = self._cmd.motor_cmd[idx]
             slot.q = float(qv)
             slot.dq = 0.0
-            slot.kp = float(self.kp_body[idx])
-            slot.kd = float(self.kd_body[idx])
-            slot.tau = 0.0
+            slot.tau = float(tau)
+            if floating:
+                slot.kp = 0.0
+                slot.kd = TEACH_KD
+            else:
+                slot.kp = float(self.kp_body[idx])
+                slot.kd = float(self.kd_body[idx])
         self._cmd.crc = self._crc.Crc(self._cmd)
         self._pub.Write(self._cmd)
 
@@ -202,7 +251,8 @@ class ArmLoop:
             try:
                 if self._engaged:
                     with self._lock:
-                        self._slew()
+                        if not self._float:
+                            self._slew()
                     self._publish()
                     self._last_err = None
             except Exception as e:
