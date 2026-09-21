@@ -95,6 +95,38 @@ def list_profiles(arm: Optional[str] = None) -> List[Dict]:
     return out
 
 
+def list_sessions(arm: Optional[str] = None, poseset: Optional[str] = None) -> List[Dict]:
+    if not MEASURE_DIR.exists():
+        return []
+    out = []
+    for d in sorted(MEASURE_DIR.iterdir(), reverse=True):
+        meta_p, samp_p = d / "meta.json", d / "samples.json"
+        if not meta_p.exists() or not samp_p.exists():
+            continue
+        try:
+            meta = json.loads(meta_p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if arm and meta.get("arm") != arm:
+            continue
+        if poseset and meta.get("poseset") != poseset:
+            continue
+        n = 0
+        try:
+            n = len(json.loads(samp_p.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+        out.append({
+            "name": d.name,
+            "arm": meta.get("arm"),
+            "poseset": meta.get("poseset"),
+            "n": n,
+            "created": meta.get("created"),
+            "bidirectional": bool(meta.get("bidirectional") or (meta.get("opts") or {}).get("bidirectional")),
+        })
+    return out
+
+
 def load_profile(name: str) -> Dict:
     p = profile_path(name)
     if not p.exists():

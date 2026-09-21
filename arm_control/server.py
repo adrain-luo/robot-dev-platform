@@ -30,6 +30,8 @@ from model.fk_scene import RobotKinematics
 from model.layout import ARMS, get_arm, short_joint_label
 import poses as posesets
 import identify as iden
+import friction
+import validate as vali
 
 FRONTEND = HERE / "frontend"
 
@@ -43,10 +45,11 @@ class App:
         self.loop: Optional[ArmLoop] = None
         self._lock = threading.Lock()
         self._id_lock = threading.Lock()
-        self._id_task: Optional[iden.MeasureTask] = None
+        self._id_task = None
         self._id: Dict[str, Any] = {
             "running": False, "phase": "", "log": [], "session": None,
             "solution": None, "error": None, "progress": [0, 0],
+            "kind": None, "rows": [], "summary": {}, "band": {},
         }
         self.still = dict(iden.DEFAULT_STILL)
 
@@ -148,12 +151,21 @@ class App:
             st["session_dir"] = None
             st["payload_file"] = None
         st["profiles"] = iden.list_profiles()
+        st["sessions"] = iden.list_sessions()
         st["applied_name"] = None
         if self.loop is not None:
             st["applied_name"] = self.loop.status().get("payload_name")
+        st["kind"] = self._id.get("kind")
+        st["rows"] = list(self._id.get("rows") or [])
+        st["summary"] = dict(self._id.get("summary") or {})
+        st["band"] = dict(self._id.get("band") or {})
         if task is not None:
             st["phase"] = task.phase
             st["progress"] = list(task.progress)
+            if hasattr(task, "rows"):
+                st["rows"] = list(task.rows)
+                st["summary"] = dict(getattr(task, "summary") or {})
+                st["band"] = dict(getattr(task, "band_info") or {})
         return st
 
     def _id_log(self, msg: str) -> None:
@@ -179,7 +191,7 @@ class App:
             loop = self.require_loop()
             with self._id_lock:
                 if self._id["running"]:
-                    raise RuntimeError("测量进行中")
+                    raise RuntimeError("已有任务在跑")
             d = posesets.load_set(str(body["name"]))
             def done(r: Dict[str, Any]) -> None:
                 with self._id_lock:
@@ -192,7 +204,8 @@ class App:
                     )
             task = iden.MeasureTask(loop, d, urdf, base, self._id_log, done, still=self.still)
             with self._id_lock:
-                self._id.update(running=True, error=None, solution=None, session=task.session_dir.name)
+                self._id.update(running=True, error=None, solution=None, session=task.session_dir.name,
+                                kind="measure", rows=[], summary={})
                 self._id_task = task
             threading.Thread(target=task.run, name="identify-measure", daemon=True).start()
             return {"ok": True, "identify": self.identify_status()}
@@ -210,6 +223,7 @@ class App:
             (sdir / f"payload_{source}.json").write_text(json.dumps(sol, indent=2, ensure_ascii=False), encoding="utf-8")
             with self._id_lock:
                 self._id["solution"] = sol
+                self._id["session"] = str(session)
             return {"ok": True, "solution": sol, "identify": self.identify_status()}
         if path == "/api/identify/apply":
             with self._id_lock:
@@ -241,6 +255,46 @@ class App:
             return {"ok": True, "payload": saved, "identify": self.identify_status()}
         if path == "/api/identify/payload/delete":
             iden.delete_profile(str(body["name"]))
+            return {"ok": True, "identify": self.identify_status()}
+        raise FileNotFoundError(path)
+
+    def handle_validate_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        urdf, base = self._urdf()
+        if path == "/api/validate/start":
+            loop = self.require_loop()
+            with self._id_lock:
+                if self._id["running"]:
+                    raise RuntimeError("已有任务在跑")
+            d = posesets.load_set(str(body["name"]))
+            modes = list(body.get("modes") or ["baseline", "payload"])
+            pname = body.get("payload")
+            payload = None
+            if pname:
+                payload = iden.load_profile(str(pname))
+            elif any(m != "baseline" for m in modes):
+                payload = vali.snapshot_payload(loop)
+            def done(r: Dict[str, Any]) -> None:
+                with self._id_lock:
+                    self._id["running"] = False
+                    self._id["session"] = r.get("session")
+                    self._id["error"] = None if r.get("ok") else r.get("error")
+                    self._id["rows"] = r.get("rows") or []
+                    self._id["summary"] = r.get("summary") or {}
+                    self._id["band"] = r.get("friction_band") or {}
+                    self._id["log"].append(
+                        f"{time.strftime('%H:%M:%S')} "
+                        + ("对比完成 " + str(r.get("session")) if r.get("ok") else str(r.get("error")))
+                    )
+            task = vali.CompareTask(
+                loop, d, urdf, base, self._id_log, done, still=self.still,
+                modes=modes, payload=payload,
+                correction_iters=int(body.get("correction_iters") or 2),
+            )
+            with self._id_lock:
+                self._id.update(running=True, error=None, session=task.session, kind="validate",
+                                rows=[], summary={}, band={})
+                self._id_task = task
+            threading.Thread(target=task.run, name="validate", daemon=True).start()
             return {"ok": True, "identify": self.identify_status()}
         raise FileNotFoundError(path)
 
@@ -439,6 +493,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/identify":
                 _json(self, 200, {"ok": True, "identify": APP.identify_status()})
                 return
+            if path == "/api/validate/band":
+                q = parse_qs(parsed.query)
+                arm = (q.get("arm") or ["right"])[0]
+                ps = (q.get("poseset") or [None])[0]
+                kp = None
+                if APP.loop is not None:
+                    kp = APP.loop.status().get("kp_vec")
+                band = friction.table_for(arm, ps, kp)
+                _json(self, 200, {"ok": True, "band": band.to_dict()})
+                return
             self.send_error(404)
         except Exception as e:
             traceback.print_exc()
@@ -454,6 +518,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path.startswith("/api/identify"):
                 _json(self, 200, APP.handle_identify_post(path, body))
+                return
+            if path.startswith("/api/validate"):
+                _json(self, 200, APP.handle_validate_post(path, body))
                 return
             loop = APP.require_loop()
             if path == "/api/engage":

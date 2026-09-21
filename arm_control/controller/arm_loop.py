@@ -258,6 +258,7 @@ class ArmLoop:
             "gravity_mass_kg": self._grav.moving_mass_kg,
             "payload_theta": theta,
             "payload_name": pname,
+            "kp_vec": [float(self.kp_body[i]) for i in self.layout.motor_indices],
             "waist_locked": waist_cmd is not None,
             "waist_hold_rad": waist_cmd,
             "waist_target_rad": {str(i): 0.0 for i in WAIST_MOTOR_INDICES} if waist_cmd is not None else None,

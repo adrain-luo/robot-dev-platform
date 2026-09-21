@@ -80,7 +80,8 @@
       <p class="meta">用当前姿态集自动走点（同一限速），双向逼近后采样。α 锁死 1，只解末端 m 与质心。力矩优先用 PD 重构（造成下垂的那份），也可用 tau_est。</p>
       <div class="row">
         <button id="btn-id-measure" class="primary">测量当前集</button>
-        <button id="btn-id-stop" class="danger">停测量</button>
+        <button id="btn-id-stop" class="danger">停止任务</button>
+        <select id="id-session" title="已保存的测量会话，求解用这一份样本，不用再走点"></select>
         <select id="id-source">
           <option value="pd">力矩=PD重构</option>
           <option value="est">力矩=tau_est</option>
@@ -99,6 +100,23 @@
       </div>
       <div id="id-result" class="meta"></div>
       <pre id="id-log"></pre>
+    </div>
+    <div class="panel" id="panel-val">
+      <h2>到位对比 <span id="val-progress" class="meta"></span></h2>
+      <p class="meta">同一姿态集、同一限速走基线 / 补偿 / 补偿+修正。修正用双向测量的摩擦停驻带做逐关节死区（带内不推）。结果写 data/validate/。</p>
+      <div class="row">
+        <label><input id="val-base" type="checkbox" checked> 基线</label>
+        <label><input id="val-pay" type="checkbox" checked> 补偿</label>
+        <label><input id="val-corr" type="checkbox"> 补偿+修正</label>
+        <label>修正次数 <input id="val-iters" type="number" min="1" max="6" value="2"></label>
+        <button id="btn-val-start" class="primary">开始对比</button>
+      </div>
+      <div id="val-band" class="meta"></div>
+      <div id="val-summary" class="meta"></div>
+      <table id="val-table">
+        <thead><tr><th>方案</th><th>姿态</th><th>max°</th><th>末端 mm</th><th>修正</th><th>s</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
     <div class="panel">
       <h2>关节（视图所选；双臂时显示控制臂）</h2>

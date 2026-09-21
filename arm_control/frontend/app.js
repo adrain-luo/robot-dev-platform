@@ -216,6 +216,29 @@ function applyCtrl(ctrl) {
   if (ctrl.arm) $("control-arm").value = ctrl.arm;
 }
 
+function renderVal(id) {
+  if (!$("val-table")) return;
+  const [a, b] = id.progress || [0, 0];
+  $("val-progress").textContent = (id.kind === "validate" && id.running)
+    ? `${id.phase || ""} ${a}/${b}`
+    : (id.kind === "validate" && id.session ? `会话 ${id.session}` : "");
+  const band = id.band || {};
+  if (band.default_deg) {
+    const src = band.fallback ? "无双向数据，常数兜底" : `${band.n_sessions}次双向 / ${band.n_poses}姿态`;
+    $("val-band").textContent = `摩擦带（${src}）默认 [${band.default_deg.map((x) => Number(x).toFixed(2)).join(", ")}] °`;
+  }
+  const sum = id.summary || {};
+  $("val-summary").textContent = Object.entries(sum).map(([k, v]) =>
+    `${k}：均 ${Number(v.err_max_deg_mean).toFixed(2)}° / 最差 ${Number(v.err_max_deg_worst).toFixed(2)}° · 末端均 ${Number(v.ee_mm_mean).toFixed(1)} mm`
+  ).join("   ");
+  const tb = $("val-table").querySelector("tbody");
+  tb.innerHTML = (id.rows || []).map((r) =>
+    `<tr><td>${r.mode}</td><td>${r.pose}</td><td>${Number(r.err_max_deg).toFixed(2)}</td>` +
+    `<td>${Number(r.ee_mm).toFixed(1)}</td><td>${r.corr_applied || 0}${r.corr_reverted ? "↩" : ""}</td>` +
+    `<td>${Number(r.total_s).toFixed(1)}${r.timed_out ? "⚠" : ""}</td></tr>`
+  ).join("");
+}
+
 function applyIdentify(id) {
   if (!id) return;
   const [a, b] = id.progress || [0, 0];
@@ -235,7 +258,10 @@ function applyIdentify(id) {
   const allow = !!lastCtrl?.allow_real_motion && !!lastCtrl?.engaged && !lastCtrl?.float;
   $("btn-id-measure").disabled = !allow || !!id.running;
   $("btn-id-stop").disabled = !id.running;
+  $("btn-val-start").disabled = !allow || !!id.running;
+  renderVal(id);
   renderPayloadSelect(id.profiles || [], id.applied_name);
+  renderSessionSelect(id.sessions || [], id.session);
   const st = id.still;
   if (st && !stillDirty) {
     const map = { "still-dq": "still_dq_rad_s", "still-drift": "still_drift_rad", "still-win": "still_window_s", "still-to": "settle_timeout_s" };
@@ -355,6 +381,11 @@ async function loadCurrentSet() {
   if (!d.ok) throw new Error(d.error);
   currentSet = d.set;
   renderChips();
+  try {
+    const b = await fetch("/api/validate/band?arm=" + encodeURIComponent(currentSet.arm) +
+      "&poseset=" + encodeURIComponent(currentSet.name)).then((r) => r.json());
+    if (b.ok && b.band) renderVal({ band: b.band, rows: [], summary: {}, progress: [0, 0] });
+  } catch (_) { /* ignore */ }
 }
 
 async function gotoPose(i) {
@@ -525,16 +556,47 @@ $("btn-id-measure").onclick = async () => {
   } catch (e) { flash(String(e), false); }
 };
 $("btn-id-stop").onclick = async () => {
-  try { await post("/api/identify/stop", {}); flash("已请求停止测量", true); }
+  try { await post("/api/identify/stop", {}); flash("已请求停止", true); }
   catch (e) { flash(String(e), false); }
 };
 $("btn-id-solve").onclick = async () => {
+  const session = $("id-session") && $("id-session").value;
+  if (!session) { flash("先选一条测量会话（或先测量当前集）", false); return; }
   try {
-    const d = await post("/api/identify/solve", { source: $("id-source").value });
+    const d = await post("/api/identify/solve", { source: $("id-source").value, session });
     applyIdentify(d.identify);
-    flash("求解完成", true);
+    flash("已用会话 " + session + " 重新求解", true);
   } catch (e) { flash(String(e), false); }
 };
+function renderSessionSelect(list, current) {
+  const sel = $("id-session");
+  if (!sel) return;
+  if (document.activeElement === sel) return;
+  const keep = sel.value;
+  let rows = list || [];
+  if (currentSet) {
+    const arm = currentSet.arm;
+    const name = currentSet.name;
+    const filtered = rows.filter((s) => s.arm === arm && s.poseset === name);
+    if (filtered.length) rows = filtered;
+  }
+  sel.innerHTML = "";
+  const o0 = document.createElement("option");
+  o0.value = "";
+  o0.textContent = rows.length ? "选择测量会话再求解…" : "还没有测量会话（先点测量当前集）";
+  sel.appendChild(o0);
+  for (const s of rows) {
+    const o = document.createElement("option");
+    o.value = s.name;
+    const side = s.arm === "left" ? "左" : (s.arm === "right" ? "右" : "?");
+    const bi = s.bidirectional ? "双向" : "单向";
+    o.textContent = `${s.name} · ${side} ${s.poseset || ""} ${s.n}样 ${bi}`;
+    sel.appendChild(o);
+  }
+  const want = current || keep;
+  if (want && [...sel.options].some((o) => o.value === want)) sel.value = want;
+}
+
 function renderPayloadSelect(list, applied) {
   const sel = $("payload-select");
   if (!sel) return;
@@ -598,6 +660,27 @@ $("btn-payload-del").onclick = async () => {
     const d = await post("/api/identify/payload/delete", { name });
     applyIdentify(d.identify);
     flash("已删补偿文件", true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-val-start").onclick = async () => {
+  if (!posesetName()) { flash("先选姿态集", false); return; }
+  const modes = [];
+  if ($("val-base").checked) modes.push("baseline");
+  if ($("val-pay").checked) modes.push("payload");
+  if ($("val-corr").checked) modes.push("payload_correct");
+  if (!modes.length) { flash("至少勾一种方案", false); return; }
+  if ((modes.includes("payload") || modes.includes("payload_correct")) && !$("payload-select").value) {
+    flash("补偿方案请先选补偿文件", false); return;
+  }
+  if (!confirm("将按所选方案走完整姿态集（同一限速）。扶住、守急停。继续？")) return;
+  try {
+    await post("/api/validate/start", {
+      name: posesetName(),
+      modes,
+      payload: $("payload-select").value,
+      correction_iters: parseInt($("val-iters").value, 10) || 2,
+    });
+    flash("开始对比", true);
   } catch (e) { flash(String(e), false); }
 };
 setInterval(poll, 100);
