@@ -24,7 +24,7 @@ class Settings:
     dds_domain: int = 0
     lowstate_timeout_s: float = 5.0
     allow_real_motion: bool = False
-    max_speed_rad_s: float = 0.15
+    max_speed_rad_s: float = 0.2
 
     @property
     def config_dir(self) -> Path:
@@ -58,5 +58,5 @@ def load_settings(path: Optional[Path] = None) -> Settings:
         dds_domain=int(raw.get("dds_domain") or 0),
         lowstate_timeout_s=float(raw.get("lowstate_timeout_s") or 5.0),
         allow_real_motion=bool(defaults.get("allow_real_motion", False)),
-        max_speed_rad_s=float(defaults.get("max_speed_rad_s") or 0.15),
+        max_speed_rad_s=float(defaults.get("max_speed_rad_s") or 0.2),
     )

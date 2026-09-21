@@ -48,7 +48,7 @@ arms:
     motor_indices: [15, 16, 17, 18, 19, 20, 21]
 
 defaults:
-  max_speed_rad_s: 0.15
+  max_speed_rad_s: 0.2
   # 增益待真机标定；此处先留空，实现时再对接生产 Kp/Kd 或 joint-control-ab 默认值
   kp: null
   kd: null

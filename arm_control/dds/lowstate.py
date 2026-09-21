@@ -77,14 +77,15 @@ class LowStateReader:
                 return float("inf")
             return time.monotonic() - self._last_t
 
-    def read_arm(self, arm: Union[str, ArmLayout]) -> ArmState:
+    def read_arm(self, arm: Union[str, ArmLayout], *, wait: bool = True) -> ArmState:
         layout = arm if isinstance(arm, ArmLayout) else get_arm(arm)
-        self.wait_for_message(timeout_s=self._timeout_s)
+        if wait:
+            self.wait_for_message(timeout_s=self._timeout_s)
         with self._lock:
             msg = self._msg
             ts = self._last_t
         if msg is None:
-            raise RuntimeError("lowstate message missing after wait")
+            raise RuntimeError("lowstate message missing")
         q, dq, tau = [], [], []
         for idx in layout.motor_indices:
             ms = msg.motor_state[idx]

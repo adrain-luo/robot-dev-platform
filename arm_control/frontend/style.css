@@ -45,4 +45,5 @@ th { color: #9aa3ad; font-weight: 500; }
 #pose-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
 #pose-chips button { padding: 1px 7px; font: 11px ui-monospace, monospace; }
 #pose-chips button.cur { background: #2f6feb; border-color: #2f6feb; }
-#poseset-new { width: 140px; }
+#id-log { max-height: 140px; overflow: auto; font: 11px ui-monospace, monospace; color: #9aa3ad; margin: 6px 0 0; white-space: pre-wrap; }
+#payload-new { width: 160px; }

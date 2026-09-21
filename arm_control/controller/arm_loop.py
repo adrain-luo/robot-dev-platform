@@ -32,7 +32,7 @@ class ArmLoop:
         kin: RobotKinematics,
         arm: str = "right",
         command_topic: str = "rt/lowcmd",
-        max_speed_rad_s: float = 0.15,
+        max_speed_rad_s: float = 0.2,
         rate_hz: float = 100.0,
         sdk_path: Optional[Path] = None,
         dds_domain: int = 0,
@@ -77,6 +77,9 @@ class ArmLoop:
         self._stop = threading.Event()
         self._last_err: Optional[str] = None
         self._released_mode = False
+        self._payload_theta: Optional[np.ndarray] = None
+        self._payload_name: Optional[str] = None
+        self._last_tau_ff = np.zeros(n)
         self._thread = threading.Thread(target=self._loop, name="arm-loop", daemon=True)
         self._thread.start()
 
@@ -94,6 +97,8 @@ class ArmLoop:
             self.limits = self.kin.arms[layout.name].model.joint_limits()
             self._grav = ArmGravity(layout.name, self._grav.model.urdf_path, self._grav.base_link)
             self._float = False
+            self._payload_theta = None
+            self._payload_name = None
             self._cmd_q = q0.copy()
             self._desired_q = q0.copy()
 
@@ -190,6 +195,41 @@ class ArmLoop:
     def set_gravity_ff(self, on: bool) -> None:
         self._grav_on = bool(on)
 
+    def arm_gains(self) -> tuple:
+        idx = self.layout.motor_indices
+        return [float(self.kp_body[i]) for i in idx], [float(self.kd_body[i]) for i in idx]
+
+    def set_payload_theta(self, theta, name: Optional[str] = None) -> None:
+        with self._lock:
+            if theta is None:
+                self._payload_theta = None
+                self._payload_name = None
+            else:
+                self._payload_theta = np.asarray(theta, float).reshape(4)
+                self._payload_name = name
+
+    def payload_theta(self) -> Optional[list]:
+        if self._payload_theta is None:
+            return None
+        return self._payload_theta.tolist()
+
+    def arm_sample(self, wait: bool = False) -> dict:
+        st = self.reader.read_arm(self.layout, wait=wait)
+        kp, kd = self.arm_gains()
+        with self._lock:
+            cmd = self._cmd_q.copy()
+            tau_ff = self._last_tau_ff.copy()
+        tau_est = [None if t is None else float(t) for t in st.tau_est]
+        return {
+            "q_meas": [float(v) for v in st.q],
+            "dq": [float(v) for v in st.dq],
+            "tau_est": tau_est,
+            "q_cmd": cmd.tolist(),
+            "tau_ff_sent": tau_ff.tolist(),
+            "kp": kp,
+            "kd": kd,
+        }
+
     def set_target(self, q: Sequence[float]) -> None:
         arr = np.asarray(q, dtype=float).reshape(-1)
         if arr.size != self.layout.n or not np.all(np.isfinite(arr)):
@@ -209,11 +249,15 @@ class ArmLoop:
             waist_cmd = dict(self._waist_cmd) if self._waist_cmd else None
             cmd = self._cmd_q.tolist()
             desired = self._desired_q.tolist()
+            theta = None if self._payload_theta is None else self._payload_theta.tolist()
+            pname = self._payload_name
         return {
             "engaged": engaged,
             "float": floating,
             "gravity_ff": grav_on,
             "gravity_mass_kg": self._grav.moving_mass_kg,
+            "payload_theta": theta,
+            "payload_name": pname,
             "waist_locked": waist_cmd is not None,
             "waist_hold_rad": waist_cmd,
             "waist_target_rad": {str(i): 0.0 for i in WAIST_MOTOR_INDICES} if waist_cmd is not None else None,
@@ -246,7 +290,14 @@ class ArmLoop:
             waist_hold = dict(self._waist_cmd) if self._waist_cmd else None
         tau_arm = np.zeros(self.layout.n)
         if grav_on:
-            tau_arm = np.clip(self._grav.tau_arm(q_meas), -TAU_FF_LIMIT, TAU_FF_LIMIT)
+            tau_arm = self._grav.tau_arm(q_meas)
+            th = None
+            with self._lock:
+                th = None if self._payload_theta is None else self._payload_theta.copy()
+            if th is not None:
+                tau_arm = tau_arm + self._grav.tau_payload(q_meas, th)
+            tau_arm = np.clip(tau_arm, -TAU_FF_LIMIT, TAU_FF_LIMIT)
+        self._last_tau_ff = np.asarray(tau_arm, float)
 
         self._cmd.mode_pr = 0
         self._cmd.mode_machine = int(getattr(msg, "mode_machine", 0))

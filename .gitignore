@@ -3,4 +3,4 @@ __pycache__/
 *.pyo
 .DS_Store
 *.egg-info/
-.venv/
+arm_control/data/

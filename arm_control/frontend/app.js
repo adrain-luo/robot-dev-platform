@@ -51,6 +51,14 @@ const V3 = {
       this.line(o, add3(o, [T[0][2] * L, T[1][2] * L, T[2][2] * L]), "#3e63dd", 1.5);
       this.dot(o, color, 4, label);
     }
+    if (sc.payload_point && sc.payload_mass > 1e-6) {
+      const T = sc.wrist_T;
+      const o = T ? [T[0][3], T[1][3], T[2][3]] : sc.links[sc.links.length - 1];
+      this.line(o, sc.payload_point, "#e879f9", 1.5);
+      const r = 4 + 4 * Math.min(sc.payload_mass, 1.5);
+      this.dot(sc.payload_point, "#e879f9", r, `${Number(sc.payload_mass).toFixed(2)} kg`);
+      this.line(sc.payload_point, add3(sc.payload_point, [0, 0, -0.04]), "#e879f9", 2);
+    }
   },
   draw() {
     const c = this.ctx, cv = this.canvas, w = cv.clientWidth, h = cv.clientHeight;
@@ -75,6 +83,14 @@ const V3 = {
     if (show !== "right") this.drawArm(sc.left, "#67e8f9", "左腕");
     c.font = "12px system-ui"; c.fillStyle = "#9aa3ad";
     c.fillText(sc.modeLabel || "torso_link", 8, 16);
+    const hud = (show !== "left" && sc.right?.payload_mass) ? sc.right
+      : (show !== "right" && sc.left?.payload_mass ? sc.left : null);
+    if (hud && hud.payload_mass > 1e-6) {
+      const com = (hud.payload_com_m || []).map((v) => Number(v).toFixed(3)).join(", ");
+      const nm = hud.payload_name ? `「${hud.payload_name}」 ` : "";
+      c.fillStyle = "#e879f9";
+      c.fillText(`末端负载 ${nm}${Number(hud.payload_mass).toFixed(3)} kg  ·  质心(腕连杆) [${com}] m`, 8, 34);
+    }
   },
   init() {
     this.canvas = $("scene3d"); this.ctx = this.canvas.getContext("2d");
@@ -167,6 +183,8 @@ async function post(path, body) {
 
 let currentSet = null;
 let lastCtrl = null;
+let speedDirty = false;
+let stillDirty = false;
 
 function applyCtrl(ctrl) {
   if (!ctrl) return;
@@ -174,7 +192,7 @@ function applyCtrl(ctrl) {
   const allow = !!ctrl.allow_real_motion;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "control-arm", "speed", "grav-on"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
   $("btn-poseset-mirror").disabled = !currentSet;
@@ -183,13 +201,50 @@ function applyCtrl(ctrl) {
   $("grav-on").checked = ctrl.gravity_ff !== false;
   $("engage-state").textContent = allow
     ? (ctrl.engaged
-        ? `${ctrl.float ? "拖拽中" : "已接管"} · ${ctrl.arm}${ctrl.waist_locked ? " · 腰回零锁" : ""}`
+        ? `${ctrl.float ? "拖拽中" : "已接管"} · ${ctrl.arm}${ctrl.waist_locked ? " · 腰回零锁" : ""}${
+            ctrl.payload_mass_kg != null ? ` · 载 ${Number(ctrl.payload_mass_kg).toFixed(2)} kg${ctrl.payload_name ? "(" + ctrl.payload_name + ")" : ""}` : ""
+          }`
         : "未接管")
     : "只读（加 --allow-real-motion 后可接管）";
   document.querySelectorAll(".g-q").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
   $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;
-  if (ctrl.max_speed_rad_s) $("speed").value = ctrl.max_speed_rad_s;
+  const sp = $("speed");
+  if (ctrl.max_speed_rad_s != null && document.activeElement !== sp && !speedDirty) {
+    const v = Number(ctrl.max_speed_rad_s);
+    if (Number(sp.value) !== v) sp.value = v;
+  }
   if (ctrl.arm) $("control-arm").value = ctrl.arm;
+}
+
+function applyIdentify(id) {
+  if (!id) return;
+  const [a, b] = id.progress || [0, 0];
+  $("id-progress").textContent = id.running ? `${id.phase || ""} ${a}/${b}` : (id.session ? `会话 ${id.session}` : "");
+  $("id-log").textContent = (id.log || []).join("\n");
+  const sol = id.solution;
+  if (sol) {
+    const com = (sol.com_m || []).map((x) => Number(x).toFixed(3)).join(", ");
+    $("id-result").textContent = `m=${Number(sol.mass_kg).toFixed(3)} kg  com=[${com}] m  cond=${Number(sol.regressor_cond).toFixed(1)}  残差 ${Number(sol.residual_rms_before_nm).toFixed(2)}→${Number(sol.residual_rms_after_nm).toFixed(2)} N·m  估下垂 ${Number(sol.sag_est_before_deg).toFixed(2)}°→${Number(sol.sag_est_after_deg).toFixed(2)}°`;
+    const files = [];
+    if (id.session_dir) files.push(`会话 ${id.session_dir}`);
+    if (id.payload_file) files.push(`前馈 ${id.payload_file}`);
+    if (files.length) $("id-result").textContent += "  ·  " + files.join("  ·  ");
+  } else if (id.error) {
+    $("id-result").textContent = id.error;
+  }
+  const allow = !!lastCtrl?.allow_real_motion && !!lastCtrl?.engaged && !lastCtrl?.float;
+  $("btn-id-measure").disabled = !allow || !!id.running;
+  $("btn-id-stop").disabled = !id.running;
+  renderPayloadSelect(id.profiles || [], id.applied_name);
+  const st = id.still;
+  if (st && !stillDirty) {
+    const map = { "still-dq": "still_dq_rad_s", "still-drift": "still_drift_rad", "still-win": "still_window_s", "still-to": "settle_timeout_s" };
+    for (const [idEl, key] of Object.entries(map)) {
+      const el = $(idEl);
+      if (!el || document.activeElement === el) continue;
+      if (st[key] != null && Number(el.value) !== Number(st[key])) el.value = st[key];
+    }
+  }
 }
 
 let inflight = false;
@@ -210,6 +265,7 @@ async function poll() {
     setPill(fresh, fresh ? `lowstate OK  ${age.toFixed(3)} s` : `信号陈旧  ${age.toFixed(2)} s`, fresh ? "ok" : "warn");
     $("meta").textContent = `${data.iface} · ${data.topic} · mode_machine=${right?.mode_machine ?? "—"}`;
     applyCtrl(data.ctrl);
+    applyIdentify(data.identify);
     const modeLabel = data.ctrl?.float ? "实测 · 拖拽卸力" : (data.ctrl?.engaged ? "实测 · 已接管" : (data.mode === "real" ? "实测 · 未接管" : "实测 · 只读"));
     if (currentSet && currentSet.poses) {
       const tips = currentSet.poses.map((p) => p.tip_xyz).filter(Boolean);
@@ -375,9 +431,28 @@ $("grav-on").onchange = async () => {
     flash($("grav-on").checked ? "重力前馈开（α=1）" : "重力前馈关", true);
   } catch (e) { flash(String(e), false); $("grav-on").checked = !$("grav-on").checked; }
 };
+$("btn-still").onclick = async () => {
+  try {
+    await post("/api/identify/still", {
+      still_dq_rad_s: parseFloat($("still-dq").value),
+      still_drift_rad: parseFloat($("still-drift").value),
+      still_window_s: parseFloat($("still-win").value),
+      settle_timeout_s: parseFloat($("still-to").value),
+    });
+    stillDirty = false;
+    flash("已设静止判定", true);
+  } catch (e) { flash(String(e), false); }
+};
+["still-dq", "still-drift", "still-win", "still-to"].forEach((id) => {
+  $(id).addEventListener("input", () => { stillDirty = true; });
+});
+$("speed").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("btn-speed").click(); }
+});
 $("btn-speed").onclick = async () => {
   try {
     await post("/api/speed", { max_speed_rad_s: parseFloat($("speed").value) });
+    speedDirty = false;
     flash("已设限速", true);
   } catch (e) { flash(String(e), false); }
 };
@@ -441,5 +516,89 @@ window.addEventListener("keydown", (e) => {
   recordPose();
 });
 refreshPoseList().catch(() => {});
+$("btn-id-measure").onclick = async () => {
+  if (!posesetName()) { flash("先选姿态集", false); return; }
+  if (!confirm("将按当前限速走完姿态集（双向逼近）。扶住、守急停。继续？")) return;
+  try {
+    await post("/api/identify/measure", { name: posesetName() });
+    flash("开始测量", true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-id-stop").onclick = async () => {
+  try { await post("/api/identify/stop", {}); flash("已请求停止测量", true); }
+  catch (e) { flash(String(e), false); }
+};
+$("btn-id-solve").onclick = async () => {
+  try {
+    const d = await post("/api/identify/solve", { source: $("id-source").value });
+    applyIdentify(d.identify);
+    flash("求解完成", true);
+  } catch (e) { flash(String(e), false); }
+};
+function renderPayloadSelect(list, applied) {
+  const sel = $("payload-select");
+  if (!sel) return;
+  if (document.activeElement === sel) return;
+  const keep = sel.value;
+  sel.innerHTML = "";
+  const o0 = document.createElement("option");
+  o0.value = "";
+  o0.textContent = list.length ? "选择补偿文件…" : "还没有补偿文件";
+  sel.appendChild(o0);
+  for (const p of list) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    const side = p.arm === "left" ? "左" : (p.arm === "right" ? "右" : "?");
+    const m = p.mass_kg != null ? `${Number(p.mass_kg).toFixed(2)}kg` : "";
+    o.textContent = `${p.name} · ${side} ${m}`;
+    sel.appendChild(o);
+  }
+  const want = applied || keep;
+  if (want && [...sel.options].some((o) => o.value === want)) sel.value = want;
+}
+
+$("btn-id-apply").onclick = async () => {
+  try {
+    const name = ($("payload-new").value.trim() || $("payload-select").value || (currentSet && currentSet.name) || "").trim();
+    const d = await post("/api/identify/apply", { name });
+    applyIdentify(d.identify);
+    flash(`已存并应用「${d.payload.name}」`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-id-clear").onclick = async () => {
+  try {
+    await post("/api/identify/clear", {});
+    flash("已去掉负载项，只剩 URDF 臂自重", true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-payload-use").onclick = async () => {
+  const name = $("payload-select").value;
+  if (!name) { flash("先选补偿文件", false); return; }
+  try {
+    const d = await post("/api/identify/payload/apply", { name });
+    applyIdentify(d.identify);
+    flash(`已调用「${name}」进前馈`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-payload-save").onclick = async () => {
+  const name = ($("payload-new").value.trim() || $("payload-select").value || (currentSet && currentSet.name) || "").trim();
+  if (!name) { flash("填一个另存名字", false); return; }
+  try {
+    const d = await post("/api/identify/payload/save", { name });
+    applyIdentify(d.identify);
+    $("payload-select").value = name;
+    flash(`已保存「${name}」（未改当前前馈）`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-payload-del").onclick = async () => {
+  const name = $("payload-select").value;
+  if (!name) return;
+  if (!confirm(`删除补偿文件「${name}」？`)) return;
+  try {
+    const d = await post("/api/identify/payload/delete", { name });
+    applyIdentify(d.identify);
+    flash("已删补偿文件", true);
+  } catch (e) { flash(String(e), false); }
+};
 setInterval(poll, 100);
 poll();

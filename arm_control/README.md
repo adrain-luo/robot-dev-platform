@@ -28,7 +28,7 @@ cd ~/abyss/project/g1d/arm_control
 
 ```bash
 cd ~/abyss/project/g1d/arm_control
-/usr/bin/python3 server.py --allow-real-motion --max-speed 0.15
+/usr/bin/python3 server.py --allow-real-motion --max-speed 0.2
 ```
 
 1. 徽标「可运动」→ 点「接管」：在当前角保持（会 `ReleaseMode` 高层模式）。
@@ -43,4 +43,8 @@ cd ~/abyss/project/g1d/arm_control
 
 网页「姿态集」：选控制臂 → 新建名字 → 拖拽到位 → 空格/「记录」。JSON 在 `config/posesets/`。
 
-「镜像到对侧」按躯干矢状面（y=0）映射，不是抄同一组关节角。G1D 左右轴定义相同，符号为 `[1,-1,-1, 1,-1, 1,-1]`（pitch 同号，roll/yaw 反号），末端 xyz 会变成 `(x,-y,z)`。点芯片可填入该角；已接管且非拖拽则按上面同一限速走过去。`regressor_cond` 是末端负载回归条件数，点太少或太挤时会很大。尚无末端负载辨识。
+「镜像到对侧」按躯干矢状面（y=0）映射，不是抄同一组关节角。G1D 左右轴定义相同，符号为 `[1,-1,-1, 1,-1, 1,-1]`（pitch 同号，roll/yaw 反号），末端 xyz 会变成 `(x,-y,z)`。点芯片可填入该角；已接管且非拖拽则按上面同一限速走过去。`regressor_cond` 是末端负载回归条件数，点太少或太挤时会很大。
+
+## 末端负载辨识
+
+网页「末端负载辨识」：选姿态集 → 接管 →「测量当前集」（双向逼近，走点也用同一限速）→「求解」（α=1）→「应用到前馈」。补偿文件 `config/payloads/<left|right>.json`。力矩默认用 PD 重构 `kp(q_cmd−q)−kd·dq+τ_ff`（与测量时已有的前馈无关）；也可用 `tau_est`。尚无到位对比/迭代修正。

@@ -183,3 +183,7 @@ class ArmGravity:
 
     def tip_T(self, q) -> np.ndarray:
         return self.model.fk_T(q)
+
+    def tau_payload(self, q, theta) -> np.ndarray:
+        th = np.asarray(theta, float).reshape(4)
+        return self.payload_regressor(q) @ th
