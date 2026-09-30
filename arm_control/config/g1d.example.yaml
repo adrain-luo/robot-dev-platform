@@ -7,13 +7,14 @@
 robot: g1d
 network_interface: enp86s0
 
-# 含 unitree_sdk2py/ 的 SDK 根目录；null 时用 UNITREE_SDK2PY_PATH 或常见候选路径
-unitree_sdk_path: /home/robot/vision_arm_control_coupled_ik_fast_v6_2_20260911/unitree_sdk2_python
+# 默认用仓库 third_party/unitree_sdk2_python；只有要覆盖时才填源码树
+unitree_sdk_path: null
 
 command_topic: rt/lowcmd
 state_topic: rt/lowstate
 
-urdf: /home/robot/vision_arm_control_coupled_ik_fast_v6_2_20260911/g1_d.urdf
+# 相对本文件所在目录；仓库自带一份，不引用外部工程
+urdf: g1_d.urdf
 base_link: torso_link
 
 # 可选：腰（耦合 IK 用；纯臂控可忽略）

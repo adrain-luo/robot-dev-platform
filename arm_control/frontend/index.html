@@ -6,129 +6,101 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <h1>G1D 臂控 <span id="mode-badge" class="badge ro">…</span></h1>
-  <div class="group">
-    <span class="title">视图</span>
+<div id="viewer">
+  <canvas id="scene3d"></canvas>
+  <div class="legend">
+    <span><i class="swatch solid"></i>实测</span>
+    <span><i class="swatch cmd"></i>指令</span>
+    <span><i class="swatch tgt"></i>目标</span>
+    <span><i class="swatch pay"></i>负载质心</span>
+    <span class="legend-ops">拖动旋转 · 右键平移 · 滚轮缩放 · 双击复位</span>
+  </div>
+</div>
+
+<header class="hud">
+  <div class="brand">
+    <div class="mark" aria-hidden="true"></div>
+    <div>
+      <h1>G1D 臂控</h1>
+      <p id="meta" class="meta">等待低层状态</p>
+    </div>
+  </div>
+  <div id="msg">推实物手臂对照 3D。发令需用 --allow-real-motion 启动，并点接管。</div>
+  <div class="mast-status">
+    <span id="mode-badge" class="badge ro">…</span>
+    <span id="pill" class="pill">连接中…</span>
+  </div>
+</header>
+
+<nav class="dock" id="ctrl-group">
+  <label class="field slim">视图
     <select id="arm-select">
       <option value="right">右臂</option>
       <option value="left">左臂</option>
       <option value="both">双臂</option>
     </select>
-  </div>
-  <div class="group" id="ctrl-group">
-    <span class="title">控制臂</span>
+  </label>
+  <label class="field slim">控制臂
     <select id="control-arm">
       <option value="right">右</option>
       <option value="left">左</option>
     </select>
-    <button id="btn-engage" class="primary">接管</button>
-    <button id="btn-teach">拖拽</button>
-    <button id="btn-hold" class="danger">急停(保持)</button>
-    <button id="btn-release">释放</button>
-    <label class="meta"><input id="grav-on" type="checkbox" checked> 重力前馈</label>
-    <span id="engage-state" class="meta"></span>
-  </div>
-  <span id="pill" class="pill">连接中…</span>
-  <span id="meta" class="meta"></span>
-</header>
+  </label>
+  <label class="switch"><input id="grav-on" type="checkbox" checked><span>重力前馈</span></label>
+  <button id="btn-engage" class="primary">接管</button>
+  <button id="btn-teach">拖拽</button>
+  <button id="btn-hold" class="danger">急停(保持)</button>
+  <button id="btn-release">释放</button>
+  <label class="field slim">限速
+    <input id="speed" type="number" step="0.05" min="0.02" max="1.0" value="0.2">
+  </label>
+  <button id="btn-speed">设</button>
+  <button id="btn-fill">填入当前角</button>
+  <button id="btn-goto" class="primary">出发</button>
+  <div id="engage-state" class="state"></div>
+</nav>
 
-<main>
-  <section id="left">
-    <div id="msg">推实物手臂对照 3D。发令需用 --allow-real-motion 启动，并点接管。</div>
-    <div id="viewer">
-      <canvas id="scene3d"></canvas>
-      <div class="hint">拖动=旋转 · 右键/Shift=平移 · 滚轮=缩放 · 双击=复位 · 实线实测 · 灰虚线指令 · 蓝虚线目标 · 紫点末端负载质心</div>
-    </div>
-    <div class="panel" id="panel-motion">
-      <h2>单点到位</h2>
-      <div class="row">
-        <label>限速 <input id="speed" type="number" step="0.05" min="0.02" max="1.0" value="0.2"> rad/s</label>
-        <button id="btn-speed">设</button>
-        <button id="btn-fill">填入当前角</button>
-        <button id="btn-goto" class="primary">出发</button>
+<aside class="floats">
+  <details class="float">
+    <summary>关节</summary>
+    <div class="float-body">
+      <p class="note">视图所选；双臂时显示控制臂</p>
+      <div class="table-scroll">
+        <table id="joints-table">
+          <thead>
+            <tr><th>关节</th><th>电机</th><th>q (deg)</th><th>dq</th><th>τ_est</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
-      <div class="row" title="测量/走点到达后等实测角停住，不是等贴上目标。窗口内 max|dq|&lt;速度阈 且 位置峰峰值&lt;漂移阈。">
-        <span class="meta">静止判定</span>
-        <label>速度阈 <input id="still-dq" type="number" step="0.005" min="0.02" value="0.05"> rad/s</label>
-        <label>漂移阈 <input id="still-drift" type="number" step="0.001" min="0.002" value="0.01"> rad</label>
-        <label>窗口 <input id="still-win" type="number" step="0.1" min="0.2" value="0.5"> s</label>
-        <label>超时 <input id="still-to" type="number" step="0.5" min="2" value="8"> s</label>
-        <button id="btn-still">设</button>
-      </div>
-      <div class="row" id="goto-inputs"></div>
     </div>
-    <div class="panel" id="panel-poses">
-      <h2>姿态集（示教 · 左右镜像） <span id="pose-cond" class="meta"></span></h2>
-      <p class="meta">接管后拖拽到位，空格或「记录」记下该臂实测角。镜像关于躯干矢状面 y=0：看起来左右对称，不是复制同一组关节角（roll/yaw 反号，pitch 同号）。</p>
-      <div class="row">
-        <select id="poseset-select"></select>
-        <select id="poseset-arm">
-          <option value="right">新建→右</option>
-          <option value="left">新建→左</option>
-        </select>
-        <input id="poseset-new" placeholder="新名字" maxlength="48">
-        <button id="btn-poseset-new">新建</button>
-        <button id="btn-poseset-del">删集</button>
-        <button id="btn-poseset-record" class="primary">记录</button>
-        <button id="btn-poseset-mirror">镜像到对侧</button>
+  </details>
+
+  <details class="float" id="panel-motion">
+    <summary>单点角度</summary>
+    <div class="float-body">
+      <div class="still" title="测量/走点到达后等实测角停住。窗口内 max|dq| 小于速度阈，且位置峰峰值小于漂移阈。">
+        <label class="field">速度阈
+          <input id="still-dq" type="number" step="0.005" min="0.02" value="0.05">
+        </label>
+        <label class="field">漂移阈
+          <input id="still-drift" type="number" step="0.001" min="0.002" value="0.01">
+        </label>
+        <label class="field">窗口 s
+          <input id="still-win" type="number" step="0.1" min="0.2" value="0.5">
+        </label>
+        <label class="field">超时 s
+          <input id="still-to" type="number" step="0.5" min="2" value="8">
+        </label>
+        <button id="btn-still">设置</button>
       </div>
-      <div id="pose-chips"></div>
+      <div class="q-grid" id="goto-inputs"></div>
     </div>
-    <div class="panel" id="panel-id">
-      <h2>末端负载辨识 <span id="id-progress" class="meta"></span></h2>
-      <p class="meta">用当前姿态集自动走点（同一限速），双向逼近后采样。α 锁死 1，只解末端 m 与质心。力矩优先用 PD 重构（造成下垂的那份），也可用 tau_est。</p>
-      <div class="row">
-        <button id="btn-id-measure" class="primary">测量当前集</button>
-        <button id="btn-id-stop" class="danger">停止任务</button>
-        <select id="id-session" title="已保存的测量会话，求解用这一份样本，不用再走点"></select>
-        <select id="id-source">
-          <option value="pd">力矩=PD重构</option>
-          <option value="est">力矩=tau_est</option>
-        </select>
-        <button id="btn-id-solve">求解</button>
-        <button id="btn-id-apply">存并应用到前馈</button>
-        <button id="btn-id-clear">去掉负载项</button>
-      </div>
-      <div class="row">
-        <span class="meta">补偿文件</span>
-        <select id="payload-select"></select>
-        <input id="payload-new" placeholder="另存名字" maxlength="48">
-        <button id="btn-payload-use">调用</button>
-        <button id="btn-payload-save">只存不应用</button>
-        <button id="btn-payload-del">删文件</button>
-      </div>
-      <div id="id-result" class="meta"></div>
-      <pre id="id-log"></pre>
-    </div>
-    <div class="panel" id="panel-val">
-      <h2>到位对比 <span id="val-progress" class="meta"></span></h2>
-      <p class="meta">同一姿态集、同一限速走基线 / 补偿 / 补偿+修正。修正用双向测量的摩擦停驻带做逐关节死区（带内不推）。结果写 data/validate/。</p>
-      <div class="row">
-        <label><input id="val-base" type="checkbox" checked> 基线</label>
-        <label><input id="val-pay" type="checkbox" checked> 补偿</label>
-        <label><input id="val-corr" type="checkbox"> 补偿+修正</label>
-        <label>修正次数 <input id="val-iters" type="number" min="1" max="6" value="2"></label>
-        <button id="btn-val-start" class="primary">开始对比</button>
-      </div>
-      <div id="val-band" class="meta"></div>
-      <div id="val-summary" class="meta"></div>
-      <table id="val-table">
-        <thead><tr><th>方案</th><th>姿态</th><th>max°</th><th>末端 mm</th><th>修正</th><th>s</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-    <div class="panel">
-      <h2>关节（视图所选；双臂时显示控制臂）</h2>
-      <table id="joints-table">
-        <thead>
-          <tr><th>关节</th><th>电机</th><th>q (deg)</th><th>dq</th><th>τ_est</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-</main>
+  </details>
+
+  <!-- payload-panels -->
+</aside>
 <script src="/static/app.js"></script>
+<script src="/static/payload.js"></script>
 </body>
 </html>

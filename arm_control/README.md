@@ -10,13 +10,24 @@ G1D 独立臂控底座。供 `arm_payload_gravity` / `tcp_calib` / `hand_eye` �
 - `frontend/` — 3D 骨架 + 接管/走点
 - `config/` — `g1d.json`
 
-需 `/usr/bin/python3`（conda `base` 无 cyclonedds）。
+用独立 conda 环境 `abyss`（Python 3.10，不读 `~/.local`）。首次若环境不在：
+
+```bash
+conda env create -f ~/abyss/project/g1d/environment.yml
+```
+
+日常：
+
+```bash
+conda activate abyss
+```
 
 ## 只读
 
 ```bash
+conda activate abyss
 cd ~/abyss/project/g1d/arm_control
-/usr/bin/python3 server.py
+python server.py
 # http://<本机IP>:10184/
 ```
 
@@ -27,8 +38,9 @@ cd ~/abyss/project/g1d/arm_control
 先停掉占用 `rt/lowcmd` 的任务（如 vision-arm-control service）。有人扶臂、守急停。
 
 ```bash
+conda activate abyss
 cd ~/abyss/project/g1d/arm_control
-/usr/bin/python3 server.py --allow-real-motion --max-speed 0.2
+python server.py --allow-real-motion --max-speed 0.2
 ```
 
 1. 徽标「可运动」→ 点「接管」：在当前角保持（会 `ReleaseMode` 高层模式）。
@@ -41,16 +53,14 @@ cd ~/abyss/project/g1d/arm_control
 
 ## 重力前馈示教姿态集
 
-网页「姿态集」：选控制臂 → 新建名字 → 拖拽到位 → 空格/「记录」。JSON 在 `config/posesets/`。
+网页「姿态集」在 `arm_payload_gravity`：选控制臂 → 新建名字 → 拖拽到位 → 空格/「记录」。JSON 在 `arm_payload_gravity/config/posesets/`。
 
 「镜像到对侧」按躯干矢状面（y=0）映射，不是抄同一组关节角。G1D 左右轴定义相同，符号为 `[1,-1,-1, 1,-1, 1,-1]`（pitch 同号，roll/yaw 反号），末端 xyz 会变成 `(x,-y,z)`。点芯片可填入该角；已接管且非拖拽则按上面同一限速走过去。`regressor_cond` 是末端负载回归条件数，点太少或太挤时会很大。
 
 ## 末端负载辨识
 
-网页「末端负载辨识」：选姿态集 → 接管 →「测量当前集」→「求解」→「存并应用到前馈」。补偿文件 `config/payloads/<名字>.json`。
-
-测量样本在 `data/measure/<时间戳>_<臂>/`。重启后不必再走点：选同一姿态集，下拉测量会话选那次目录，点「求解」即可用旧样本重算。力矩源可选 `tau_pd`（默认）或 `tau_est`。
+测量样本在 `arm_payload_gravity/data/measure/<时间戳>_<臂>/`。重启后不必再走点：选同一姿态集，下拉测量会话选那次目录，点「求解」即可用旧样本重算。力矩源可选 `tau_pd`（默认）或 `tau_est`。补偿文件 `arm_payload_gravity/config/payloads/<名字>.json`。
 
 ## 到位对比与摩擦带修正
 
-网页「到位对比」：勾选基线 / 补偿 / 补偿+修正。摩擦停驻带来自双向测量落点差的一半（`friction.py`），带内关节不推指令。结果 `data/validate/`。
+网页「到位对比」：勾选基线 / 补偿 / 补偿+修正。摩擦停驻带来自双向测量落点差的一半（`arm_payload_gravity/friction.py`），带内关节不推指令。结果 `arm_payload_gravity/data/validate/<时间戳>_<臂>.json`。重启后网页下拉「打开已保存的对比」即可看回表格和末端最大误差。

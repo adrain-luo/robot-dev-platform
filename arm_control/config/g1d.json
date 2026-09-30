@@ -1,10 +1,10 @@
 {
   "robot": "g1d",
   "network_interface": "enp86s0",
-  "unitree_sdk_path": "/home/robot/vision_arm_control_coupled_ik_fast_v6_2_20260911/unitree_sdk2_python",
+  "unitree_sdk_path": null,
   "command_topic": "rt/lowcmd",
   "state_topic": "rt/lowstate",
-  "urdf": "/home/robot/vision_arm_control_coupled_ik_fast_v6_2_20260911/g1_d.urdf",
+  "urdf": "g1_d.urdf",
   "base_link": "torso_link",
   "dds_domain": 0,
   "lowstate_timeout_s": 5.0,

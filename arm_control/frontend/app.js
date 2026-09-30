@@ -64,14 +64,19 @@ const V3 = {
     const c = this.ctx, cv = this.canvas, w = cv.clientWidth, h = cv.clientHeight;
     if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
     c.clearRect(0, 0, w, h);
-    for (let g = -1; g <= 1.001; g += 0.25) {
-      this.line([g, -1, -0.6], [g, 1, -0.6], "#1e2229");
-      this.line([-1, g, -0.6], [1, g, -0.6], "#1e2229");
+    const g = c.createRadialGradient(w * 0.55, h * 0.42, 30, w * 0.5, h * 0.55, Math.max(w, h) * 0.72);
+    g.addColorStop(0, "#1a2330");
+    g.addColorStop(1, "#0c1016");
+    c.fillStyle = g;
+    c.fillRect(0, 0, w, h);
+    for (let x = -1; x <= 1.001; x += 0.25) {
+      this.line([x, -1, -0.6], [x, 1, -0.6], "#243044");
+      this.line([-1, x, -0.6], [1, x, -0.6], "#243044");
     }
     this.line([0, 0, 0], [0.3, 0, 0], "#e5484d", 2);
     this.line([0, 0, 0], [0, 0.3, 0], "#46a758", 2);
     this.line([0, 0, 0], [0, 0, 0.3], "#3e63dd", 2);
-    c.fillStyle = "#9aa3ad"; c.font = "11px system-ui";
+    c.fillStyle = "#c5ced8"; c.font = "12px system-ui";
     const ax = this.project([0.33, 0, 0]); if (ax) c.fillText("X 前", ax[0], ax[1]);
     const ay = this.project([0, 0.33, 0]); if (ay) c.fillText("Y 左", ay[0], ay[1]);
     const az = this.project([0, 0, 0.33]); if (az) c.fillText("Z 上", az[0], az[1]);
@@ -79,18 +84,8 @@ const V3 = {
     this.line([0, -0.2, 0.3], [0, 0.2, 0.3], "#3a3f48", 6);
     const sc = this.scene; if (!sc) return;
     const show = $("arm-select").value;
-    if (show !== "left") this.drawArm(sc.right, "#e8eaed", "右腕");
-    if (show !== "right") this.drawArm(sc.left, "#67e8f9", "左腕");
-    c.font = "12px system-ui"; c.fillStyle = "#9aa3ad";
-    c.fillText(sc.modeLabel || "torso_link", 8, 16);
-    const hud = (show !== "left" && sc.right?.payload_mass) ? sc.right
-      : (show !== "right" && sc.left?.payload_mass ? sc.left : null);
-    if (hud && hud.payload_mass > 1e-6) {
-      const com = (hud.payload_com_m || []).map((v) => Number(v).toFixed(3)).join(", ");
-      const nm = hud.payload_name ? `「${hud.payload_name}」 ` : "";
-      c.fillStyle = "#e879f9";
-      c.fillText(`末端负载 ${nm}${Number(hud.payload_mass).toFixed(3)} kg  ·  质心(腕连杆) [${com}] m`, 8, 34);
-    }
+    if (show !== "left") this.drawArm(sc.right, "#f4efe6", "右腕");
+    if (show !== "right") this.drawArm(sc.left, "#7dcec4", "左腕");
   },
   init() {
     this.canvas = $("scene3d"); this.ctx = this.canvas.getContext("2d");
@@ -123,6 +118,7 @@ const V3 = {
     this.draw();
   },
 };
+window.V3 = V3;
 
 function fmt(v, n = 2) {
   if (v == null || Number.isNaN(v)) return "—";
@@ -136,8 +132,9 @@ function renderTable(snap) {
   for (const j of snap.joints) {
     const tr = document.createElement("tr");
     const live = Math.abs(j.dq) > 0.02;
-    tr.innerHTML = `<td>${j.label}</td><td>${j.motor}</td><td>${fmt(j.q_deg)}</td>` +
-      `<td class="${live ? "dq-live" : ""}">${fmt(j.dq, 3)}</td><td>${fmt(j.tau_est)}</td>`;
+    tr.innerHTML = `<td class="j-name">${j.label}</td><td class="j-q">${fmt(j.q_deg)}°</td>` +
+      `<td class="j-sub">电机 ${j.motor}</td>` +
+      `<td class="j-sub ${live ? "dq-live" : ""}">dq ${fmt(j.dq, 3)}</td><td class="j-sub">τ ${fmt(j.tau_est)}</td>`;
     tb.appendChild(tr);
   }
 }
@@ -160,7 +157,8 @@ function ensureGotoInputs() {
   if (row.querySelector("input")) return;
   LABELS.forEach((lab) => {
     const label = document.createElement("label");
-    label.innerHTML = `${lab} <input class="g-q" type="number" step="0.01">`;
+    label.className = "field";
+    label.innerHTML = `<span>${lab}</span><input class="g-q" type="number" step="0.01">`;
     row.appendChild(label);
   });
 }
@@ -181,21 +179,23 @@ async function post(path, body) {
   return data;
 }
 
-let currentSet = null;
 let lastCtrl = null;
 let speedDirty = false;
-let stillDirty = false;
+window.speedDirty = false;
+document.getElementById("speed").addEventListener("input", () => { window.speedDirty = true; });
 
 function applyCtrl(ctrl) {
   if (!ctrl) return;
   lastCtrl = ctrl;
+  window.lastCtrl = ctrl;
   const allow = !!ctrl.allow_real_motion;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
   ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
-  $("btn-poseset-mirror").disabled = !currentSet;
+  const mirror = $("btn-poseset-mirror");
+  if (mirror) mirror.disabled = !window.currentSet;
   if ($("btn-teach")) $("btn-teach").disabled = !allow || !ctrl.engaged;
   $("btn-teach").textContent = ctrl.float ? "结束拖拽" : "拖拽";
   $("grav-on").checked = ctrl.gravity_ff !== false;
@@ -209,69 +209,13 @@ function applyCtrl(ctrl) {
   document.querySelectorAll(".g-q").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
   $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;
   const sp = $("speed");
-  if (ctrl.max_speed_rad_s != null && document.activeElement !== sp && !speedDirty) {
+  if (ctrl.max_speed_rad_s != null && document.activeElement !== sp && !window.speedDirty) {
     const v = Number(ctrl.max_speed_rad_s);
     if (Number(sp.value) !== v) sp.value = v;
   }
   if (ctrl.arm) $("control-arm").value = ctrl.arm;
 }
 
-function renderVal(id) {
-  if (!$("val-table")) return;
-  const [a, b] = id.progress || [0, 0];
-  $("val-progress").textContent = (id.kind === "validate" && id.running)
-    ? `${id.phase || ""} ${a}/${b}`
-    : (id.kind === "validate" && id.session ? `会话 ${id.session}` : "");
-  const band = id.band || {};
-  if (band.default_deg) {
-    const src = band.fallback ? "无双向数据，常数兜底" : `${band.n_sessions}次双向 / ${band.n_poses}姿态`;
-    $("val-band").textContent = `摩擦带（${src}）默认 [${band.default_deg.map((x) => Number(x).toFixed(2)).join(", ")}] °`;
-  }
-  const sum = id.summary || {};
-  $("val-summary").textContent = Object.entries(sum).map(([k, v]) =>
-    `${k}：均 ${Number(v.err_max_deg_mean).toFixed(2)}° / 最差 ${Number(v.err_max_deg_worst).toFixed(2)}° · 末端均 ${Number(v.ee_mm_mean).toFixed(1)} mm`
-  ).join("   ");
-  const tb = $("val-table").querySelector("tbody");
-  tb.innerHTML = (id.rows || []).map((r) =>
-    `<tr><td>${r.mode}</td><td>${r.pose}</td><td>${Number(r.err_max_deg).toFixed(2)}</td>` +
-    `<td>${Number(r.ee_mm).toFixed(1)}</td><td>${r.corr_applied || 0}${r.corr_reverted ? "↩" : ""}</td>` +
-    `<td>${Number(r.total_s).toFixed(1)}${r.timed_out ? "⚠" : ""}</td></tr>`
-  ).join("");
-}
-
-function applyIdentify(id) {
-  if (!id) return;
-  const [a, b] = id.progress || [0, 0];
-  $("id-progress").textContent = id.running ? `${id.phase || ""} ${a}/${b}` : (id.session ? `会话 ${id.session}` : "");
-  $("id-log").textContent = (id.log || []).join("\n");
-  const sol = id.solution;
-  if (sol) {
-    const com = (sol.com_m || []).map((x) => Number(x).toFixed(3)).join(", ");
-    $("id-result").textContent = `m=${Number(sol.mass_kg).toFixed(3)} kg  com=[${com}] m  cond=${Number(sol.regressor_cond).toFixed(1)}  残差 ${Number(sol.residual_rms_before_nm).toFixed(2)}→${Number(sol.residual_rms_after_nm).toFixed(2)} N·m  估下垂 ${Number(sol.sag_est_before_deg).toFixed(2)}°→${Number(sol.sag_est_after_deg).toFixed(2)}°`;
-    const files = [];
-    if (id.session_dir) files.push(`会话 ${id.session_dir}`);
-    if (id.payload_file) files.push(`前馈 ${id.payload_file}`);
-    if (files.length) $("id-result").textContent += "  ·  " + files.join("  ·  ");
-  } else if (id.error) {
-    $("id-result").textContent = id.error;
-  }
-  const allow = !!lastCtrl?.allow_real_motion && !!lastCtrl?.engaged && !lastCtrl?.float;
-  $("btn-id-measure").disabled = !allow || !!id.running;
-  $("btn-id-stop").disabled = !id.running;
-  $("btn-val-start").disabled = !allow || !!id.running;
-  renderVal(id);
-  renderPayloadSelect(id.profiles || [], id.applied_name);
-  renderSessionSelect(id.sessions || [], id.session);
-  const st = id.still;
-  if (st && !stillDirty) {
-    const map = { "still-dq": "still_dq_rad_s", "still-drift": "still_drift_rad", "still-win": "still_window_s", "still-to": "settle_timeout_s" };
-    for (const [idEl, key] of Object.entries(map)) {
-      const el = $(idEl);
-      if (!el || document.activeElement === el) continue;
-      if (st[key] != null && Number(el.value) !== Number(st[key])) el.value = st[key];
-    }
-  }
-}
 
 let inflight = false;
 async function poll() {
@@ -291,11 +235,11 @@ async function poll() {
     setPill(fresh, fresh ? `lowstate OK  ${age.toFixed(3)} s` : `信号陈旧  ${age.toFixed(2)} s`, fresh ? "ok" : "warn");
     $("meta").textContent = `${data.iface} · ${data.topic} · mode_machine=${right?.mode_machine ?? "—"}`;
     applyCtrl(data.ctrl);
-    applyIdentify(data.identify);
+    if (typeof applyIdentify === "function") applyIdentify(data.identify);
     const modeLabel = data.ctrl?.float ? "实测 · 拖拽卸力" : (data.ctrl?.engaged ? "实测 · 已接管" : (data.mode === "real" ? "实测 · 未接管" : "实测 · 只读"));
-    if (currentSet && currentSet.poses) {
-      const tips = currentSet.poses.map((p) => p.tip_xyz).filter(Boolean);
-      const armSc = currentSet.arm === "left" ? left?.scene : right?.scene;
+    if (window.currentSet && window.currentSet.poses) {
+      const tips = window.currentSet.poses.map((p) => p.tip_xyz).filter(Boolean);
+      const armSc = window.currentSet.arm === "left" ? left?.scene : right?.scene;
       if (armSc) armSc.pose_tips = tips;
     }
     V3.scene = {
@@ -316,372 +260,7 @@ async function poll() {
   }
 }
 
-function posesetName() {
-  return $("poseset-select").value;
-}
-
-function renderPoseList(list) {
-  const sel = $("poseset-select");
-  const keep = posesetName();
-  sel.innerHTML = "";
-  const opt0 = document.createElement("option");
-  opt0.value = "";
-  opt0.textContent = list.length ? "选择姿态集…" : "还没有姿态集";
-  sel.appendChild(opt0);
-  for (const s of list) {
-    const o = document.createElement("option");
-    o.value = s.name;
-    const side = s.arm === "left" ? "左" : "右";
-    o.textContent = `${s.name} · ${side} · ${s.n}点` + (s.cond != null ? ` · cond ${s.cond}` : "");
-    sel.appendChild(o);
-  }
-  if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
-}
-
-function renderChips() {
-  const box = $("pose-chips");
-  box.innerHTML = "";
-  $("pose-cond").textContent = "";
-  if (!currentSet) return;
-  const cond = currentSet.regressor_cond;
-  $("pose-cond").textContent = currentSet.arm === "left" ? "左臂" : "右臂"
-    + (cond != null ? ` · 回归 cond ${cond}` : "")
-    + (currentSet.mirrored_from ? ` · 镜像自 ${currentSet.mirrored_from.name}` : "");
-  (currentSet.poses || []).forEach((p, i) => {
-    const wrap = document.createElement("span");
-    wrap.style.display = "inline-flex";
-    wrap.style.gap = "0";
-    const b = document.createElement("button");
-    b.textContent = p.name || `p${i}`;
-    b.title = (p.q || []).map((q) => Number(q).toFixed(2)).join(", ");
-    b.onclick = () => gotoPose(i);
-    const x = document.createElement("button");
-    x.textContent = "×";
-    x.title = "删除此姿态";
-    x.onclick = (e) => { e.stopPropagation(); deletePose(i); };
-    wrap.appendChild(b);
-    wrap.appendChild(x);
-    box.appendChild(wrap);
-  });
-}
-
-async function refreshPoseList(selectName) {
-  const d = await fetch("/api/posesets").then((r) => r.json());
-  if (!d.ok) throw new Error(d.error);
-  renderPoseList(d.list || []);
-  if (selectName) $("poseset-select").value = selectName;
-  if (posesetName()) await loadCurrentSet();
-  else { currentSet = null; renderChips(); }
-}
-
-async function loadCurrentSet() {
-  const name = posesetName();
-  if (!name) { currentSet = null; renderChips(); return; }
-  const d = await fetch("/api/posesets?name=" + encodeURIComponent(name)).then((r) => r.json());
-  if (!d.ok) throw new Error(d.error);
-  currentSet = d.set;
-  renderChips();
-  try {
-    const b = await fetch("/api/validate/band?arm=" + encodeURIComponent(currentSet.arm) +
-      "&poseset=" + encodeURIComponent(currentSet.name)).then((r) => r.json());
-    if (b.ok && b.band) renderVal({ band: b.band, rows: [], summary: {}, progress: [0, 0] });
-  } catch (_) { /* ignore */ }
-}
-
-async function gotoPose(i) {
-  if (!currentSet) return;
-  fillQ(currentSet.poses[i].q);
-  const ctrl = lastCtrl;
-  if (!ctrl?.allow_real_motion || !ctrl.engaged || ctrl.float) {
-    flash("已填入该姿态角（需接管且非拖拽才能走过去）", true);
-    return;
-  }
-  if (ctrl.arm !== currentSet.arm) {
-    flash(`姿态集是${currentSet.arm === "left" ? "左" : "右"}臂，请先切控制臂`, false);
-    return;
-  }
-  try {
-    await post("/api/posesets/goto", { name: currentSet.name, index: i });
-    flash(`正在去 ${currentSet.poses[i].name}`, true);
-  } catch (e) { flash(String(e), false); }
-}
-
-async function deletePose(i) {
-  if (!currentSet) return;
-  if (!confirm(`删除 ${currentSet.poses[i].name}？`)) return;
-  try {
-    const d = await post("/api/posesets/delete-pose", { name: currentSet.name, index: i });
-    currentSet = d.set;
-    renderChips();
-    await refreshPoseList(currentSet.name);
-  } catch (e) { flash(String(e), false); }
-}
-
-async function recordPose() {
-  if (!posesetName()) { flash("先新建或选择姿态集", false); return; }
-  try {
-    const d = await post("/api/posesets/record", { name: posesetName() });
-    currentSet = d.set;
-    renderChips();
-    await refreshPoseList(currentSet.name);
-    flash(`已记录 ${d.pose.name}（${currentSet.arm === "left" ? "左" : "右"}臂实测）`, true);
-  } catch (e) { flash(String(e), false); }
-}
-
 ensureGotoInputs();
 V3.init();
-$("arm-select").onchange = () => { poll(); V3.draw(); };
-$("btn-fill").onclick = () => {
-  const view = $("arm-select").value === "left" ? "left" : $("control-arm").value;
-  fetch("/api/status?arm=" + view).then((r) => r.json()).then((d) => {
-    if (d.ok) fillQ(d.joints.map((j) => j.q_rad));
-  });
-};
-$("btn-engage").onclick = async () => {
-  if (!confirm("将发布 rt/lowcmd 接管（可能释放高层运动模式）。请扶住机器人。继续？")) return;
-  try { await post("/api/engage", {}); flash("已接管：保持当前姿态", true); } catch (e) { flash(String(e), false); }
-};
-$("btn-release").onclick = async () => {
-  if (!confirm("释放后停止发令，手臂可能下垂，请扶住。继续？")) return;
-  try { await post("/api/release", {}); flash("已释放", true); } catch (e) { flash(String(e), false); }
-};
-$("btn-hold").onclick = async () => {
-  try { await post("/api/hold", {}); flash("急停：退出拖拽，保持当前角", true); } catch (e) { flash(String(e), false); }
-};
-$("btn-teach").onclick = async () => {
-  const on = $("btn-teach").textContent !== "结束拖拽";
-  if (on && !confirm("将卸力拖拽（kp=0，保留重力前馈）。请先扶住手臂。继续？")) return;
-  try {
-    await post("/api/teach", { enabled: on });
-    flash(on ? "拖拽中：手推手臂；急停可立刻变硬" : "已结束拖拽并锁在当前角", true);
-  } catch (e) { flash(String(e), false); }
-};
-$("grav-on").onchange = async () => {
-  try {
-    await post("/api/gravity", { enabled: $("grav-on").checked });
-    flash($("grav-on").checked ? "重力前馈开（α=1）" : "重力前馈关", true);
-  } catch (e) { flash(String(e), false); $("grav-on").checked = !$("grav-on").checked; }
-};
-$("btn-still").onclick = async () => {
-  try {
-    await post("/api/identify/still", {
-      still_dq_rad_s: parseFloat($("still-dq").value),
-      still_drift_rad: parseFloat($("still-drift").value),
-      still_window_s: parseFloat($("still-win").value),
-      settle_timeout_s: parseFloat($("still-to").value),
-    });
-    stillDirty = false;
-    flash("已设静止判定", true);
-  } catch (e) { flash(String(e), false); }
-};
-["still-dq", "still-drift", "still-win", "still-to"].forEach((id) => {
-  $(id).addEventListener("input", () => { stillDirty = true; });
-});
-$("speed").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); $("btn-speed").click(); }
-});
-$("btn-speed").onclick = async () => {
-  try {
-    await post("/api/speed", { max_speed_rad_s: parseFloat($("speed").value) });
-    speedDirty = false;
-    flash("已设限速", true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-goto").onclick = async () => {
-  const q = [...document.querySelectorAll(".g-q")].map((el) => parseFloat(el.value));
-  if (q.some((x) => !Number.isFinite(x))) { flash("目标角不完整", false); return; }
-  if (!confirm("将限速走到目标关节角。扶住、守急停。继续？")) return;
-  try { await post("/api/target", { q }); flash("已设目标", true); } catch (e) { flash(String(e), false); }
-};
-$("control-arm").onchange = async () => {
-  try { await post("/api/control-arm", { arm: $("control-arm").value }); flash("控制臂已切换", true); }
-  catch (e) { flash(String(e), false); }
-};
-$("poseset-select").onchange = () => loadCurrentSet().catch((e) => flash(String(e), false));
-$("btn-poseset-new").onclick = async () => {
-  const name = $("poseset-new").value.trim();
-  if (!name) { flash("填一个姿态集名字", false); return; }
-  const arm = $("poseset-arm").value;
-  try {
-    const d = await post("/api/posesets/create", { name, arm });
-    $("poseset-new").value = "";
-    await refreshPoseList(d.set.name);
-    flash(`已建「${d.set.name}」${arm === "left" ? "左" : "右"}臂`, true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-poseset-del").onclick = async () => {
-  const name = posesetName();
-  if (!name) return;
-  if (!confirm(`删除姿态集「${name}」？`)) return;
-  try {
-    await post("/api/posesets/delete", { name });
-    currentSet = null;
-    await refreshPoseList();
-    flash("已删集", true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-poseset-record").onclick = () => recordPose();
-$("btn-poseset-mirror").onclick = async () => {
-  if (!currentSet) { flash("先选姿态集", false); return; }
-  const dst = currentSet.arm === "left" ? "右" : "左";
-  if (!confirm(`把「${currentSet.name}」关于 y=0 镜像成${dst}臂姿态集？关节角会改符号，不是原样复制。`)) return;
-  try {
-    const d = await post("/api/posesets/mirror", { src: currentSet.name });
-    await refreshPoseList(d.set.name);
-    flash(`已镜像为「${d.set.name}」${dst}臂 ${d.set.poses.length} 点`, true);
-  } catch (e) {
-    if (String(e).includes("已存在") && confirm("对侧集已存在，覆盖？")) {
-      try {
-        const d = await post("/api/posesets/mirror", { src: currentSet.name, force: true });
-        await refreshPoseList(d.set.name);
-        flash(`已覆盖镜像「${d.set.name}」`, true);
-      } catch (e2) { flash(String(e2), false); }
-    } else flash(String(e), false);
-  }
-};
-window.addEventListener("keydown", (e) => {
-  if (e.code !== "Space" && e.key !== " ") return;
-  const t = e.target;
-  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
-  e.preventDefault();
-  recordPose();
-});
-refreshPoseList().catch(() => {});
-$("btn-id-measure").onclick = async () => {
-  if (!posesetName()) { flash("先选姿态集", false); return; }
-  if (!confirm("将按当前限速走完姿态集（双向逼近）。扶住、守急停。继续？")) return;
-  try {
-    await post("/api/identify/measure", { name: posesetName() });
-    flash("开始测量", true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-id-stop").onclick = async () => {
-  try { await post("/api/identify/stop", {}); flash("已请求停止", true); }
-  catch (e) { flash(String(e), false); }
-};
-$("btn-id-solve").onclick = async () => {
-  const session = $("id-session") && $("id-session").value;
-  if (!session) { flash("先选一条测量会话（或先测量当前集）", false); return; }
-  try {
-    const d = await post("/api/identify/solve", { source: $("id-source").value, session });
-    applyIdentify(d.identify);
-    flash("已用会话 " + session + " 重新求解", true);
-  } catch (e) { flash(String(e), false); }
-};
-function renderSessionSelect(list, current) {
-  const sel = $("id-session");
-  if (!sel) return;
-  if (document.activeElement === sel) return;
-  const keep = sel.value;
-  let rows = list || [];
-  if (currentSet) {
-    const arm = currentSet.arm;
-    const name = currentSet.name;
-    const filtered = rows.filter((s) => s.arm === arm && s.poseset === name);
-    if (filtered.length) rows = filtered;
-  }
-  sel.innerHTML = "";
-  const o0 = document.createElement("option");
-  o0.value = "";
-  o0.textContent = rows.length ? "选择测量会话再求解…" : "还没有测量会话（先点测量当前集）";
-  sel.appendChild(o0);
-  for (const s of rows) {
-    const o = document.createElement("option");
-    o.value = s.name;
-    const side = s.arm === "left" ? "左" : (s.arm === "right" ? "右" : "?");
-    const bi = s.bidirectional ? "双向" : "单向";
-    o.textContent = `${s.name} · ${side} ${s.poseset || ""} ${s.n}样 ${bi}`;
-    sel.appendChild(o);
-  }
-  const want = current || keep;
-  if (want && [...sel.options].some((o) => o.value === want)) sel.value = want;
-}
-
-function renderPayloadSelect(list, applied) {
-  const sel = $("payload-select");
-  if (!sel) return;
-  if (document.activeElement === sel) return;
-  const keep = sel.value;
-  sel.innerHTML = "";
-  const o0 = document.createElement("option");
-  o0.value = "";
-  o0.textContent = list.length ? "选择补偿文件…" : "还没有补偿文件";
-  sel.appendChild(o0);
-  for (const p of list) {
-    const o = document.createElement("option");
-    o.value = p.name;
-    const side = p.arm === "left" ? "左" : (p.arm === "right" ? "右" : "?");
-    const m = p.mass_kg != null ? `${Number(p.mass_kg).toFixed(2)}kg` : "";
-    o.textContent = `${p.name} · ${side} ${m}`;
-    sel.appendChild(o);
-  }
-  const want = applied || keep;
-  if (want && [...sel.options].some((o) => o.value === want)) sel.value = want;
-}
-
-$("btn-id-apply").onclick = async () => {
-  try {
-    const name = ($("payload-new").value.trim() || $("payload-select").value || (currentSet && currentSet.name) || "").trim();
-    const d = await post("/api/identify/apply", { name });
-    applyIdentify(d.identify);
-    flash(`已存并应用「${d.payload.name}」`, true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-id-clear").onclick = async () => {
-  try {
-    await post("/api/identify/clear", {});
-    flash("已去掉负载项，只剩 URDF 臂自重", true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-payload-use").onclick = async () => {
-  const name = $("payload-select").value;
-  if (!name) { flash("先选补偿文件", false); return; }
-  try {
-    const d = await post("/api/identify/payload/apply", { name });
-    applyIdentify(d.identify);
-    flash(`已调用「${name}」进前馈`, true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-payload-save").onclick = async () => {
-  const name = ($("payload-new").value.trim() || $("payload-select").value || (currentSet && currentSet.name) || "").trim();
-  if (!name) { flash("填一个另存名字", false); return; }
-  try {
-    const d = await post("/api/identify/payload/save", { name });
-    applyIdentify(d.identify);
-    $("payload-select").value = name;
-    flash(`已保存「${name}」（未改当前前馈）`, true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-payload-del").onclick = async () => {
-  const name = $("payload-select").value;
-  if (!name) return;
-  if (!confirm(`删除补偿文件「${name}」？`)) return;
-  try {
-    const d = await post("/api/identify/payload/delete", { name });
-    applyIdentify(d.identify);
-    flash("已删补偿文件", true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-val-start").onclick = async () => {
-  if (!posesetName()) { flash("先选姿态集", false); return; }
-  const modes = [];
-  if ($("val-base").checked) modes.push("baseline");
-  if ($("val-pay").checked) modes.push("payload");
-  if ($("val-corr").checked) modes.push("payload_correct");
-  if (!modes.length) { flash("至少勾一种方案", false); return; }
-  if ((modes.includes("payload") || modes.includes("payload_correct")) && !$("payload-select").value) {
-    flash("补偿方案请先选补偿文件", false); return;
-  }
-  if (!confirm("将按所选方案走完整姿态集（同一限速）。扶住、守急停。继续？")) return;
-  try {
-    await post("/api/validate/start", {
-      name: posesetName(),
-      modes,
-      payload: $("payload-select").value,
-      correction_iters: parseInt($("val-iters").value, 10) || 2,
-    });
-    flash("开始对比", true);
-  } catch (e) { flash(String(e), false); }
-};
 setInterval(poll, 100);
 poll();

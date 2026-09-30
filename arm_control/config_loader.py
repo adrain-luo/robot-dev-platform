@@ -31,10 +31,13 @@ class Settings:
         return HERE / "config"
 
 
-def _as_path(value: Any) -> Optional[Path]:
+def _as_path(value: Any, relative_to: Optional[Path] = None) -> Optional[Path]:
     if value is None or value == "" or value == "null":
         return None
-    return Path(str(value)).expanduser()
+    p = Path(str(value)).expanduser()
+    if not p.is_absolute() and relative_to is not None:
+        p = (relative_to / p).resolve()
+    return p
 
 
 def load_settings(path: Optional[Path] = None) -> Settings:
@@ -46,6 +49,11 @@ def load_settings(path: Optional[Path] = None) -> Settings:
     defaults = raw.get("defaults") or {}
     iface = os.environ.get("ARM_DDS_INTERFACE") or raw.get("network_interface") or "enp86s0"
     sdk = os.environ.get("UNITREE_SDK2PY_PATH") or raw.get("unitree_sdk_path")
+    cfg_dir = cfg_path.parent
+    urdf = _as_path(raw.get("urdf"), relative_to=cfg_dir)
+    bundled = HERE / "config" / "g1_d.urdf"
+    if urdf is None and bundled.is_file():
+        urdf = bundled
 
     return Settings(
         robot=str(raw.get("robot") or "g1d"),
@@ -53,7 +61,7 @@ def load_settings(path: Optional[Path] = None) -> Settings:
         unitree_sdk_path=_as_path(sdk),
         command_topic=str(raw.get("command_topic") or "rt/lowcmd"),
         state_topic=str(raw.get("state_topic") or "rt/lowstate"),
-        urdf=_as_path(raw.get("urdf")),
+        urdf=urdf,
         base_link=str(raw.get("base_link") or "torso_link"),
         dds_domain=int(raw.get("dds_domain") or 0),
         lowstate_timeout_s=float(raw.get("lowstate_timeout_s") or 5.0),

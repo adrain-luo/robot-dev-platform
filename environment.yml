@@ -1,0 +1,13 @@
+name: abyss
+# conda env create -f environment.yml
+# 已建好后：conda activate abyss
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - numpy==2.2.6
+      - cyclonedds==0.10.2
+variables:
+  PYTHONNOUSERSITE: "1"

@@ -3,4 +3,4 @@ __pycache__/
 *.pyo
 .DS_Store
 *.egg-info/
-arm_control/data/
+arm_payload_gravity/data/

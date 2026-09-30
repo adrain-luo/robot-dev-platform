@@ -1,4 +1,4 @@
-"""Resolve and prepend Unitree SDK2 Python to sys.path."""
+"""Load unitree_sdk2py from vendored tree, then the active env."""
 
 from __future__ import annotations
 
@@ -7,40 +7,56 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+_VENDOR = Path(__file__).resolve().parents[2] / "third_party" / "unitree_sdk2_python"
+
+
+def _root_from_import() -> Optional[Path]:
+    try:
+        import unitree_sdk2py
+    except ImportError:
+        return None
+    return Path(unitree_sdk2py.__file__).resolve().parent.parent
+
+
+def _use_tree(root: Path) -> Path:
+    resolved = root.expanduser().resolve()
+    path = str(resolved)
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    return resolved
+
 
 def ensure_sdk(sdk_path: Optional[Path] = None) -> Path:
-    candidates = []
+    """Prefer 本仓库 third_party；仅在显式给出路径时覆盖。"""
+    trees = []
     if sdk_path is not None:
-        candidates.append(Path(sdk_path).expanduser())
+        trees.append(Path(sdk_path))
     env = os.environ.get("UNITREE_SDK2PY_PATH")
     if env:
-        candidates.append(Path(env).expanduser())
-    candidates.extend(
-        [
-            Path("/home/robot/vision_arm_control_coupled_ik_fast_v6_2_20260911/unitree_sdk2_python"),
-            Path("/home/robot/vision_arm_control_coupled_ik_dev_current/unitree_sdk2_python"),
-            Path("/home/robot/vision_arm_control_refactor/unitree_sdk2_python"),
-            Path("/home/robot/unitree_sdk2_python"),
-        ]
-    )
-    for cand in candidates:
+        trees.append(Path(env))
+    trees.append(_VENDOR)
+    for cand in trees:
         if (cand / "unitree_sdk2py" / "__init__.py").is_file():
-            resolved = cand.resolve()
-            path = str(resolved)
-            if path not in sys.path:
-                sys.path.insert(0, path)
-            return resolved
-    tried = ", ".join(str(c) for c in candidates)
+            return _use_tree(cand)
+
+    found = _root_from_import()
+    if found is not None:
+        return found
+
     raise FileNotFoundError(
-        "unitree_sdk2_python not found. Set UNITREE_SDK2PY_PATH or config "
-        f"unitree_sdk_path. Tried: {tried}"
+        "未找到 unitree_sdk2py。仓库应自带 third_party/unitree_sdk2_python；"
+        "也可设置 UNITREE_SDK2PY_PATH。"
     )
 
 
 _DDS_READY = False
 
 
-def init_channel(dds_domain: int = 0, network_interface: Optional[str] = None, sdk_path: Optional[Path] = None) -> None:
+def init_channel(
+    dds_domain: int = 0,
+    network_interface: Optional[str] = None,
+    sdk_path: Optional[Path] = None,
+) -> None:
     """ChannelFactoryInitialize once per process."""
     global _DDS_READY
     ensure_sdk(sdk_path)
