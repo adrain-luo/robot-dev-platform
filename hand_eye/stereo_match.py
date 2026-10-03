@@ -62,6 +62,7 @@ class StereoMatcher:
         gray_l = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
         gray_r = cv2.cvtColor(rect_r, cv2.COLOR_BGR2GRAY)
         disp = self.sgbm.compute(gray_l, gray_r).astype(np.float32) / 16.0
+        disp = smooth_disp(disp)
         points_rect = cv2.reprojectImageTo3D(disp, self.Q)
         bad = ~np.isfinite(points_rect).all(axis=2)
         points_rect = points_rect.copy()
@@ -70,6 +71,16 @@ class StereoMatcher:
         points_m = (self.R1.T @ (points_rect.reshape(-1, 3) / 1000.0).T).T.reshape(points_rect.shape)
         points_m[bad] = np.nan
         return rect_l, disp, points_m
+
+
+def smooth_disp(disp: np.ndarray) -> np.ndarray:
+    """只抹视差里不到 1 个像素的颗粒。更大的深度差，包括桌面和地面，保持原样。"""
+    invalid = disp <= 0
+    filled = disp.copy()
+    filled[invalid] = 0
+    smooth = cv2.bilateralFilter(filled, d=5, sigmaColor=0.6, sigmaSpace=3)
+    smooth[invalid] = 0
+    return smooth
 
 
 def colorize_disp(disp: np.ndarray) -> np.ndarray:
