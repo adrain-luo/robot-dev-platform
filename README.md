@@ -24,4 +24,4 @@ Python 用 conda 环境 `abyss`（`conda activate abyss`）。不要用 `base`�
 | 姿态集、补偿文件 | `arm_payload_gravity/config/` |
 | 测量会话、对比记录 | `arm_payload_gravity/data/` |
 
-`tcp_calib`、`hand_eye` 仍是占位，还没有实现。
+`hand_eye` 是眼在手外求解和同一网页上的采集。标定板在左手，末端 `left_wrist_yaw_link`。内参 yaml 求解时传入。`tcp_calib` 仍是占位。

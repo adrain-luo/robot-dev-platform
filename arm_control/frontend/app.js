@@ -191,7 +191,7 @@ function applyCtrl(ctrl) {
   const allow = !!ctrl.allow_real_motion;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use", "btn-he-run"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
   const mirror = $("btn-poseset-mirror");
@@ -242,6 +242,9 @@ async function poll() {
     if (typeof applyIdentify === "function" && data.identify) {
       try { applyIdentify(data.identify); } catch (e) { flash(String(e), false); }
     }
+    if (data.handeye && typeof applyHeRun === "function") {
+      try { applyHeRun(data.handeye); } catch (e) { flash(String(e), false); }
+    }
     const modeLabel = data.ctrl?.float ? "实测 · 拖拽卸力" : (data.ctrl?.engaged ? "实测 · 已接管" : (data.mode === "real" ? "实测 · 未接管" : "实测 · 只读"));
     if (window.currentSet && window.currentSet.poses) {
       const tips = window.currentSet.poses.map((p) => p.tip_xyz).filter(Boolean);
@@ -272,6 +275,9 @@ document.querySelectorAll(".float").forEach((card) => {
     card.classList.toggle("open");
     if (opening && typeof window.refillSelects === "function") {
       setTimeout(() => window.refillSelects(), 0);
+    }
+    if (opening && card.id === "panel-he" && typeof window.refreshHandeye === "function") {
+      window.refreshHandeye();
     }
   });
 });
@@ -831,6 +837,149 @@ $("val-session").onchange = async () => {
   if (!name) return;
   try { await openVal(name); }
   catch (e) { flash(String(e), false); }
+};
+
+function heForm() {
+  return {
+    session: $("he-session").value,
+    square_size_mm: $("he-square").value,
+    eye: $("he-eye").value,
+    board_size: $("he-board").value.trim() || "11x8",
+    camera_host: $("he-host").value.trim(),
+  };
+}
+function renderHe(st) {
+  if (!st) return;
+  const sel = $("he-session");
+  if (sel && document.activeElement !== sel) {
+    writeOptions(sel, (st.sessions || []).length ? "选择采集会话…" : "还没有采集会话",
+      (st.sessions || []).map((s) => {
+        const side = s.arm === "left" ? "左" : "右";
+        const ps = s.poseset ? ` · ${s.poseset}` : "";
+        return { value: s.name, label: `${s.name} · ${side} ${s.n}张${ps}` };
+      }),
+      st.session || sel.value);
+  }
+  if ($("he-count") && !st.running) $("he-count").textContent = st.session ? `${st.count || 0}张` : "";
+  const msg = $("he-msg");
+  if (msg && document.activeElement !== $("he-host")) {
+    msg.textContent = st.error || st.camera_error || (st.running ? (st.phase || "") : "");
+  }
+  const sq = $("he-square");
+  if (sq && document.activeElement !== sq && st.square_size_mm != null && sq.value === "") sq.value = st.square_size_mm;
+  if (st.eye && document.activeElement !== $("he-eye")) $("he-eye").value = st.eye;
+  if (st.board_size && document.activeElement !== $("he-board")) $("he-board").value = st.board_size;
+  if (st.camera_host && document.activeElement !== $("he-host") && $("he-host").value === "") $("he-host").value = st.camera_host;
+  const box = $("he-result");
+  if (!box) return;
+  const res = st.result;
+  if (!res) { box.innerHTML = ""; return; }
+  const lines = [];
+  const fit = st.intrinsics_fit;
+  if (fit) {
+    lines.push(`<div class="stat"><em>本次内参 · ${fit.num_pairs} 对</em><strong>左 fx ${Number(fit.left_fx).toFixed(1)} · 右 fx ${Number(fit.right_fx).toFixed(1)}</strong><span class="note">重投影 左 ${Number(fit.left_rms_px).toFixed(3)} / 右 ${Number(fit.right_rms_px).toFixed(3)} / 双目 ${Number(fit.stereo_rms_px).toFixed(3)} px · 基线 ${Number(fit.baseline_mm).toFixed(1)} mm</span></div>`);
+  }
+  for (const eye of ["left", "right"]) {
+    const r = res[eye];
+    if (!r) continue;
+    const t = r.t_cam2base_m || [];
+    const tr = r.residual_translation_mm || {};
+    lines.push(`<div class="stat"><em>${eye === "left" ? "左目" : "右目"} → ${r.base_link || "torso_link"}</em><strong>${t.map((x) => Number(x).toFixed(4)).join(", ")} m</strong><span class="note">平移残差 均 ${Number(tr.mean).toFixed(2)} / 最大 ${Number(tr.max).toFixed(2)} mm · 内点 ${r.num_inliers}/${r.num_samples}</span></div>`);
+  }
+  if (res.stereo_baseline_mm != null) {
+    lines.push(`<div class="stat"><em>右目相对左目</em><strong>${Number(res.stereo_baseline_mm).toFixed(2)} mm</strong></div>`);
+  }
+  box.innerHTML = lines.join("");
+}
+async function refreshHandeye() {
+  const res = await fetch("/api/handeye", { cache: "no-store" });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "手眼状态失败");
+  renderHe(data);
+  return data;
+}
+window.refreshHandeye = refreshHandeye;
+function applyHeRun(st) {
+  if (!st) return;
+  if (st.running) {
+    const p = st.progress || [0, 0];
+    if ($("he-count")) $("he-count").textContent = `${p[0]}/${p[1]}`;
+    const msg = $("he-msg");
+    if (msg) msg.textContent = st.phase || "";
+  }
+  if (window.heWasRunning && !st.running) {
+    refreshHandeye().catch((e) => flash(String(e), false));
+  }
+  window.heWasRunning = !!st.running;
+}
+window.applyHeRun = applyHeRun;
+let hePreviewBusy = false;
+setInterval(async () => {
+  const card = $("panel-he");
+  if (!card || !card.classList.contains("open") || hePreviewBusy) return;
+  const img = $("he-preview");
+  if (!img) return;
+  hePreviewBusy = true;
+  try {
+    const res = await fetch("/api/handeye/preview.jpg?t=" + Date.now(), { cache: "no-store" });
+    const msg = $("he-msg");
+    if (!res.ok) {
+      let text = "左目预览没有画面";
+      try { const data = await res.json(); if (data.error) text = data.error; } catch (e) { /* 非 JSON */ }
+      if (msg) msg.textContent = text;
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    if (img.dataset.obj) URL.revokeObjectURL(img.dataset.obj);
+    img.dataset.obj = url;
+    img.src = url;
+    if (msg && msg.textContent && !window.heWasRunning) msg.textContent = "";
+  } catch (e) {
+    const msg = $("he-msg");
+    if (msg) msg.textContent = String(e);
+  } finally {
+    hePreviewBusy = false;
+  }
+}, 700);
+$("btn-he-run").onclick = async () => {
+  if (!posesetName()) { flash("先在姿态集里选一套已经记好的点", false); return; }
+  const arm = window.currentSet && window.currentSet.arm;
+  const side = arm === "left" ? "左臂" : arm === "right" ? "右臂" : "这一套";
+  if (!confirm(`将按当前限速走完「${posesetName()}」（${side}），每个点停稳后存图。扶住、守急停。继续？`)) return;
+  try {
+    const d = await post("/api/handeye/run", { name: posesetName(), ...heForm() });
+    applyHeRun(d);
+    flash("开始按姿态集采集", true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-he-stop").onclick = async () => {
+  try { await post("/api/handeye/stop", {}); flash("已请求停止", true); }
+  catch (e) { flash(String(e), false); }
+};
+$("btn-he-capture").onclick = async () => {
+  try {
+    const d = await post("/api/handeye/capture", heForm());
+    renderHe(d);
+    flash(`已存 ${d.session} / ${String(d.index).padStart(4, "0")}`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("he-session").onchange = async () => {
+  const name = $("he-session").value;
+  if (!name) return;
+  try { renderHe(await post("/api/handeye/session", { name })); }
+  catch (e) { flash(String(e), false); }
+};
+$("btn-he-solve").onclick = async () => {
+  const f = heForm();
+  if (!f.session) { flash("先选一次采集会话", false); return; }
+  if (!f.square_size_mm) { flash("填棋盘格子边长（毫米）", false); return; }
+  try {
+    flash("先估内参，再做手眼…", true);
+    const d = await post("/api/handeye/solve", f);
+    renderHe(d);
+    flash("求解完成，结果写在该会话目录", true);
+  } catch (e) { flash(String(e), false); }
 };
 } catch (e) {
   const m = document.getElementById("msg");

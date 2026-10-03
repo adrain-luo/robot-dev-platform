@@ -2,3 +2,7 @@
 # SDK 在 third_party/unitree_sdk2_python，不要 pip 装 PyPI 的 unitree_sdk2（缺 b2）。
 numpy==2.2.6
 cyclonedds==0.10.2
+opencv-python-headless==4.11.0.86
+pyzmq==27.0.1
+PyYAML==6.0.2
+# 头目预览还要 logging_mp（teleimager 的依赖）。本机用 logging_mp-0.1.6 的 whl 装进 abyss。

@@ -193,6 +193,9 @@ class PayloadAPI:
                 if self._id["running"]:
                     raise RuntimeError("已有任务在跑")
             d = posesets.load_set(str(body["name"]))
+            he = getattr(self.app, "handeye", None)
+            if he is not None and he._running:
+                raise RuntimeError("手眼采集正在走点")
 
             def done(r: Dict[str, Any]) -> None:
                 with self._id_lock:
@@ -268,6 +271,9 @@ class PayloadAPI:
                 if self._id["running"]:
                     raise RuntimeError("已有任务在跑")
             d = posesets.load_set(str(body["name"]))
+            he = getattr(self.app, "handeye", None)
+            if he is not None and he._running:
+                raise RuntimeError("手眼采集正在走点")
             modes = list(body.get("modes") or ["baseline", "payload"])
             pname = body.get("payload")
             payload = None

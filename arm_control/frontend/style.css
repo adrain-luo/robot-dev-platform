@@ -160,6 +160,11 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
 }
 .float-toggle::after { content: "▸"; color: var(--muted); font-size: 11px; }
 .float.open .float-toggle::after { content: "▾"; }
+.float-toggle:hover,
+.float-toggle:active {
+  background: rgba(28, 25, 21, .06);
+  transform: none;
+}
 .float.open { max-height: min(58vh, 520px); display: flex; flex-direction: column; }
 .float-body {
   display: none;
@@ -232,6 +237,13 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
   font: 11px/1.4 ui-monospace, monospace; white-space: pre-wrap;
 }
 #id-log:empty { display: none; }
+.he-view {
+  display: block; width: 100%; max-height: 180px; object-fit: contain;
+  border-radius: 10px; background: #1c1915; margin-bottom: 8px;
+}
+#panel-he.open .float-body { overflow: auto; }
+#he-result { margin-top: 8px; }
+#he-result .stat { margin-bottom: 6px; }
 
 @media (max-width: 820px) {
   .floats { left: 14px; width: auto; top: auto; bottom: 168px; max-height: 42vh; }

@@ -23,10 +23,13 @@ from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
 PAYLOAD_ROOT = HERE.parent / "arm_payload_gravity"
+HAND_EYE_ROOT = HERE.parent / "hand_eye"
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 if str(PAYLOAD_ROOT) not in sys.path:
     sys.path.insert(0, str(PAYLOAD_ROOT))
+if str(HAND_EYE_ROOT) not in sys.path:
+    sys.path.insert(0, str(HAND_EYE_ROOT))
 
 from config_loader import load_settings
 from controller.arm_loop import ArmLoop, PermissionErrorMotion
@@ -37,6 +40,8 @@ import identify as iden
 import poses as posesets
 import validate as vali
 from api import PayloadAPI
+import session as he_session
+from service import HandEyeAPI
 
 def _opt(value: str, label: str) -> str:
     return f'<option value="{escape(value, quote=True)}">{escape(label)}</option>'
@@ -81,6 +86,15 @@ def _page_html() -> str:
             side = "左" if item.get("arm") == "left" else "右"
             val_opts.append(_opt(item["name"], f"data/validate/{item['name']}.json · {side} {item.get('poseset') or ''}"))
         html = _inject_options(html, "val-session", val_opts)
+        he_opts = [_opt("", "选择采集会话…")]
+        sessions = he_session.list_sessions()
+        if not sessions:
+            he_opts = [_opt("", "还没有采集会话")]
+        for item in sessions:
+            side = "左" if item.get("arm") == "left" else "右"
+            ps = f" · {item['poseset']}" if item.get("poseset") else ""
+            he_opts.append(_opt(item["name"], f"{item['name']} · {side} {item.get('n', 0)}张{ps}"))
+        html = _inject_options(html, "he-session", he_opts)
     except Exception:
         traceback.print_exc()
     return html
@@ -98,6 +112,7 @@ class App:
         self.loop: Optional[ArmLoop] = None
         self._lock = threading.Lock()
         self.payload = PayloadAPI(self)
+        self.handeye = HandEyeAPI(self)
 
     def reader(self) -> LowStateReader:
         with self._lock:
@@ -223,6 +238,7 @@ class App:
             "command_topic": self.settings.command_topic,
             "ctrl": self.ctrl_status(),
             "identify": self.payload.identify_status(),
+            "handeye": self.handeye.status(),
             "arms": arms,
         }
 
@@ -296,6 +312,22 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/scene":
                 _json(self, 200, APP.both_scenes())
                 return
+            if path == "/api/handeye/preview.jpg":
+                jpeg, err = APP.handeye.preview_jpeg()
+                if not jpeg:
+                    _json(self, 503, {"ok": False, "error": err or "没有画面"})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", str(len(jpeg)))
+                self.end_headers()
+                self.wfile.write(jpeg)
+                return
+            got = APP.handeye.handle_get(path, parsed.query)
+            if got is not None:
+                _json(self, 200, got)
+                return
             got = APP.payload.handle_get(path, parsed.query)
             if got is not None:
                 _json(self, 200, got)
@@ -310,7 +342,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = _read_json(self)
-            posted = APP.payload.handle_post(path, body)
+            posted = APP.handeye.handle_post(path, body)
+            if posted is None:
+                posted = APP.payload.handle_post(path, body)
             if posted is not None:
                 _json(self, 200, posted)
                 return
@@ -380,6 +414,8 @@ def main() -> int:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\n[arm_control] stopped")
+        if APP.handeye:
+            APP.handeye.close()
         if APP.loop:
             APP.loop.shutdown()
     return 0
