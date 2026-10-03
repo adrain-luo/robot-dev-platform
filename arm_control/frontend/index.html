@@ -32,6 +32,21 @@
   </div>
 </header>
 
+<aside class="floats floats-left">
+  <article class="float" id="panel-cam">
+    <button type="button" class="float-toggle">双目</button>
+    <div class="float-body">
+      <img id="cam-preview" alt="左右目" class="he-view">
+      <div class="cmds">
+        <button id="btn-cam-match" type="button">匹配点云</button>
+      </div>
+      <img id="cam-disp" alt="视差" class="he-view">
+      <div id="cam-match" class="note"></div>
+      <div id="cam-msg" class="note"></div>
+    </div>
+  </article>
+</aside>
+
 <nav class="dock" id="ctrl-group">
   <label class="field slim">视图
     <select id="arm-select">
@@ -199,8 +214,7 @@
   <article class="float" id="panel-he">
     <button type="button" class="float-toggle">手眼标定 <span id="he-count" class="aside"></span></button>
     <div class="float-body">
-      <p class="note">用姿态集里已经记好的点。点采集后按限速自己走完，每点停稳存图。求解先用本次左右图估计内参，再算相机到躯干的外参。左右对称用姿态集的「镜像到对侧」。</p>
-      <img id="he-preview" alt="左目预览" class="he-view">
+      <p class="note">用姿态集里已经记好的点。点采集后按限速自己走完，每点停稳存图。求解先用本次左右图估计内参，再算相机到躯干的外参。左右对称用姿态集的「镜像到对侧」。画面在左侧「双目」卡片。</p>
       <div id="he-msg" class="note"></div>
       <div class="fields">
         <label class="field grow">采集会话

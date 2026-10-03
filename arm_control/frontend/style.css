@@ -135,6 +135,12 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
   pointer-events: none;
   padding-bottom: 8px;
 }
+.floats-left {
+  top: 72px; left: 14px; right: auto; bottom: auto;
+  width: min(280px, calc(100vw - 28px));
+}
+.floats-left .float.open { max-height: min(72vh, 680px); }
+.floats-left .he-view { max-height: none; }
 .float {
   pointer-events: auto;
   border-radius: 16px;
@@ -242,10 +248,12 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
   border-radius: 10px; background: #1c1915; margin-bottom: 8px;
 }
 #panel-he.open .float-body { overflow: auto; }
+#panel-cam.open .float-body { overflow: auto; max-height: min(64vh, 620px); }
 #he-result { margin-top: 8px; }
 #he-result .stat { margin-bottom: 6px; }
 
 @media (max-width: 820px) {
   .floats { left: 14px; width: auto; top: auto; bottom: 168px; max-height: 42vh; }
+  .floats-left { top: 72px; bottom: auto; left: 14px; width: min(220px, 46vw); max-height: 36vh; }
   .legend { display: none; }
 }

@@ -17,6 +17,10 @@ function skipMesh(filename) {
   return /dex1|hand_/i.test(name);
 }
 
+function skipLink(name) {
+  return /dex1|hand_/i.test(name || "");
+}
+
 const View = {
   ready: false,
   links: new Map(),
@@ -98,6 +102,7 @@ const View = {
       const group = new THREE.Group();
       group.name = link.getAttribute("name");
       links.set(group.name, group);
+      if (skipLink(group.name)) continue;
       for (const visual of link.querySelectorAll(":scope > visual")) {
         pending.push(this._visual(visual, xml, group, loader, geometries));
       }
@@ -168,6 +173,29 @@ const View = {
     this.controls.target.set(0, 0, (this.height || 1) * 0.35);
     this.controls.update();
     this.render();
+  },
+  setCloud(xyz, rgb) {
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso || !xyz || xyz.length < 3) return false;
+    if (this.cloud) {
+      torso.remove(this.cloud);
+      this.cloud.geometry.dispose();
+      this.cloud.material.dispose();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(xyz, 3));
+    const colors = new Float32Array(rgb.length);
+    for (let i = 0; i < rgb.length; i++) colors[i] = rgb[i] / 255;
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    const mat = new THREE.PointsMaterial({
+      size: 2.2,
+      vertexColors: true,
+      sizeAttenuation: false,
+    });
+    this.cloud = new THREE.Points(geo, mat);
+    torso.add(this.cloud);
+    this.render();
+    return true;
   },
   render() {
     if (this.renderer && this.scene3 && this.camera) this.renderer.render(this.scene3, this.camera);

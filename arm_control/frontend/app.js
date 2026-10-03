@@ -882,18 +882,18 @@ function applyHeRun(st) {
   window.heWasRunning = !!st.running;
 }
 window.applyHeRun = applyHeRun;
-let hePreviewBusy = false;
+let camPreviewBusy = false;
 setInterval(async () => {
-  const card = $("panel-he");
-  if (!card || !card.classList.contains("open") || hePreviewBusy) return;
-  const img = $("he-preview");
+  const card = $("panel-cam");
+  if (!card || !card.classList.contains("open") || camPreviewBusy) return;
+  const img = $("cam-preview");
   if (!img) return;
-  hePreviewBusy = true;
+  camPreviewBusy = true;
   try {
     const res = await fetch("/api/handeye/preview.jpg?t=" + Date.now(), { cache: "no-store" });
-    const msg = $("he-msg");
+    const msg = $("cam-msg");
     if (!res.ok) {
-      let text = "左目预览没有画面";
+      let text = "双目没有画面";
       try { const data = await res.json(); if (data.error) text = data.error; } catch (e) { /* 非 JSON */ }
       if (msg) msg.textContent = text;
       return;
@@ -903,14 +903,31 @@ setInterval(async () => {
     if (img.dataset.obj) URL.revokeObjectURL(img.dataset.obj);
     img.dataset.obj = url;
     img.src = url;
-    if (msg && msg.textContent && !window.heWasRunning) msg.textContent = "";
+    if (msg) msg.textContent = "";
   } catch (e) {
-    const msg = $("he-msg");
+    const msg = $("cam-msg");
     if (msg) msg.textContent = String(e);
   } finally {
-    hePreviewBusy = false;
+    camPreviewBusy = false;
   }
 }, 700);
+$("btn-cam-match").onclick = async () => {
+  const msg = $("cam-match");
+  if (msg) msg.textContent = "正在匹配…";
+  try {
+    const d = await post("/api/handeye/match", {});
+    const img = $("cam-disp");
+    if (img && d.disparity_jpeg) img.src = "data:image/jpeg;base64," + d.disparity_jpeg;
+    const drawn = d.cloud && window.RobotView && window.RobotView.setCloud(d.cloud.xyz, d.cloud.rgb);
+    const dep = d.depth_m || {};
+    if (msg) {
+      msg.textContent = `有效 ${d.valid} 点，画面上 ${d.saved} 点。深度中位 ${Number(dep.median).toFixed(2)} m。`
+        + (drawn ? " 已画到中央模型上。" : " 三维画面还没准备好。");
+    }
+  } catch (e) {
+    if (msg) msg.textContent = String(e);
+  }
+};
 $("btn-he-run").onclick = async () => {
   if (!posesetName()) { flash("先在姿态集里选一套已经记好的点", false); return; }
   const arm = window.currentSet && window.currentSet.arm;

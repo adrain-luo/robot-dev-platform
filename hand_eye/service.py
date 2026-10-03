@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -12,6 +13,7 @@ import numpy as np
 
 import session as he_session
 import results as he_results
+from stereo_match import StereoMatcher, colorize_disp, write_ply
 from camera import HeadCamera
 from capture_task import CaptureTask
 from controller.arm_loop import PermissionErrorMotion
@@ -58,6 +60,8 @@ class HandEyeAPI:
         self._lock = threading.Lock()
         self._cam: Optional[HeadCamera] = None
         self._cam_key = ""
+        self._matcher: Optional[StereoMatcher] = None
+        self._matcher_key = ""
         self._task: Optional[CaptureTask] = None
         self._running = False
 
@@ -126,6 +130,8 @@ class HandEyeAPI:
             return self._load_named(body)
         if path == "/api/handeye/delete":
             return self._delete_named(body)
+        if path == "/api/handeye/match":
+            return self._match(body)
         return None
 
     def preview_jpeg(self) -> Tuple[Optional[bytes], str]:
@@ -134,16 +140,99 @@ class HandEyeAPI:
         pair = cam.grab_pair(2.0)
         if pair is None:
             return None, cam.last_error or "没有画面"
-        left, _right = pair
+        left, right = pair
         try:
             board = parse_board_size(str(cfg.get("board_size") or "11x8"))
         except ValueError as exc:
             return None, str(exc)
-        _found, vis = detect_corners(left, board, draw=True)
+        _lf, left_vis = detect_corners(left, board, draw=True)
+        _rf, right_vis = detect_corners(right, board, draw=True)
+        vis = _stack_eyes(left_vis, right_vis)
         ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         if not ok:
             return None, "编码预览失败"
         return buf.tobytes(), ""
+
+    def _match(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        import base64
+        cfg = load_config()
+        yaml_path = self._calib_yaml(cfg)
+        matcher = self._matcher_for(yaml_path)
+        cam = self._camera(cfg)
+        pair = cam.grab_pair(2.0)
+        if pair is None:
+            return {"ok": False, "error": cam.last_error or "没有画面"}
+        rect_l, disp, points_m = matcher.match(pair[0], pair[1])
+        valid = np.isfinite(points_m).all(axis=2) & (disp > 0.5)
+        z = points_m[:, :, 2]
+        valid &= (z > 0.25) & (z < 2.0)
+        n_valid = int(valid.sum())
+        if n_valid < 50:
+            return {"ok": False, "error": f"有效点只有 {n_valid}，匹配没有对上"}
+        zz = z[valid]
+        pts = points_m[valid]
+        cols = np.ascontiguousarray(rect_l[valid][:, ::-1])
+        T = self._left_cam_to_torso(cfg)
+        if T is None:
+            return {"ok": False, "error": "没有左目到躯干的外参。先调用已保存的手眼结果，点云才能画到模型上"}
+        cloud_dir = he_session.DATA_DIR / "clouds"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ply = cloud_dir / f"{stamp}_cam.ply"
+        n_ply = write_ply(ply, pts, cols[:, ::-1])
+        homo = np.concatenate([pts, np.ones((pts.shape[0], 1))], axis=1)
+        pts_t = (T @ homo.T).T[:, :3]
+        torso_ply = cloud_dir / f"{stamp}_torso.ply"
+        write_ply(torso_ply, pts_t, cols[:, ::-1])
+        cloud = {
+            "xyz": np.round(pts_t, 4).reshape(-1).tolist(),
+            "rgb": cols.reshape(-1).astype(int).tolist(),
+        }
+        vis = colorize_disp(disp)
+        ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        if not ok:
+            return {"ok": False, "error": "视差图编码失败"}
+        return {
+            "ok": True,
+            "valid": n_valid,
+            "saved": n_ply,
+            "depth_m": {"median": float(np.median(zz)), "near": float(zz.min()), "far": float(np.percentile(zz, 95))},
+            "ply_cam": str(ply),
+            "ply_torso": None if torso_ply is None else str(torso_ply),
+            "cloud": cloud,
+            "disparity_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
+        }
+
+    def _calib_yaml(self, cfg: Dict[str, Any]) -> Path:
+        name = str(cfg.get("active_result") or "")
+        if name:
+            p = he_results.RESULTS_DIR / f"{name}.yaml"
+            if p.is_file():
+                return p
+        intr = str(cfg.get("intrinsics") or "")
+        if intr and Path(intr).is_file():
+            return Path(intr)
+        raise FileNotFoundError("先在手眼卡片里调用一组已保存的标定")
+
+    def _matcher_for(self, yaml_path: Path) -> StereoMatcher:
+        key = str(yaml_path.resolve())
+        if self._matcher is None or self._matcher_key != key:
+            self._matcher = StereoMatcher(yaml_path)
+            self._matcher_key = key
+        return self._matcher
+
+    def _left_cam_to_torso(self, cfg: Dict[str, Any]) -> Optional[np.ndarray]:
+        name = str(cfg.get("active_result") or "")
+        if not name:
+            return None
+        try:
+            doc = he_results.load_saved(name)
+        except (OSError, FileNotFoundError, ValueError):
+            return None
+        left = (doc.get("result") or {}).get("left") or {}
+        T = left.get("T_cam2base")
+        if not T:
+            return None
+        return np.asarray(T, dtype=float)
 
     def close(self) -> None:
         if self._cam is not None:
@@ -385,3 +474,16 @@ class HandEyeAPI:
     @staticmethod
     def _public(cfg: Dict[str, Any]) -> Dict[str, Any]:
         return {"session": cfg.get("session") or "", "sessions": he_session.list_sessions()}
+
+
+def _stack_eyes(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    def mark(img: np.ndarray, text: str) -> np.ndarray:
+        out = img.copy()
+        cv2.putText(out, text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(out, text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+        return out
+
+    a, b = mark(left, "L"), mark(right, "R")
+    if b.shape[1] != a.shape[1]:
+        b = cv2.resize(b, (a.shape[1], int(b.shape[0] * a.shape[1] / b.shape[1])))
+    return np.vstack([a, b])
