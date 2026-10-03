@@ -41,6 +41,7 @@ import poses as posesets
 import validate as vali
 from api import PayloadAPI
 import session as he_session
+import results as he_results
 from service import HandEyeAPI
 
 def _opt(value: str, label: str) -> str:
@@ -95,6 +96,12 @@ def _page_html() -> str:
             ps = f" · {item['poseset']}" if item.get("poseset") else ""
             he_opts.append(_opt(item["name"], f"{item['name']} · {side} {item.get('n', 0)}张{ps}"))
         html = _inject_options(html, "he-session", he_opts)
+        saved = he_results.list_saved()
+        cal_opts = [_opt("", "调用已保存的标定…" if saved else "还没有保存的标定")]
+        for item in saved:
+            base = f"{item['baseline_mm']:.1f} mm" if item.get("baseline_mm") is not None else ""
+            cal_opts.append(_opt(item["name"], f"{item['name']} · {base}".rstrip(" ·")))
+        html = _inject_options(html, "he-calib", cal_opts)
     except Exception:
         traceback.print_exc()
     return html

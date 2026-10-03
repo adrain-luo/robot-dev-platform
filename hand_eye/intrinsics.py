@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -114,7 +115,7 @@ def calibrate_session(
     fs.write("F", F)
     fs.release()
     say(f"[内参] 已写入 {yaml_path}")
-    return {
+    fit = {
         "yaml": str(yaml_path),
         "num_pairs": n,
         "image_size": [int(image_size[0]), int(image_size[1])],
@@ -128,3 +129,7 @@ def calibrate_session(
         "right_fy": float(K2[1, 1]),
         "baseline_mm": baseline_mm,
     }
+    (data_dir / "intrinsics_fit.json").write_text(
+        json.dumps(fit, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return fit

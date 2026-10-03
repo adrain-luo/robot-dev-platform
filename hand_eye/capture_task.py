@@ -9,6 +9,9 @@ import numpy as np
 
 import session as he_session
 
+# 手眼比负载走点更紧：0.003 rad ≈ 0.17°。板子在腕前约 25 cm 时，这项约 0.8 mm。
+HAND_EYE_DRIFT_RAD = 0.003
+
 
 class CaptureTask:
     def __init__(self, loop, camera, poses_cfg: Dict[str, Any], board_size: str,
@@ -18,6 +21,7 @@ class CaptureTask:
         self.poses_cfg = poses_cfg
         self.board_size = board_size
         self.still = dict(still)
+        self.still["still_drift_rad"] = HAND_EYE_DRIFT_RAD
         self.on_done = on_done
         self.stop = threading.Event()
         self.phase = "待命"
@@ -53,13 +57,16 @@ class CaptureTask:
             self.session_name = path.name
             total = len(poses)
             self.progress = [0, total]
-            self._log(f"采集 {self.poses_cfg.get('name')} · {arm} · {total} 点 → {path.name}")
+            self._log(
+                f"采集 {self.poses_cfg.get('name')} · {arm} · {total} 点 → {path.name} · "
+                f"漂移阈 {self.still['still_drift_rad']} rad"
+            )
             for i, pose in enumerate(poses):
                 if self.stop.is_set():
                     raise RuntimeError("已停止")
                 name = pose.get("name") or f"p{i:02d}"
                 self._log(f"{name} 走点")
-                iden.wait_settle(self.loop, pose["q"], self.stop, self.still)
+                settled = iden.wait_settle(self.loop, pose["q"], self.stop, self.still)
                 if self.stop.is_set():
                     raise RuntimeError("已停止")
                 pair = self.camera.grab_pair(3.0)
@@ -72,7 +79,8 @@ class CaptureTask:
                 he_session.save_sample(path, pair[0], pair[1], q, arm, pose_name=str(name))
                 self.saved += 1
                 self.progress = [self.saved, total]
-                self._log(f"{name} 已存 {self.saved}/{total}")
+                extra = "（超时，未压进漂移阈）" if settled.get("timed_out") else ""
+                self._log(f"{name} 已存 {self.saved}/{total}{extra}")
             home = self.poses_cfg.get("home_q")
             if home and not self.stop.is_set():
                 self._log("回 home")

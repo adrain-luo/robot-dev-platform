@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 import session as he_session
+import results as he_results
 from camera import HeadCamera
 from capture_task import CaptureTask
 from controller.arm_loop import PermissionErrorMotion
@@ -92,6 +93,8 @@ class HandEyeAPI:
             "session": (task.session_name if task and task.session_name else name),
             "count": count,
             "sessions": he_session.list_sessions(),
+            "saved": he_results.list_saved(),
+            "active_result": cfg.get("active_result") or "",
             "running": running,
             "phase": phase,
             "progress": progress,
@@ -117,6 +120,12 @@ class HandEyeAPI:
             return self._stop()
         if path == "/api/handeye/solve":
             return self._solve(body)
+        if path == "/api/handeye/save":
+            return self._save_named(body)
+        if path == "/api/handeye/load":
+            return self._load_named(body)
+        if path == "/api/handeye/delete":
+            return self._delete_named(body)
         return None
 
     def preview_jpeg(self) -> Tuple[Optional[bytes], str]:
@@ -333,6 +342,45 @@ class HandEyeAPI:
         stt["result"] = combined
         stt["log"] = log[-16:]
         return stt
+
+    def _save_named(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        cfg = load_config()
+        name = str(body.get("name") or "").strip()
+        session = str(body.get("session") or cfg.get("session") or "")
+        if not session:
+            raise ValueError("先选一次已经求解的采集会话")
+        data_dir = he_session.session_dir(session)
+        doc = he_results.save_named(name, data_dir)
+        cfg["active_result"] = doc["name"]
+        cfg["session"] = session
+        save_config(cfg)
+        stt = self.status()
+        stt["intrinsics_fit"] = doc.get("intrinsics_fit")
+        stt["result"] = doc.get("result")
+        stt["active_result"] = doc["name"]
+        return stt
+
+    def _load_named(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        doc = he_results.load_saved(str(body.get("name") or ""))
+        cfg = load_config()
+        cfg["active_result"] = doc["name"]
+        if doc.get("session"):
+            cfg["session"] = doc["session"]
+        save_config(cfg)
+        stt = self.status()
+        stt["intrinsics_fit"] = doc.get("intrinsics_fit")
+        stt["result"] = doc.get("result")
+        stt["active_result"] = doc["name"]
+        return stt
+
+    def _delete_named(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        name = str(body.get("name") or "")
+        he_results.delete_saved(name)
+        cfg = load_config()
+        if cfg.get("active_result") == name:
+            cfg["active_result"] = ""
+            save_config(cfg)
+        return self.status()
 
     @staticmethod
     def _public(cfg: Dict[str, Any]) -> Dict[str, Any]:
