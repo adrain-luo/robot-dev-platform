@@ -67,17 +67,17 @@ class PayloadAPI:
             }
             sess = self._id["session"]
             task = self._id_task
-        if sess:
+        kind = self._id.get("kind")
+        if sess and kind != "validate":
             sdir = iden.MEASURE_DIR / str(sess)
-            st["session_dir"] = str(sdir)
-            arm = (self.app.loop.arm if self.app.loop else None) or (st.get("solution") or {}).get("arm")
-            if arm:
-                pp = iden.payload_path(arm)
-                st["payload_file"] = str(pp) if pp.exists() else None
-            else:
-                st["payload_file"] = None
+            st["session_dir"] = str(sdir) if sdir.is_dir() else None
         else:
             st["session_dir"] = None
+        arm = (self.app.loop.arm if self.app.loop else None) or (st.get("solution") or {}).get("arm")
+        if arm:
+            pp = iden.payload_path(arm)
+            st["payload_file"] = str(pp) if pp.exists() else None
+        else:
             st["payload_file"] = None
         st["profiles"] = iden.list_profiles()
         st["sessions"] = iden.list_sessions()

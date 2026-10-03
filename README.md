@@ -13,15 +13,15 @@ Python 用 conda 环境 `abyss`（`conda activate abyss`）。不要用 `base`�
 
 ## 边界
 
-只有 `arm_control` 发 DDS（`rt/lowstate` / `rt/lowcmd`）。功能目录不另起进程，由 `arm_control/server.py` 在启动时挂上它们的接口和页面。真机发令需 `--allow-real-motion` 并在网页上接管。
+只有 `arm_control` 发 DDS（`rt/lowstate` / `rt/lowcmd`）。功能目录不另起进程，由 `arm_control/server.py` 挂上它们的接口。页面只有 `arm_control/frontend/` 这一份。真机发令需 `--allow-real-motion` 并在网页上接管。
 
 重力前馈的**施加**留在 `arm_control` 的控制循环里，因为那是发令的一部分。质量、质心怎么辨识出来，以及姿态集、补偿文件、摩擦带、到位对比，都在 `arm_payload_gravity`。它走点、改前馈时调用臂控的控制循环，不自己发令。
 
 | 内容 | 位置 |
 |------|------|
 | 启动 | `cd arm_control && python server.py` |
+| 网页 | `arm_control/frontend/`，只有这一份 |
 | 姿态集、补偿文件 | `arm_payload_gravity/config/` |
 | 测量会话、对比记录 | `arm_payload_gravity/data/` |
-| 负载功能的页面 | `arm_payload_gravity/frontend/`，由臂控网页拼进去 |
 
 `tcp_calib`、`hand_eye` 仍是占位，还没有实现。

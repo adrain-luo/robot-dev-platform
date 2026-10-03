@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 import threading
 import time
 import traceback
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -32,10 +34,59 @@ from dds.lowstate import LowStateReader
 from model.fk_scene import RobotKinematics
 from model.layout import ARMS, get_arm, short_joint_label
 import identify as iden
+import poses as posesets
+import validate as vali
 from api import PayloadAPI
 
+def _opt(value: str, label: str) -> str:
+    return f'<option value="{escape(value, quote=True)}">{escape(label)}</option>'
+
+
+def _inject_options(html: str, select_id: str, options: list) -> str:
+    pattern = rf'(<select\b[^>]*\bid="{re.escape(select_id)}"[^>]*>)\s*(</select>)'
+    inner = "".join(options)
+    new, _ = re.subn(pattern, rf"\1{inner}\2", html, count=1)
+    return new
+
+
+def _page_html() -> str:
+    html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    try:
+        pose_opts = [_opt("", "选择姿态集…")]
+        for item in posesets.list_sets():
+            side = "左" if item.get("arm") == "left" else "右"
+            cond = f" · cond {item['cond']}" if item.get("cond") is not None else ""
+            pose_opts.append(_opt(item["name"], f"{item['name']} · {side} · {item['n']}点{cond}"))
+        html = _inject_options(html, "poseset-select", pose_opts)
+        sess_opts = [_opt("", "选择测量会话再求解…")]
+        sessions = iden.list_sessions()
+        if not sessions:
+            sess_opts = [_opt("", "还没有测量会话（先点测量当前集）")]
+        for item in sessions:
+            side = "左" if item.get("arm") == "left" else "右"
+            bi = "双向" if item.get("bidirectional") else "单向"
+            sess_opts.append(_opt(item["name"], f"{item['name']} · {side} {item.get('poseset') or ''} {item.get('n')}样 {bi}"))
+        html = _inject_options(html, "id-session", sess_opts)
+        profiles = iden.list_profiles()
+        pay_opts = [_opt("", "选择补偿文件…" if profiles else "还没有补偿文件")]
+        for item in profiles:
+            side = "左" if item.get("arm") == "left" else "右"
+            mass = item.get("mass_kg")
+            m = f" {float(mass):.2f}kg" if mass is not None else ""
+            pay_opts.append(_opt(item["name"], f"{item['name']} · {side}{m}"))
+        html = _inject_options(html, "payload-select", pay_opts)
+        vals = vali.list_results()
+        val_opts = [_opt("", "打开已保存的对比…" if vals else "还没有对比记录")]
+        for item in vals:
+            side = "左" if item.get("arm") == "left" else "右"
+            val_opts.append(_opt(item["name"], f"data/validate/{item['name']}.json · {side} {item.get('poseset') or ''}"))
+        html = _inject_options(html, "val-session", val_opts)
+    except Exception:
+        traceback.print_exc()
+    return html
+
+
 FRONTEND = HERE / "frontend"
-PAYLOAD_FRONT = PAYLOAD_ROOT / "frontend"
 
 
 class App:
@@ -223,11 +274,7 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         try:
             if path in ("/", "/index.html"):
-                html = (FRONTEND / "index.html").read_text(encoding="utf-8")
-                panel = PAYLOAD_FRONT / "panels.html"
-                extra = panel.read_text(encoding="utf-8") if panel.is_file() else ""
-                html = html.replace("<!-- payload-panels -->", extra)
-                data = html.encode("utf-8")
+                data = _page_html().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
@@ -240,9 +287,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/static/app.js":
                 _file(self, FRONTEND / "app.js", "application/javascript; charset=utf-8")
-                return
-            if path == "/static/payload.js":
-                _file(self, PAYLOAD_FRONT / "payload.js", "application/javascript; charset=utf-8")
                 return
             if path == "/api/status":
                 q = parse_qs(parsed.query)

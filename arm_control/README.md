@@ -7,7 +7,7 @@ G1D 独立臂控底座。供 `arm_payload_gravity` / `tcp_calib` / `hand_eye` �
 - `dds/` — lowstate 订阅；可运动时 `ArmLoop` 发 `rt/lowcmd`
 - `controller/` — hold、矢量同步限速 `set_target`
 - `model/` — 关节布局 + URDF FK
-- `frontend/` — 3D 骨架 + 接管/走点
+- `frontend/` — 整页：3D、接管、姿态集、辨识、对比
 - `config/` — `g1d.json`
 
 用独立 conda 环境 `abyss`（Python 3.10，不读 `~/.local`）。首次若环境不在：

@@ -6,6 +6,7 @@
 
 - `identify.py` / `poses.py` / `friction.py` / `validate.py` — 辨识、姿态集、摩擦带、对比
 - `api.py` — 这些功能的 HTTP 接口
-- `frontend/` — 右侧悬浮卡片
 - `config/posesets/`、`config/payloads/` — 姿态集和补偿文件
 - `data/measure/`、`data/validate/` — 测量会话和对比记录
+
+页面在 `../arm_control/frontend/`，不在本目录。
