@@ -61,61 +61,13 @@ const V3 = {
     }
   },
   draw() {
-    const c = this.ctx, cv = this.canvas, w = cv.clientWidth, h = cv.clientHeight;
-    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
-    c.clearRect(0, 0, w, h);
-    const g = c.createRadialGradient(w * 0.55, h * 0.42, 30, w * 0.5, h * 0.55, Math.max(w, h) * 0.72);
-    g.addColorStop(0, "#1a2330");
-    g.addColorStop(1, "#0c1016");
-    c.fillStyle = g;
-    c.fillRect(0, 0, w, h);
-    for (let x = -1; x <= 1.001; x += 0.25) {
-      this.line([x, -1, -0.6], [x, 1, -0.6], "#243044");
-      this.line([-1, x, -0.6], [1, x, -0.6], "#243044");
-    }
-    this.line([0, 0, 0], [0.3, 0, 0], "#e5484d", 2);
-    this.line([0, 0, 0], [0, 0.3, 0], "#46a758", 2);
-    this.line([0, 0, 0], [0, 0, 0.3], "#3e63dd", 2);
-    c.fillStyle = "#c5ced8"; c.font = "12px system-ui";
-    const ax = this.project([0.33, 0, 0]); if (ax) c.fillText("X 前", ax[0], ax[1]);
-    const ay = this.project([0, 0.33, 0]); if (ay) c.fillText("Y 左", ay[0], ay[1]);
-    const az = this.project([0, 0, 0.33]); if (az) c.fillText("Z 上", az[0], az[1]);
-    this.line([0, 0, 0.35], [0, 0, -0.5], "#3a3f48", 6);
-    this.line([0, -0.2, 0.3], [0, 0.2, 0.3], "#3a3f48", 6);
-    const sc = this.scene; if (!sc) return;
-    const show = $("arm-select").value;
-    if (show !== "left") this.drawArm(sc.right, "#f4efe6", "右腕");
-    if (show !== "right") this.drawArm(sc.left, "#7dcec4", "左腕");
+    if (window.RobotView && window.RobotView.sync(this.scene)) return;
   },
   init() {
-    this.canvas = $("scene3d"); this.ctx = this.canvas.getContext("2d");
-    const cv = this.canvas;
-    cv.addEventListener("mousedown", (e) => {
-      this.drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey };
-      e.preventDefault();
-    });
-    window.addEventListener("mouseup", () => { this.drag = null; });
-    window.addEventListener("mousemove", (e) => {
-      if (!this.drag) return;
-      const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y;
-      this.drag.x = e.clientX; this.drag.y = e.clientY;
-      if (this.drag.pan) {
-        const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw), k = this.dist * 0.0015;
-        this.target = add3(add3(this.target, scale3([-sy, cy, 0], -dx * k)), [0, 0, dy * k]);
-      } else {
-        this.yaw -= dx * 0.008;
-        this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.008));
-      }
-      this.draw();
-    });
-    cv.addEventListener("wheel", (e) => {
-      this.dist = Math.max(0.4, Math.min(8, this.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
-      this.draw(); e.preventDefault();
-    }, { passive: false });
-    cv.addEventListener("contextmenu", (e) => e.preventDefault());
-    cv.addEventListener("dblclick", () => this.reset());
-    new ResizeObserver(() => this.draw()).observe(cv);
-    this.draw();
+    this.canvas = $("scene3d");
+    const start = () => window.RobotView && window.RobotView.attach(this.canvas);
+    if (window.RobotView) start();
+    else window.addEventListener("robot-view-ready", start, { once: true });
   },
 };
 window.V3 = V3;
@@ -251,7 +203,11 @@ async function poll() {
       const armSc = window.currentSet.arm === "left" ? left?.scene : right?.scene;
       if (armSc) armSc.pose_tips = tips;
     }
-    V3.scene = { right: right?.scene, left: left?.scene, modeLabel };
+    const joints = {};
+    for (const arm of [right, left]) {
+      for (const j of (arm && arm.joints) || []) joints[j.name] = j.q_rad;
+    }
+    V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel };
     V3.draw();
     const view = $("arm-select").value;
     const ctrlArm = data.ctrl?.arm || "right";

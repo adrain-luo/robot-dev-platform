@@ -269,6 +269,16 @@ def _json(handler: BaseHTTPRequestHandler, code: int, payload: Dict[str, Any]) -
     handler.wfile.write(body)
 
 
+def _safe_under(root: Path, name: str) -> Optional[Path]:
+    if not name or name != Path(name).name or ".." in name:
+        return None
+    path = (root / name).resolve()
+    root_r = root.resolve()
+    if path.parent != root_r or not path.is_file():
+        return None
+    return path
+
+
 def _file(handler: BaseHTTPRequestHandler, path: Path, content_type: str) -> None:
     data = path.read_bytes()
     handler.send_response(200)
@@ -310,6 +320,27 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/static/app.js":
                 _file(self, FRONTEND / "app.js", "application/javascript; charset=utf-8")
+                return
+            if path == "/static/viewer.js":
+                _file(self, FRONTEND / "viewer.js", "text/javascript; charset=utf-8")
+                return
+            if path.startswith("/static/vendor/"):
+                name = path.split("/")[-1]
+                vendor = _safe_under(FRONTEND / "vendor", name)
+                if vendor is None:
+                    self.send_error(404)
+                    return
+                _file(self, vendor, "text/javascript; charset=utf-8")
+                return
+            if path == "/urdf/g1_d.urdf":
+                _file(self, HERE / "config" / "g1_d.urdf", "application/xml")
+                return
+            if path.startswith("/urdf/meshes/"):
+                mesh = _safe_under(HERE / "config" / "meshes", path.split("/")[-1])
+                if mesh is None:
+                    self.send_error(404)
+                    return
+                _file(self, mesh, "application/octet-stream")
                 return
             if path == "/api/status":
                 q = parse_qs(parsed.query)
