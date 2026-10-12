@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import html
 import json
+import re
 import threading
+import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -25,6 +28,51 @@ import poses as posesets
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
+# 用户指定 41。这台机器上 41 经常不应答，56 是同一套调试页，连不上时改用它。
+_DEBUG_HOSTS = (
+    "http://192.168.40.41:18081",
+    "http://192.168.40.56:18081",
+)
+
+def _kmat(src: Dict[str, Any]) -> np.ndarray:
+    return np.array(
+        [[float(src["fx"]), 0.0, float(src["cx"])],
+         [0.0, float(src["fy"]), float(src["cy"])],
+         [0.0, 0.0, 1.0]],
+        dtype=float,
+    )
+
+
+def _optical_from_down_deg(T: np.ndarray) -> float:
+    """光轴（相机 +Z）和躯干竖直向下之间的夹角。调试口的 camera_to_vertical_deg 是同一个角。"""
+    z = np.asarray(T, dtype=float)[:3, 2]
+    z = z / np.linalg.norm(z)
+    return float(np.degrees(np.arccos(np.clip(float(np.dot(z, [0.0, 0.0, -1.0])), -1.0, 1.0))))
+
+
+def _T_from_debug_basis(basis: Dict[str, Any], translation: np.ndarray) -> np.ndarray:
+    """调试口的三个轴写在左相机光学系里。躯干是 X 朝前、Y 朝左、Z 朝上。"""
+    x_right = np.asarray(basis["x_right_unit_xyz"], dtype=float)
+    forward = np.asarray(basis["ground_forward_unit_xyz"], dtype=float)
+    down = np.asarray(basis["vertical_down_unit_xyz"], dtype=float)
+    cam = np.column_stack([x_right, forward, down])
+    torso = np.column_stack([
+        np.array([0.0, -1.0, 0.0]),
+        np.array([1.0, 0.0, 0.0]),
+        np.array([0.0, 0.0, -1.0]),
+    ])
+    R = torso @ np.linalg.inv(cam)
+    u, _, vt = np.linalg.svd(R)
+    R = u @ vt
+    if np.linalg.det(R) < 0:
+        u = u.copy()
+        u[:, -1] *= -1
+        R = u @ vt
+    out = np.eye(4)
+    out[:3, :3] = R
+    out[:3, 3] = np.asarray(translation, dtype=float).reshape(3)
+    return out
+
 
 DEFAULTS: Dict[str, Any] = {
     "camera_source": "teleimager",
@@ -62,6 +110,8 @@ class HandEyeAPI:
         self._cam_key = ""
         self._matcher: Optional[StereoMatcher] = None
         self._matcher_key = ""
+        self._debug_matcher: Optional[StereoMatcher] = None
+        self._debug_key = ""
         self._task: Optional[CaptureTask] = None
         self._running = False
 
@@ -156,12 +206,28 @@ class HandEyeAPI:
     def _match(self, body: Dict[str, Any]) -> Dict[str, Any]:
         import base64
         cfg = load_config()
-        yaml_path = self._calib_yaml(cfg)
-        matcher = self._matcher_for(yaml_path)
+        use_debug = str(body.get("source") or "") == "debug"
         cam = self._camera(cfg)
         pair = cam.grab_pair(2.0)
         if pair is None:
             return {"ok": False, "error": cam.last_error or "没有画面"}
+        note = ""
+        hand_T = self._left_cam_to_torso(cfg)
+        if use_debug:
+            try:
+                debug, host = self._fetch_debug_pose(str(body.get("url") or ""))
+                calib = self._debug_calib(debug, hand_T, (pair[0].shape[1], pair[0].shape[0]))
+            except (OSError, ValueError, RuntimeError, KeyError) as exc:
+                return {"ok": False, "error": str(exc)}
+            matcher = calib["matcher"]
+            T = calib["T"]
+            note = calib["note"] + f" 数据来自 {host}。"
+        else:
+            matcher = self._matcher_for(self._calib_yaml(cfg))
+            T = hand_T
+            if T is None:
+                return {"ok": False, "error": "没有左目到躯干的外参。先调用已保存的手眼结果，点云才能画到模型上"}
+            note = f"手眼外参：光轴离竖直 {_optical_from_down_deg(T):.1f}°。"
         rect_l, disp, points_m = matcher.match(pair[0], pair[1])
         valid = np.isfinite(points_m).all(axis=2) & (disp > 0.5)
         z = points_m[:, :, 2]
@@ -172,9 +238,9 @@ class HandEyeAPI:
         zz = z[valid]
         pts = points_m[valid]
         cols = np.ascontiguousarray(rect_l[valid][:, ::-1])
-        T = self._left_cam_to_torso(cfg)
-        if T is None:
-            return {"ok": False, "error": "没有左目到躯干的外参。先调用已保存的手眼结果，点云才能画到模型上"}
+        if use_debug:
+            tint = np.array([255, 120, 20], dtype=np.float32)
+            cols = np.clip(0.35 * cols.astype(np.float32) + 0.65 * tint, 0, 255).astype(np.uint8)
         cloud_dir = he_session.DATA_DIR / "clouds"
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         ply = cloud_dir / f"{stamp}_cam.ply"
@@ -200,6 +266,7 @@ class HandEyeAPI:
             "ply_torso": None if torso_ply is None else str(torso_ply),
             "cloud": cloud,
             "disparity_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
+            "note": note,
         }
 
     def _calib_yaml(self, cfg: Dict[str, Any]) -> Path:
@@ -219,6 +286,76 @@ class HandEyeAPI:
             self._matcher = StereoMatcher(yaml_path)
             self._matcher_key = key
         return self._matcher
+
+    def _fetch_debug_pose(self, preferred: str) -> Tuple[Dict[str, Any], str]:
+        hosts: List[str] = []
+        raw = preferred.strip().rstrip("/")
+        if raw:
+            hosts.append(raw.split("/debug")[0].split("/pose")[0])
+        for host in _DEBUG_HOSTS:
+            if host not in hosts:
+                hosts.append(host)
+        errors: List[str] = []
+        for base in hosts:
+            try:
+                page = urllib.request.urlopen(base + "/debug", timeout=4).read().decode("utf-8", "replace")
+                found = re.search(r'href="(/pose\?[^"]+)"', page)
+                if not found:
+                    errors.append(f"{base} 的调试页没有 /pose")
+                    continue
+                url = base + html.unescape(found.group(1))
+                data = json.loads(urllib.request.urlopen(url, timeout=8).read().decode("utf-8", "replace"))
+                if not isinstance(data, dict):
+                    errors.append(f"{base} 的 /pose 不是对象")
+                    continue
+                return data, base
+            except Exception as exc:
+                errors.append(f"{base} {exc.__class__.__name__}")
+        raise RuntimeError("调试口连不上：" + "；".join(errors))
+
+    def _debug_calib(self, data: Dict[str, Any], hand_T: Optional[np.ndarray], size: Tuple[int, int]) -> Dict[str, Any]:
+        if hand_T is None:
+            raise ValueError("调试口没有相机在躯干里的位置，仍要先调用已保存的手眼结果，用它的平移")
+        left = data.get("intrinsics_assumption") or {}
+        right = data.get("intrinsics_assumption_right") or {}
+        stereo = data.get("stereo") or {}
+        cam = ((data.get("g1d_visualization") or {}).get("camera") or {})
+        basis = cam.get("basis") or {}
+        for eye, src in (("左", left), ("右", right)):
+            if any(src.get(k) is None for k in ("fx", "fy", "cx", "cy")) or not src.get("dist_coeffs"):
+                raise ValueError(f"调试口没有{eye}目内参")
+        baseline = float(stereo.get("baseline_mm") or 0.0)
+        if baseline < 10.0:
+            raise ValueError("调试口没有双目基线")
+        needed = ("x_right_unit_xyz", "ground_forward_unit_xyz", "vertical_down_unit_xyz")
+        if any(k not in basis for k in needed):
+            raise ValueError("调试口没有相机相对躯干的朝向")
+        K1 = _kmat(left)
+        K2 = _kmat(right)
+        # 已保存的双目标定里，右相机在左相机的负 X 方向。调试口只给基线长度。
+        stereo_T = np.array([-baseline, 0.0, 0.0], dtype=float)
+        key = (
+            round(float(left["fx"]), 3), round(float(right["fx"]), 3),
+            round(baseline, 2), int(size[0]), int(size[1]),
+        )
+        if self._debug_matcher is None or self._debug_key != key:
+            self._debug_matcher = StereoMatcher.from_matrices(
+                K1, left["dist_coeffs"], K2, right["dist_coeffs"],
+                np.eye(3), stereo_T, size,
+            )
+            self._debug_key = key
+        T = _T_from_debug_basis(basis, np.asarray(hand_T, float)[:3, 3])
+        ours = _optical_from_down_deg(hand_T)
+        theirs = _optical_from_down_deg(T)
+        stated = cam.get("camera_to_vertical_deg")
+        stated_txt = "" if stated is None else f"，页面写的是 {float(stated):.1f}°"
+        note = (
+            f"调试口内参 fx {float(left['fx']):.1f}/{float(right['fx']):.1f}，基线 {baseline:.2f} mm。"
+            f"光轴离竖直 {theirs:.1f}°{stated_txt}，手眼是 {ours:.1f}°。"
+            "橙色是这套，原色是手眼。平移仍用手眼的，调试口没给相机位置。"
+            "它也没给左右相机之间的旋转，右相机按平行、基线沿负 X。"
+        )
+        return {"matcher": self._debug_matcher, "T": T, "note": note}
 
     def _left_cam_to_torso(self, cfg: Dict[str, Any]) -> Optional[np.ndarray]:
         name = str(cfg.get("active_result") or "")

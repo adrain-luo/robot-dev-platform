@@ -35,7 +35,16 @@ from config_loader import load_settings
 from controller.arm_loop import ArmLoop, PermissionErrorMotion
 from dds.lowstate import LowStateReader
 from model.fk_scene import RobotKinematics
-from model.layout import ARMS, get_arm, short_joint_label
+from model.layout import (
+    ARMS,
+    WAIST_PITCH_JOINT,
+    WAIST_PITCH_MOTOR_INDEX,
+    WAIST_PITCH_OFFSET_RAD,
+    WAIST_YAW_JOINT,
+    WAIST_YAW_MOTOR_INDEX,
+    get_arm,
+    short_joint_label,
+)
 import identify as iden
 import poses as posesets
 import validate as vali
@@ -235,6 +244,15 @@ class App:
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 arms[name] = None
+        waist = {}
+        try:
+            q = self.reader().read_motors((WAIST_YAW_MOTOR_INDEX, WAIST_PITCH_MOTOR_INDEX))
+            waist = {
+                WAIST_YAW_JOINT: q[WAIST_YAW_MOTOR_INDEX],
+                WAIST_PITCH_JOINT: q[WAIST_PITCH_MOTOR_INDEX] + WAIST_PITCH_OFFSET_RAD,
+            }
+        except Exception:
+            waist = {}
         return {
             "ok": err is None,
             "error": err,
@@ -246,6 +264,7 @@ class App:
             "ctrl": self.ctrl_status(),
             "identify": self.payload.identify_status(),
             "handeye": self.handeye.status(),
+            "waist": waist,
             "arms": arms,
         }
 

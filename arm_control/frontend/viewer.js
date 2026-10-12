@@ -58,7 +58,10 @@ const View = {
     );
     this.pay.visible = false;
     this.overlays.add(this.pay);
-    new ResizeObserver(() => this.resize()).observe(canvas);
+    this._resizeTimer = 0;
+    const kick = () => this.resize();
+    new ResizeObserver(kick).observe(canvas.parentElement || canvas);
+    requestAnimationFrame(kick);
     try {
       const robot = await this._load();
       scene.add(robot);
@@ -81,6 +84,7 @@ const View = {
   },
   _line(color) {
     const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3));
     const mat = new THREE.LineBasicMaterial({ color });
     const line = new THREE.LineSegments(geo, mat);
     this.overlays.add(line);
@@ -159,8 +163,14 @@ const View = {
   resize() {
     const cv = this.canvas;
     if (!cv || !this.renderer) return;
-    const w = cv.clientWidth, h = cv.clientHeight;
-    if (!w || !h) return;
+    const parent = cv.parentElement;
+    const w = parent ? parent.clientWidth : cv.clientWidth;
+    const h = parent ? parent.clientHeight : cv.clientHeight;
+    if (!w || !h) {
+      if (this._resizeTimer) cancelAnimationFrame(this._resizeTimer);
+      this._resizeTimer = requestAnimationFrame(() => this.resize());
+      return;
+    }
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -174,13 +184,14 @@ const View = {
     this.controls.update();
     this.render();
   },
-  setCloud(xyz, rgb) {
+  setCloud(xyz, rgb, slot) {
     const torso = this.links.get("torso_link");
     if (!this.ready || !torso || !xyz || xyz.length < 3) return false;
-    if (this.cloud) {
-      torso.remove(this.cloud);
-      this.cloud.geometry.dispose();
-      this.cloud.material.dispose();
+    const key = slot === "compare" ? "cloudCompare" : "cloud";
+    if (this[key]) {
+      torso.remove(this[key]);
+      this[key].geometry.dispose();
+      this[key].material.dispose();
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(xyz, 3));
@@ -188,12 +199,12 @@ const View = {
     for (let i = 0; i < rgb.length; i++) colors[i] = rgb[i] / 255;
     geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     const mat = new THREE.PointsMaterial({
-      size: 2.2,
+      size: slot === "compare" ? 2.6 : 2.2,
       vertexColors: true,
       sizeAttenuation: false,
     });
-    this.cloud = new THREE.Points(geo, mat);
-    torso.add(this.cloud);
+    this[key] = new THREE.Points(geo, mat);
+    torso.add(this[key]);
     this.render();
     return true;
   },
@@ -202,17 +213,27 @@ const View = {
   },
   sync(data) {
     if (!this.ready || !data) return false;
-    for (const [name, mot] of this.motions) {
-      const q = Number(data.joints?.[name] || 0);
-      if (mot.type === "prismatic") mot.node.position.copy(mot.axis).multiplyScalar(q);
-      else if (mot.type === "revolute" || mot.type === "continuous") mot.node.quaternion.setFromAxisAngle(mot.axis, q);
+    try {
+      for (const [name, mot] of this.motions) {
+        const raw = data.joints ? data.joints[name] : undefined;
+        const q = Number.isFinite(raw) ? raw : 0;
+        if (mot.type === "prismatic") mot.node.position.copy(mot.axis).multiplyScalar(q);
+        else if (mot.type === "revolute" || mot.type === "continuous") {
+          if (mot.axis.lengthSq() < 1e-12) continue;
+          mot.node.quaternion.setFromAxisAngle(mot.axis, q);
+        }
+      }
+      this.robot.updateMatrixWorld(true);
+      this._lines(this.cmdLine, data, "cmd_links");
+      this._lines(this.tgtLine, data, "target_links");
+      this._payload(data);
+      this.render();
+      return true;
+    } catch (err) {
+      const note = document.getElementById("msg");
+      if (note) note.textContent = "三维画面刷新失败：" + err.message;
+      return false;
     }
-    this.robot.updateMatrixWorld(true);
-    this._lines(this.cmdLine, data, "cmd_links");
-    this._lines(this.tgtLine, data, "target_links");
-    this._payload(data);
-    this.render();
-    return true;
   },
   _lines(line, data, key) {
     const pts = [];

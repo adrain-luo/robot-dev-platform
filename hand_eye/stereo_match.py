@@ -27,7 +27,21 @@ class StereoMatcher:
             fs.release()
         if self.K1 is None or self.K2 is None or self.R is None or self.T is None:
             raise ValueError(f"{yaml_path} 缺少双目外参 R/T 或内参")
-        size = (width, height)
+        self._prepare((width, height))
+
+    @classmethod
+    def from_matrices(cls, K1, d1, K2, d2, R, T, size: Tuple[int, int]) -> "StereoMatcher":
+        obj = cls.__new__(cls)
+        obj.K1 = np.asarray(K1, dtype=float)
+        obj.d1 = np.asarray(d1, dtype=float).reshape(-1, 1)
+        obj.K2 = np.asarray(K2, dtype=float)
+        obj.d2 = np.asarray(d2, dtype=float).reshape(-1, 1)
+        obj.R = np.asarray(R, dtype=float)
+        obj.T = np.asarray(T, dtype=float).reshape(3, 1)
+        obj._prepare((int(size[0]), int(size[1])))
+        return obj
+
+    def _prepare(self, size: Tuple[int, int]) -> None:
         self.R1, self.R2, self.P1, self.P2, self.Q, _, _ = cv2.stereoRectify(
             self.K1, self.d1, self.K2, self.d2, size, self.R, self.T,
             alpha=0, flags=cv2.CALIB_ZERO_DISPARITY,
