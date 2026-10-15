@@ -255,6 +255,41 @@ const View = {
     this.render();
     return true;
   },
+  setBoardPoints(xyz) {
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso) return false;
+    if (this.boardPoints) {
+      torso.remove(this.boardPoints);
+      this.boardPoints.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+      });
+      this.boardPoints = null;
+    }
+    if (!xyz || xyz.length < 3) {
+      this.render();
+      return true;
+    }
+    const group = new THREE.Group();
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(xyz, 3));
+    group.add(new THREE.Points(geo, new THREE.PointsMaterial({
+      color: 0x38bdf8, size: 7, sizeAttenuation: false,
+    })));
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute("position", new THREE.Float32BufferAttribute(xyz, 3));
+    group.add(new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0x38bdf8 })));
+    const head = new THREE.Mesh(
+      new THREE.SphereGeometry(0.01, 14, 10),
+      new THREE.MeshBasicMaterial({ color: 0x22c55e })
+    );
+    head.position.set(xyz[0], xyz[1], xyz[2]);
+    group.add(head);
+    this.boardPoints = group;
+    torso.add(group);
+    this.render();
+    return true;
+  },
   render() {
     if (this.renderer && this.scene3 && this.camera) this.renderer.render(this.scene3, this.camera);
   },

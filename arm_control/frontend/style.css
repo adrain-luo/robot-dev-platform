@@ -213,6 +213,7 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
 #joints-table .j-q { font: 600 18px/1.15 ui-monospace, monospace; }
 #joints-table td.dq-live { color: var(--warn); font-weight: 700; }
 
+#board-log { max-height: 168px; overflow: auto; white-space: pre-wrap; }
 #pose-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 #pose-chips .chip { display: inline-flex; }
 #pose-chips button { height: 32px; padding: 0 8px; font: 12px ui-monospace, monospace; border-radius: 0; }

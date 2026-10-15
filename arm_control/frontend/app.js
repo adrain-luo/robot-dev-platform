@@ -218,6 +218,7 @@ async function poll() {
     renderWaist(data);
     renderTcp(data.tcp, { left: left && left.scene, right: right && right.scene });
     renderSpatial(data.spatial);
+    renderBoard(data.board);
     V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel };
     V3.draw();
     const view = $("arm-select").value;
@@ -801,6 +802,54 @@ $("btn-pt-del").onclick = async () => {
   if (!name) { flash("先选一个空间点", false); return; }
   if (!confirm(`删除空间点「${name}」？`)) return;
   try { await pointPost("/api/points/delete", { name }); flash("已删除", true); }
+  catch (e) { flash(String(e), false); }
+};
+function renderBoard(board) {
+  const log = $("board-log");
+  if (!log || !board) return;
+  const lines = board.log || [];
+  log.textContent = lines.join("\n") || (board.phase || "");
+  const xyz = board.point_xyz;
+  const key = xyz && xyz.length ? xyz.length + ":" + xyz[0] + ":" + xyz[xyz.length - 1] : "";
+  if (key === window.boardPointKey) return;
+  if (window.RobotView && window.RobotView.setBoardPoints && window.RobotView.setBoardPoints(xyz || null)) {
+    window.boardPointKey = key;
+  }
+}
+async function boardPost(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json();
+  renderBoard(data);
+  if (!data.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+$("btn-board-look").onclick = async () => {
+  try {
+    const d = await boardPost("/api/board/look", {
+      board: $("board-size").value.trim() || "9x6",
+      ideal: $("board-ideal").checked,
+    });
+    flash(`看到 ${d.n} 个角点`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-board-start").onclick = async () => {
+  if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
+  if (!confirm("将按限速逐个触摸棋盘角点。扶住、守急停。继续？")) return;
+  try {
+    await boardPost("/api/board/start", {
+      above_cm: parseFloat($("board-above").value) || 5,
+      down_cm: parseFloat($("board-down").value) || 4,
+      up_cm: parseFloat($("board-up").value) || 4,
+    });
+    flash("开始触摸", true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-board-stop").onclick = async () => {
+  try { await boardPost("/api/board/stop", {}); flash("已停止", true); }
   catch (e) { flash(String(e), false); }
 };
 $("btn-pt-goto").onclick = async () => {

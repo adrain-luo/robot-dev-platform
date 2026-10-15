@@ -153,6 +153,34 @@
     </div>
   </article>
 
+  <article class="float" id="panel-board">
+    <button type="button" class="float-toggle">棋盘触摸</button>
+    <div class="float-body">
+      <p class="note">先看一眼 9×6 内角点，角点会画在中央画面上，绿点是第一下。每个点先到上方 5 cm，垂直下降 4 cm，再垂直抬升 4 cm，然后下一个点。急停会中止。</p>
+      <div class="fields">
+        <label class="field">内角
+          <input id="board-size" value="9x6" maxlength="8">
+        </label>
+        <label class="field">上方 cm
+          <input id="board-above" type="number" min="1" max="15" step="0.5" value="5">
+        </label>
+        <label class="field">下降 cm
+          <input id="board-down" type="number" min="0.5" max="14" step="0.5" value="4">
+        </label>
+        <label class="field">抬升 cm
+          <input id="board-up" type="number" min="0.5" max="14" step="0.5" value="4">
+        </label>
+        <label class="switch"><input id="board-ideal" type="checkbox"><span>理想对齐</span></label>
+      </div>
+      <div class="cmds">
+        <button id="btn-board-look" type="button">看一眼</button>
+        <button id="btn-board-start" class="primary" type="button">开始触摸</button>
+        <button id="btn-board-stop" class="danger" type="button">停止</button>
+      </div>
+      <div id="board-log" class="note"></div>
+    </div>
+  </article>
+
   <article class="float">
     <button type="button" class="float-toggle">关节</button>
     <div class="float-body">

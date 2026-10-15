@@ -49,6 +49,7 @@ import identify as iden
 import poses as posesets
 import validate as vali
 from api import PayloadAPI
+from board_touch import BoardTouch
 from spatial_points import SpatialPoints, list_saved as list_spatial_saved, solve_tcp_ik
 from tcp_calib import TcpSession, list_saved as list_tcp_saved
 import session as he_session
@@ -148,6 +149,7 @@ class App:
         self.payload = PayloadAPI(self)
         self.tcp = TcpSession()
         self.points = SpatialPoints()
+        self.board = BoardTouch(self)
         try:
             self.tcp.restore_active()
             self.points.restore_active()
@@ -292,6 +294,7 @@ class App:
             "waist": waist,
             "tcp": self.tcp.status(),
             "spatial": self.points.status(),
+            "board": self.board.status(),
             "arms": arms,
         }
 
@@ -525,6 +528,26 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/tcp/"):
                 _json(self, 200, APP.tcp_post(path, body))
                 return
+            if path.startswith("/api/board/"):
+                if path == "/api/board/look":
+                    _json(self, 200, APP.board.look(
+                        str(body.get("board") or "9x6"),
+                        bool(body.get("ideal")),
+                    ))
+                elif path == "/api/board/start":
+                    _json(self, 200, APP.board.start(
+                        float(body.get("above_cm") or 5.0) / 100.0,
+                        float(body.get("down_cm") or 4.0) / 100.0,
+                        float(body.get("up_cm") or 4.0) / 100.0,
+                    ))
+                elif path == "/api/board/stop":
+                    APP.board.request_stop()
+                    if APP.loop is not None and APP.loop.status().get("engaged"):
+                        APP.loop.estop_hold()
+                    _json(self, 200, APP.board.status())
+                else:
+                    _json(self, 200, {"ok": False, "error": "没有这个棋盘接口"})
+                return
             if path.startswith("/api/points/"):
                 if path == "/api/points/goto":
                     _json(self, 200, APP.point_goto(body, APP.require_loop()))
@@ -537,6 +560,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/release":
                 loop.release()
             elif path == "/api/hold":
+                APP.board.request_stop()
                 loop.estop_hold()
             elif path == "/api/teach":
                 if bool(body.get("enabled", True)):
