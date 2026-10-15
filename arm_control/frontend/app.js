@@ -143,7 +143,7 @@ function applyCtrl(ctrl) {
   const allow = !!ctrl.allow_real_motion;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use", "btn-he-run"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "btn-waist-fill", "btn-waist-go", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use", "btn-he-run"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
   const mirror = $("btn-poseset-mirror");
@@ -153,13 +153,19 @@ function applyCtrl(ctrl) {
   $("grav-on").checked = ctrl.gravity_ff !== false;
   $("engage-state").textContent = allow
     ? (ctrl.engaged
-        ? `${ctrl.float ? "拖拽中" : "已接管"} · ${ctrl.arm}${ctrl.waist_locked ? " · 腰回零锁" : ""}${
+        ? `${ctrl.float ? "拖拽中" : "已接管"} · ${ctrl.arm}${ctrl.waist_locked ? " · 腰保持" : ""}${
             ctrl.payload_mass_kg != null ? ` · 载 ${Number(ctrl.payload_mass_kg).toFixed(2)} kg${ctrl.payload_name ? "(" + ctrl.payload_name + ")" : ""}` : ""
           }`
         : "未接管")
     : "只读（加 --allow-real-motion 后可接管）";
   document.querySelectorAll(".g-q").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
   $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;
+  const waistGo = $("btn-waist-go");
+  if (waistGo) waistGo.disabled = !allow || !ctrl.engaged || !!ctrl.float;
+  ["waist-yaw", "waist-pitch"].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = !allow || !!ctrl.float;
+  });
   const sp = $("speed");
   if (ctrl.max_speed_rad_s != null && document.activeElement !== sp && !window.speedDirty) {
     const v = Number(ctrl.max_speed_rad_s);
@@ -208,6 +214,8 @@ async function poll() {
       for (const j of (arm && arm.joints) || []) joints[j.name] = j.q_rad;
     }
     Object.assign(joints, data.waist || {});
+    window.lastWaist = data.waist || {};
+    renderWaist(data);
     V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel };
     V3.draw();
     const view = $("arm-select").value;
@@ -618,6 +626,35 @@ $("btn-speed").onclick = async () => {
     window.speedDirty = false;
     flash("已设限速", true);
   } catch (e) { flash(String(e), false); }
+};
+function waistDeg(rad) {
+  return Number.isFinite(rad) ? (rad * 180 / Math.PI).toFixed(2) + "°" : "—";
+}
+function renderWaist(data) {
+  const note = $("waist-now");
+  if (!note) return;
+  const w = data.waist || {};
+  const tgt = (data.ctrl && data.ctrl.waist_target_rad) || null;
+  let text = `实测 旋转 ${waistDeg(w.torso_Joint)} · 俯仰 ${waistDeg(w.Yaw_Joint)}`;
+  if (tgt) text += `　指令 旋转 ${waistDeg(Number(tgt["12"]))} · 俯仰 ${waistDeg(Number(tgt["14"]))}`;
+  note.textContent = text;
+}
+$("btn-waist-fill").onclick = () => {
+  const w = window.lastWaist || {};
+  if (!Number.isFinite(w.torso_Joint) || !Number.isFinite(w.Yaw_Joint)) {
+    flash("还没有腰部读数", false);
+    return;
+  }
+  $("waist-yaw").value = (w.torso_Joint * 180 / Math.PI).toFixed(2);
+  $("waist-pitch").value = (w.Yaw_Joint * 180 / Math.PI).toFixed(2);
+};
+$("btn-waist-go").onclick = async () => {
+  const yaw = parseFloat($("waist-yaw").value);
+  const pitch = parseFloat($("waist-pitch").value);
+  if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) { flash("填旋转和俯仰", false); return; }
+  if (!confirm(`腰将限速转到旋转 ${yaw}°、俯仰 ${pitch}°。扶住、守急停。继续？`)) return;
+  try { await post("/api/waist", { yaw_deg: yaw, pitch_deg: pitch }); flash("腰已设目标", true); }
+  catch (e) { flash(String(e), false); }
 };
 $("btn-goto").onclick = async () => {
   const q = [...document.querySelectorAll(".g-q")].map((el) => parseFloat(el.value));

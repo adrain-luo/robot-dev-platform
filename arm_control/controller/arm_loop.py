@@ -14,10 +14,25 @@ from dds.lowstate import LowStateReader
 from dds.sdk import init_channel
 from model.arm_gravity import ArmGravity
 from model.fk_scene import RobotKinematics
-from model.layout import ArmLayout, WAIST_MOTOR_INDICES, get_arm
+from model.layout import (
+    ArmLayout,
+    WAIST_MOTOR_INDICES,
+    WAIST_PITCH_LIMIT_RAD,
+    WAIST_PITCH_MOTOR_INDEX,
+    WAIST_YAW_LIMIT_RAD,
+    WAIST_YAW_MOTOR_INDEX,
+    get_arm,
+)
 
 TAU_FF_LIMIT = 8.0
 TEACH_KD = 2.0
+
+
+def _clamp_span(value: float, span: tuple) -> float:
+    lo, hi = span
+    if not np.isfinite(value):
+        raise ValueError("腰部角度必须是有限数")
+    return float(min(hi, max(lo, value)))
 
 
 class PermissionErrorMotion(PermissionError):
@@ -162,7 +177,7 @@ class ArmLoop:
             self._desired_q = q.copy()
             self._float = False
             self._waist_cmd = waist_now
-            self._waist_target = {idx: 0.0 for idx in WAIST_MOTOR_INDICES}
+            self._waist_target = dict(waist_now)
             self._engaged = True
 
     def release(self) -> None:
@@ -174,10 +189,25 @@ class ArmLoop:
 
     def estop_hold(self) -> None:
         q = self._clamp(self._measured())
+        waist_now = self._read_waist()
         with self._lock:
             self._float = False
             self._cmd_q = q.copy()
             self._desired_q = q.copy()
+            if self._waist_cmd is not None:
+                self._waist_cmd = waist_now
+                self._waist_target = dict(waist_now)
+
+    def set_waist(self, yaw_rad: Optional[float] = None, pitch_rad: Optional[float] = None) -> None:
+        with self._lock:
+            if not self._engaged or self._waist_target is None:
+                raise PermissionErrorMotion("先接管再动腰")
+            if self._float:
+                raise PermissionErrorMotion("先急停退出拖拽，再动腰")
+            if yaw_rad is not None:
+                self._waist_target[WAIST_YAW_MOTOR_INDEX] = _clamp_span(float(yaw_rad), WAIST_YAW_LIMIT_RAD)
+            if pitch_rad is not None:
+                self._waist_target[WAIST_PITCH_MOTOR_INDEX] = _clamp_span(float(pitch_rad), WAIST_PITCH_LIMIT_RAD)
 
     def enable_teach(self) -> None:
         with self._lock:
@@ -247,6 +277,7 @@ class ArmLoop:
             floating = self._float
             grav_on = self._grav_on
             waist_cmd = dict(self._waist_cmd) if self._waist_cmd else None
+            waist_target = {str(i): float(v) for i, v in self._waist_target.items()} if self._waist_target else None
             cmd = self._cmd_q.tolist()
             desired = self._desired_q.tolist()
             theta = None if self._payload_theta is None else self._payload_theta.tolist()
@@ -261,7 +292,7 @@ class ArmLoop:
             "kp_vec": [float(self.kp_body[i]) for i in self.layout.motor_indices],
             "waist_locked": waist_cmd is not None,
             "waist_hold_rad": waist_cmd,
-            "waist_target_rad": {str(i): 0.0 for i in WAIST_MOTOR_INDICES} if waist_cmd is not None else None,
+            "waist_target_rad": waist_target,
             "arm": self.layout.name,
             "max_speed_rad_s": self.max_speed,
             "cmd_rad": cmd,

@@ -77,6 +77,26 @@
 </nav>
 
 <aside class="floats">
+  <article class="float" id="panel-waist">
+    <button type="button" class="float-toggle">腰</button>
+    <div class="float-body">
+      <p class="note">接管后停在当前角，和手臂共用限速。旋转 ±155°，俯仰 -2.5° 到 135°。俯仰电机目前没有电压，实测可能一直是 0。</p>
+      <div class="fields">
+        <label class="field">旋转 °
+          <input id="waist-yaw" type="number" step="0.5" min="-155" max="155" value="0">
+        </label>
+        <label class="field">俯仰 °
+          <input id="waist-pitch" type="number" step="0.5" min="-2.5" max="135" value="0">
+        </label>
+      </div>
+      <p class="note" id="waist-now">实测 —</p>
+      <div class="cmds">
+        <button id="btn-waist-fill" type="button">填入当前角</button>
+        <button id="btn-waist-go" class="primary" type="button">出发</button>
+      </div>
+    </div>
+  </article>
+
   <article class="float">
     <button type="button" class="float-toggle">关节</button>
     <div class="float-body">

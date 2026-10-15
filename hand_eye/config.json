@@ -2,10 +2,10 @@
   "camera_source": "teleimager",
   "camera_host": "192.168.123.164",
   "teleimager_path": "/home/robot/yx/teleimager_src_copy",
-  "intrinsics": "/home/robot/abyss/project/g1d/hand_eye/data/20261003_173022_left/stereo_calibration.yaml",
+  "intrinsics": "/home/robot/abyss/project/g1d/hand_eye/data/20261015_112525_left/stereo_calibration.yaml",
   "board_size": "11x8",
   "square_size_mm": 15.0,
-  "session": "20261003_173022_left",
+  "session": "20261015_112525_left",
   "eye": "both",
-  "active_result": "左手手眼标定"
+  "active_result": "左手手眼标定10155"
 }

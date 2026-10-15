@@ -39,7 +39,6 @@ from model.layout import (
     ARMS,
     WAIST_PITCH_JOINT,
     WAIST_PITCH_MOTOR_INDEX,
-    WAIST_PITCH_OFFSET_RAD,
     WAIST_YAW_JOINT,
     WAIST_YAW_MOTOR_INDEX,
     get_arm,
@@ -249,7 +248,7 @@ class App:
             q = self.reader().read_motors((WAIST_YAW_MOTOR_INDEX, WAIST_PITCH_MOTOR_INDEX))
             waist = {
                 WAIST_YAW_JOINT: q[WAIST_YAW_MOTOR_INDEX],
-                WAIST_PITCH_JOINT: q[WAIST_PITCH_MOTOR_INDEX] + WAIST_PITCH_OFFSET_RAD,
+                WAIST_PITCH_JOINT: q[WAIST_PITCH_MOTOR_INDEX],
             }
         except Exception:
             waist = {}
@@ -424,6 +423,13 @@ class Handler(BaseHTTPRequestHandler):
                 APP.settings.max_speed_rad_s = loop.max_speed
             elif path == "/api/target":
                 loop.set_target(body["q"])
+            elif path == "/api/waist":
+                yaw = body.get("yaw_deg")
+                pitch = body.get("pitch_deg")
+                loop.set_waist(
+                    None if yaw in (None, "") else math.radians(float(yaw)),
+                    None if pitch in (None, "") else math.radians(float(pitch)),
+                )
             elif path == "/api/control-arm":
                 loop.set_arm(str(body["arm"]))
                 APP.payload.restore(loop)

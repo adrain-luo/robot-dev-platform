@@ -70,11 +70,11 @@ ARMS: Dict[str, ArmLayout] = {"right": RIGHT, "left": LEFT}
 
 WAIST_YAW_JOINT = "torso_Joint"
 WAIST_YAW_MOTOR_INDEX = 12
+WAIST_YAW_LIMIT_RAD = (-2.7053, 2.7053)
 # URDF 里名叫 Yaw_Joint，轴是 Y，实际是前后倾。电机 14 没有母线电压和温度，角度恒为 0。
-# 手眼光轴离躯干竖直 34.3°，调试口相对地面是 47.6°。差 13.3°，绕 +Y 为负，只用于画面。
 WAIST_PITCH_JOINT = "Yaw_Joint"
 WAIST_PITCH_MOTOR_INDEX = 14
-WAIST_PITCH_OFFSET_RAD = -0.2321
+WAIST_PITCH_LIMIT_RAD = (-0.04363, 2.3562)
 # G1 29-DoF 腰组：生产 HAL 在纯臂模式会一起写 12/13/14。13 是腰 roll，这份 URDF 没有对应活动关节。
 WAIST_MOTOR_INDICES = (12, 13, 14)
 BASE_LINK = "torso_link"

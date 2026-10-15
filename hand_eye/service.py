@@ -6,6 +6,7 @@ import html
 import json
 import re
 import threading
+import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -28,9 +29,7 @@ import poses as posesets
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
-# 用户指定 41。这台机器上 41 经常不应答，56 是同一套调试页，连不上时改用它。
 _DEBUG_HOSTS = (
-    "http://192.168.40.41:18081",
     "http://192.168.40.56:18081",
 )
 
@@ -72,6 +71,73 @@ def _T_from_debug_basis(basis: Dict[str, Any], translation: np.ndarray) -> np.nd
     out[:3, :3] = R
     out[:3, 3] = np.asarray(translation, dtype=float).reshape(3)
     return out
+
+
+def _http_body(url: str, timeout: float) -> bytes:
+    """调试口在烟盒没认准时用 HTTP 500 退回，正文里仍有标定。"""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.read()
+
+
+def _http_text(url: str, timeout: float) -> str:
+    return _http_body(url, timeout).decode("utf-8", "replace")
+
+
+def _http_json(url: str, timeout: float) -> Optional[Dict[str, Any]]:
+    try:
+        data = json.loads(_http_text(url, timeout))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _fill_debug_calib(data: Dict[str, Any], page: str) -> Dict[str, Any]:
+    """姿态接口失败时，从调试页正文补上内参、基线和安装角。"""
+    out = dict(data)
+    basis_m = re.search(
+        r'"x_right_unit_xyz":\s*(\[[^\]]+\])\s*,\s*'
+        r'"ground_forward_unit_xyz":\s*(\[[^\]]+\])\s*,\s*'
+        r'"vertical_down_unit_xyz":\s*(\[[^\]]+\])',
+        page,
+    )
+    cam = dict(((out.get("g1d_visualization") or {}).get("camera") or {}))
+    basis = cam.get("basis") if isinstance(cam.get("basis"), dict) else {}
+    if basis_m and any(k not in basis for k in ("x_right_unit_xyz", "ground_forward_unit_xyz", "vertical_down_unit_xyz")):
+        basis = {
+            "x_right_unit_xyz": json.loads(basis_m.group(1)),
+            "ground_forward_unit_xyz": json.loads(basis_m.group(2)),
+            "vertical_down_unit_xyz": json.loads(basis_m.group(3)),
+        }
+        cam["basis"] = basis
+        vis = dict(out.get("g1d_visualization") or {})
+        vis["camera"] = cam
+        out["g1d_visualization"] = vis
+    stereo = dict(out.get("stereo") or {})
+    if not stereo.get("baseline_mm"):
+        base_m = re.search(r'"baseline_mm":\s*([0-9.]+)\s*,\s*"stereo_reprojection_error_px"', page)
+        if base_m:
+            stereo["baseline_mm"] = float(base_m.group(1))
+            out["stereo"] = stereo
+    return out
+
+
+def _debug_calib_ready(data: Dict[str, Any]) -> bool:
+    left = data.get("intrinsics_assumption") or {}
+    right = data.get("intrinsics_assumption_right") or {}
+    if any(left.get(k) is None for k in ("fx", "fy", "cx", "cy")) or not left.get("dist_coeffs"):
+        return False
+    if any(right.get(k) is None for k in ("fx", "fy", "cx", "cy")) or not right.get("dist_coeffs"):
+        return False
+    try:
+        if float((data.get("stereo") or {}).get("baseline_mm") or 0.0) < 10.0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    basis = (((data.get("g1d_visualization") or {}).get("camera") or {}).get("basis") or {})
+    return all(k in basis for k in ("x_right_unit_xyz", "ground_forward_unit_xyz", "vertical_down_unit_xyz"))
 
 
 DEFAULTS: Dict[str, Any] = {
@@ -298,19 +364,25 @@ class HandEyeAPI:
         errors: List[str] = []
         for base in hosts:
             try:
-                page = urllib.request.urlopen(base + "/debug", timeout=4).read().decode("utf-8", "replace")
+                page = _http_text(base + "/debug", 4)
                 found = re.search(r'href="(/pose\?[^"]+)"', page)
-                if not found:
-                    errors.append(f"{base} 的调试页没有 /pose")
-                    continue
-                url = base + html.unescape(found.group(1))
-                data = json.loads(urllib.request.urlopen(url, timeout=8).read().decode("utf-8", "replace"))
-                if not isinstance(data, dict):
-                    errors.append(f"{base} 的 /pose 不是对象")
-                    continue
-                return data, base
+                data: Dict[str, Any] = {}
+                pose_error = ""
+                if found:
+                    url = base + html.unescape(found.group(1))
+                    pose = _http_json(url, 8)
+                    if isinstance(pose, dict):
+                        data = pose
+                        pose_error = str(pose.get("error") or "")
+                data = _fill_debug_calib(data, page)
+                if _debug_calib_ready(data):
+                    if pose_error:
+                        data["_pose_error"] = pose_error
+                    return data, base
+                errors.append(f"{base} {pose_error or '调试页里没有内参、基线或安装角'}")
             except Exception as exc:
-                errors.append(f"{base} {exc.__class__.__name__}")
+                detail = getattr(exc, "reason", None) or exc
+                errors.append(f"{base} {exc.__class__.__name__}: {detail}")
         raise RuntimeError("调试口连不上：" + "；".join(errors))
 
     def _debug_calib(self, data: Dict[str, Any], hand_T: Optional[np.ndarray], size: Tuple[int, int]) -> Dict[str, Any]:
@@ -355,6 +427,9 @@ class HandEyeAPI:
             "橙色是这套，原色是手眼。平移仍用手眼的，调试口没给相机位置。"
             "它也没给左右相机之间的旋转，右相机按平行、基线沿负 X。"
         )
+        pose_error = str(data.get("_pose_error") or data.get("error") or "")
+        if pose_error:
+            note += f" 烟盒姿态接口返回：{pose_error}。标定仍从调试页读出。"
         return {"matcher": self._debug_matcher, "T": T, "note": note}
 
     def _left_cam_to_torso(self, cfg: Dict[str, Any]) -> Optional[np.ndarray]:
