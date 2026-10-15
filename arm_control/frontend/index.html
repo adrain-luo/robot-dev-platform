@@ -97,6 +97,62 @@
     </div>
   </article>
 
+  <article class="float" id="panel-tcp">
+    <button type="button" class="float-toggle">TCP</button>
+    <div class="float-body">
+      <p class="note">拖拽时把末端工作点对准空间里的同一个点，转开腕部，每个姿态记一次，再计算。红点是当前爪尖，跟着腕走。标定得到的固定点要存进空间点，显示为黄点。</p>
+      <p class="note" id="tcp-now">还没有姿态</p>
+      <div class="cmds">
+        <button id="btn-tcp-record" type="button">记录姿态</button>
+        <button id="btn-tcp-undo" type="button">去掉最后</button>
+        <button id="btn-tcp-clear" type="button">清空</button>
+        <button id="btn-tcp-solve" class="primary" type="button">计算</button>
+      </div>
+      <div class="fields">
+        <label class="field grow">已保存
+          <select id="tcp-select"></select>
+        </label>
+        <label class="field grow">命名
+          <input id="tcp-name" placeholder="例如 左手尖对货架" maxlength="48">
+        </label>
+      </div>
+      <label class="field">备注
+        <input id="tcp-note" placeholder="怎么标的，可空" maxlength="80">
+      </label>
+      <div class="cmds">
+        <button id="btn-tcp-save" type="button">保存</button>
+        <button id="btn-tcp-load" type="button">调用</button>
+        <button id="btn-tcp-del" type="button">删除</button>
+      </div>
+    </div>
+  </article>
+
+  <article class="float" id="panel-point">
+    <button type="button" class="float-toggle">空间点</button>
+    <div class="float-body">
+      <p class="note">黄点是选中的空间点。拖开之后先退出拖拽，再让当前 TCP 按限速碰回去，用来核对爪尖准不准。</p>
+      <p class="note" id="pt-now">还没有空间点</p>
+      <div class="fields">
+        <label class="field grow">已保存
+          <select id="pt-select"></select>
+        </label>
+        <label class="field grow">命名
+          <input id="pt-name" placeholder="例如 货架角" maxlength="48">
+        </label>
+      </div>
+      <label class="field">备注
+        <input id="pt-note" placeholder="怎么来的，可空" maxlength="80">
+      </label>
+      <div class="cmds">
+        <button id="btn-pt-fixed" type="button">记下标定固定点</button>
+        <button id="btn-pt-now" type="button">记下当前工作点</button>
+        <button id="btn-pt-load" type="button">调用</button>
+        <button id="btn-pt-del" type="button">删除</button>
+        <button id="btn-pt-goto" class="primary" type="button">让 TCP 碰这个点</button>
+      </div>
+    </div>
+  </article>
+
   <article class="float">
     <button type="button" class="float-toggle">关节</button>
     <div class="float-body">

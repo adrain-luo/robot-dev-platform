@@ -208,6 +208,53 @@ const View = {
     this.render();
     return true;
   },
+  setFixedPoint(xyz) {
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso) return false;
+    if (this.fixedPoint && xyz && xyz.length >= 3) {
+      this.fixedPoint.position.set(xyz[0], xyz[1], xyz[2]);
+      this.render();
+      return true;
+    }
+    if (this.fixedPoint) {
+      torso.remove(this.fixedPoint);
+      this.fixedPoint.geometry.dispose();
+      this.fixedPoint.material.dispose();
+      this.fixedPoint = null;
+    }
+    if (!xyz || xyz.length < 3) {
+      this.render();
+      return true;
+    }
+    const geo = new THREE.SphereGeometry(0.012, 18, 14);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, depthTest: true });
+    this.fixedPoint = new THREE.Mesh(geo, mat);
+    this.fixedPoint.position.set(xyz[0], xyz[1], xyz[2]);
+    torso.add(this.fixedPoint);
+    this.render();
+    return true;
+  },
+  setSpatialPoint(xyz) {
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso) return false;
+    if (this.spatialPoint) {
+      torso.remove(this.spatialPoint);
+      this.spatialPoint.geometry.dispose();
+      this.spatialPoint.material.dispose();
+      this.spatialPoint = null;
+    }
+    if (!xyz || xyz.length < 3) {
+      this.render();
+      return true;
+    }
+    const geo = new THREE.SphereGeometry(0.014, 18, 14);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffc107, depthTest: true });
+    this.spatialPoint = new THREE.Mesh(geo, mat);
+    this.spatialPoint.position.set(xyz[0], xyz[1], xyz[2]);
+    torso.add(this.spatialPoint);
+    this.render();
+    return true;
+  },
   render() {
     if (this.renderer && this.scene3 && this.camera) this.renderer.render(this.scene3, this.camera);
   },

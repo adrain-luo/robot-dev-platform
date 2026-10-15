@@ -216,6 +216,8 @@ async function poll() {
     Object.assign(joints, data.waist || {});
     window.lastWaist = data.waist || {};
     renderWaist(data);
+    renderTcp(data.tcp, { left: left && left.scene, right: right && right.scene });
+    renderSpatial(data.spatial);
     V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel };
     V3.draw();
     const view = $("arm-select").value;
@@ -647,6 +649,176 @@ $("btn-waist-fill").onclick = () => {
   }
   $("waist-yaw").value = (w.torso_Joint * 180 / Math.PI).toFixed(2);
   $("waist-pitch").value = (w.Yaw_Joint * 180 / Math.PI).toFixed(2);
+};
+function tcpOnWrist(tcp, arms) {
+  const offset = tcp && tcp.result && tcp.result.tcp_m;
+  const scene = tcp && tcp.arm === "left" ? arms && arms.left : arms && arms.right;
+  const T = scene && scene.wrist_T;
+  if (!offset || !T) return null;
+  return [0, 1, 2].map((i) => T[i][3] + T[i][0] * offset[0] + T[i][1] * offset[1] + T[i][2] * offset[2]);
+}
+function renderTcp(tcp, arms) {
+  const note = $("tcp-now");
+  if (!note || !tcp) return;
+  const sel = $("tcp-select");
+  if (sel && tcp.saved && document.activeElement !== sel) {
+    writeOptions(sel, tcp.saved.length ? "调用已保存的 TCP…" : "还没有保存的 TCP",
+      tcp.saved.map((s) => {
+        const side = s.arm === "left" ? "左" : s.arm === "right" ? "右" : "";
+        const res = s.residual_max_mm != null ? ` · 残差 ${Number(s.residual_max_mm).toFixed(1)} mm` : "";
+        return { value: s.name, label: `${s.name} · ${side} ${s.n || 0}姿态${res}` };
+      }),
+      tcp.active_name || sel.value);
+  }
+  const side = tcp.arm === "left" ? "左臂" : tcp.arm === "right" ? "右臂" : "";
+  let text = tcp.active_name ? `已调用「${tcp.active_name}」。` : "";
+  text += side ? `${side}已记 ${tcp.n} 个姿态` : "还没有姿态";
+  if (tcp.note) text += `。${tcp.note}`;
+  const r = tcp.result;
+  if (r) {
+    const mm = (arr) => arr.map((v) => Number(v).toFixed(1)).join(", ");
+    const res = r.residual_mm || {};
+    text += `。工作点相对腕 [${mm(r.tcp_mm)}] mm。固定点 [${mm(r.fixed_mm)}] mm。残差平均 ${Number(res.mean).toFixed(1)}、最大 ${Number(res.max).toFixed(1)} mm。`;
+    if (r.warning) text += r.warning;
+  }
+  note.textContent = text;
+  if (!arms) return;
+  const live = tcpOnWrist(tcp, arms);
+  const key = live ? live.map((v) => Number(v).toFixed(4)).join(",") : "";
+  if (key === window.tcpPointKey) return;
+  if (window.RobotView && window.RobotView.setFixedPoint && window.RobotView.setFixedPoint(live || null)) {
+    window.tcpPointKey = key;
+  }
+}
+async function tcpPost(path, body) {
+  const d = await post(path, body || {});
+  renderTcp(d);
+  return d;
+}
+$("btn-tcp-record").onclick = async () => {
+  try {
+    const d = await tcpPost("/api/tcp/record");
+    const side = d.arm === "left" ? "左" : "右";
+    flash(`已记${side}臂第 ${d.n} 个姿态`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-tcp-undo").onclick = async () => {
+  try { await tcpPost("/api/tcp/undo"); } catch (e) { flash(String(e), false); }
+};
+$("btn-tcp-clear").onclick = async () => {
+  try { await tcpPost("/api/tcp/clear"); flash("已清空 TCP 记录", true); }
+  catch (e) { flash(String(e), false); }
+};
+$("btn-tcp-solve").onclick = async () => {
+  try {
+    const d = await tcpPost("/api/tcp/solve");
+    const res = (d.result && d.result.residual_mm) || {};
+    flash(`TCP 已算出，最大残差 ${Number(res.max).toFixed(1)} mm`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-tcp-save").onclick = async () => {
+  const name = $("tcp-name").value.trim() || $("tcp-select").value;
+  if (!name) { flash("填一个名字", false); return; }
+  const exists = [...$("tcp-select").options].some((o) => o.value === name);
+  if (exists && !confirm(`覆盖已保存的「${name}」？`)) return;
+  try {
+    await tcpPost("/api/tcp/save", { name, note: $("tcp-note").value.trim() });
+    $("tcp-name").value = "";
+    flash(`已保存「${name}」`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-tcp-load").onclick = async () => {
+  const name = $("tcp-select").value;
+  if (!name) { flash("先选一条已保存的 TCP", false); return; }
+  try {
+    const d = await tcpPost("/api/tcp/load", { name });
+    if ($("tcp-note") && document.activeElement !== $("tcp-note")) $("tcp-note").value = d.note || "";
+    flash(`已调用「${name}」`, true);
+  } catch (e) { flash(String(e), false); }
+};
+function renderSpatial(pt) {
+  const note = $("pt-now");
+  if (!note || !pt) return;
+  const sel = $("pt-select");
+  if (sel && pt.saved && document.activeElement !== sel) {
+    writeOptions(sel, pt.saved.length ? "选择空间点…" : "还没有空间点",
+      pt.saved.map((s) => {
+        const side = s.arm === "left" ? "左" : s.arm === "right" ? "右" : "";
+        return { value: s.name, label: `${s.name} · ${side} · ${s.tcp_name || ""}`.replace(/ · $/, "") };
+      }),
+      pt.active_name || sel.value);
+  }
+  let text = pt.active_name ? `已选「${pt.active_name}」` : "还没有空间点";
+  if (pt.point_mm) text += ` [${pt.point_mm.map((v) => Number(v).toFixed(1)).join(", ")}] mm`;
+  if (pt.tcp_name) text += ` · TCP ${pt.tcp_name}`;
+  if (pt.note) text += `。${pt.note}`;
+  note.textContent = text;
+  const p = pt.point_m;
+  const key = p ? p.map((v) => Number(v).toFixed(4)).join(",") : "";
+  if (key === window.spatialPointKey) return;
+  if (window.RobotView && window.RobotView.setSpatialPoint && window.RobotView.setSpatialPoint(p || null)) {
+    window.spatialPointKey = key;
+  }
+}
+async function pointPost(path, body) {
+  const d = await post(path, body || {});
+  renderSpatial(d);
+  return d;
+}
+$("btn-pt-fixed").onclick = async () => {
+  const name = $("pt-name").value.trim();
+  if (!name) { flash("先给空间点起个名字", false); return; }
+  const exists = [...$("pt-select").options].some((o) => o.value === name);
+  if (exists && !confirm(`覆盖空间点「${name}」？`)) return;
+  try {
+    await pointPost("/api/points/save-fixed", { name, note: $("pt-note").value.trim() });
+    $("pt-name").value = "";
+    flash(`已记下「${name}」`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-pt-now").onclick = async () => {
+  const name = $("pt-name").value.trim();
+  if (!name) { flash("先给空间点起个名字", false); return; }
+  const exists = [...$("pt-select").options].some((o) => o.value === name);
+  if (exists && !confirm(`覆盖空间点「${name}」？`)) return;
+  try {
+    await pointPost("/api/points/save-now", { name, note: $("pt-note").value.trim() });
+    $("pt-name").value = "";
+    flash(`已记下「${name}」`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-pt-load").onclick = async () => {
+  const name = $("pt-select").value;
+  if (!name) { flash("先选一个空间点", false); return; }
+  try {
+    const d = await pointPost("/api/points/load", { name });
+    if ($("pt-note") && document.activeElement !== $("pt-note")) $("pt-note").value = d.note || "";
+    flash(`已调用「${name}」`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-pt-del").onclick = async () => {
+  const name = $("pt-select").value;
+  if (!name) { flash("先选一个空间点", false); return; }
+  if (!confirm(`删除空间点「${name}」？`)) return;
+  try { await pointPost("/api/points/delete", { name }); flash("已删除", true); }
+  catch (e) { flash(String(e), false); }
+};
+$("btn-pt-goto").onclick = async () => {
+  const name = $("pt-select").value;
+  if (!name) { flash("先选一个空间点", false); return; }
+  if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
+  if (!confirm(`将按限速把 TCP 碰到「${name}」。扶住、守急停。继续？`)) return;
+  try {
+    const d = await pointPost("/api/points/goto", { name });
+    flash(`已出发，规划终点还差 ${Number(d.miss_mm).toFixed(2)} mm`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-tcp-del").onclick = async () => {
+  const name = $("tcp-select").value;
+  if (!name) { flash("先选一条已保存的 TCP", false); return; }
+  if (!confirm(`删除 TCP「${name}」？`)) return;
+  try { await tcpPost("/api/tcp/delete", { name }); flash("已删除", true); }
+  catch (e) { flash(String(e), false); }
 };
 $("btn-waist-go").onclick = async () => {
   const yaw = parseFloat($("waist-yaw").value);

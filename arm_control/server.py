@@ -11,6 +11,7 @@ import argparse
 import json
 import math
 import re
+import numpy as np
 import sys
 import threading
 import time
@@ -48,6 +49,8 @@ import identify as iden
 import poses as posesets
 import validate as vali
 from api import PayloadAPI
+from spatial_points import SpatialPoints, list_saved as list_spatial_saved, solve_tcp_ik
+from tcp_calib import TcpSession, list_saved as list_tcp_saved
 import session as he_session
 import results as he_results
 from service import HandEyeAPI
@@ -110,6 +113,22 @@ def _page_html() -> str:
             base = f"{item['baseline_mm']:.1f} mm" if item.get("baseline_mm") is not None else ""
             cal_opts.append(_opt(item["name"], f"{item['name']} · {base}".rstrip(" ·")))
         html = _inject_options(html, "he-calib", cal_opts)
+        tcp_saved = list_tcp_saved()
+        tcp_opts = [_opt("", "调用已保存的 TCP…" if tcp_saved else "还没有保存的 TCP")]
+        for item in tcp_saved:
+            side = "左" if item.get("arm") == "left" else "右" if item.get("arm") == "right" else ""
+            res = item.get("residual_max_mm")
+            tail = f" · {side} {item.get('n') or 0}姿态" if side else ""
+            if res is not None:
+                tail += f" · 残差 {float(res):.1f} mm"
+            tcp_opts.append(_opt(item["name"], f"{item['name']}{tail}"))
+        html = _inject_options(html, "tcp-select", tcp_opts)
+        pts = list_spatial_saved()
+        pt_opts = [_opt("", "选择空间点…" if pts else "还没有空间点")]
+        for item in pts:
+            side = "左" if item.get("arm") == "left" else "右" if item.get("arm") == "right" else ""
+            pt_opts.append(_opt(item["name"], f"{item['name']} · {side} · {item.get('tcp_name') or ''}".rstrip(" ·")))
+        html = _inject_options(html, "pt-select", pt_opts)
     except Exception:
         traceback.print_exc()
     return html
@@ -127,6 +146,13 @@ class App:
         self.loop: Optional[ArmLoop] = None
         self._lock = threading.Lock()
         self.payload = PayloadAPI(self)
+        self.tcp = TcpSession()
+        self.points = SpatialPoints()
+        try:
+            self.tcp.restore_active()
+            self.points.restore_active()
+        except (OSError, json.JSONDecodeError, ValueError):
+            traceback.print_exc()
         self.handeye = HandEyeAPI(self)
 
     def reader(self) -> LowStateReader:
@@ -264,8 +290,100 @@ class App:
             "identify": self.payload.identify_status(),
             "handeye": self.handeye.status(),
             "waist": waist,
+            "tcp": self.tcp.status(),
+            "spatial": self.points.status(),
             "arms": arms,
         }
+
+    def tcp_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            if path == "/api/tcp/record":
+                arm = self.loop.arm if self.loop is not None else "right"
+                layout = get_arm(arm)
+                st = self.reader().read_arm(layout)
+                scene = self.kin.arm_scene(arm, st.q)
+                T = np.asarray(scene["wrist_T"], dtype=float)
+                status = self.tcp.record(arm, layout.tip_link, st.q, T[:3, :3], T[:3, 3])
+            elif path == "/api/tcp/undo":
+                status = self.tcp.undo()
+            elif path == "/api/tcp/clear":
+                status = self.tcp.clear()
+            elif path == "/api/tcp/solve":
+                status = self.tcp.solve()
+            elif path == "/api/tcp/save":
+                status = self.tcp.save(str(body.get("name") or ""), str(body.get("note") or ""))
+            elif path == "/api/tcp/load":
+                status = self.tcp.load(str(body.get("name") or ""))
+            elif path == "/api/tcp/delete":
+                status = self.tcp.delete(str(body.get("name") or ""))
+            else:
+                return {"ok": False, "error": "没有这个 TCP 接口"}
+            return status
+        except (ValueError, KeyError, FileNotFoundError, OSError) as exc:
+            out = self.tcp.status()
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
+
+    def _active_tcp(self) -> tuple:
+        result = self.tcp.result or {}
+        tcp = result.get("tcp_m")
+        if not self.tcp.arm or tcp is None:
+            raise ValueError("先在 TCP 卡片里调用一个结果")
+        return self.tcp.arm, self.tcp.active_name or self.tcp.tip_link, np.asarray(tcp, dtype=float)
+
+    def point_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            name = str(body.get("name") or "")
+            note = str(body.get("note") or "")
+            if path == "/api/points/save-fixed":
+                arm, tcp_name, tcp = self._active_tcp()
+                fixed = (self.tcp.result or {}).get("fixed_point_m")
+                if fixed is None:
+                    raise ValueError("这个 TCP 没有标定固定点")
+                status = self.points.save(name, arm, tcp_name, tcp, fixed, note)
+            elif path == "/api/points/save-now":
+                arm, tcp_name, tcp = self._active_tcp()
+                st = self.reader().read_arm(get_arm(arm))
+                t, R = self.kin.arms[arm].model.fk(st.q)
+                status = self.points.save(name, arm, tcp_name, tcp, t + R @ tcp, note)
+            elif path == "/api/points/load":
+                status = self.points.load(name)
+            elif path == "/api/points/delete":
+                status = self.points.delete(name)
+            else:
+                return {"ok": False, "error": "没有这个空间点接口"}
+            return status
+        except (ValueError, KeyError, FileNotFoundError, OSError) as exc:
+            out = self.points.status()
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
+
+    def point_goto(self, body: Dict[str, Any], loop: ArmLoop) -> Dict[str, Any]:
+        try:
+            name = str(body.get("name") or self.points.active_name or "")
+            if not name:
+                return {"ok": False, "error": "先选一个空间点"}
+            if not self.points.doc or self.points.active_name != name:
+                self.points.load(name)
+            doc = self.points.doc or {}
+            if loop.arm != doc.get("arm"):
+                side = "左" if doc.get("arm") == "left" else "右"
+                return {"ok": False, "error": f"先把控制臂换成{side}臂"}
+            q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
+            q, miss_mm = solve_tcp_ik(self.kin.arms[loop.arm].model, q0, doc["tcp_m"], doc["point_m"])
+            if miss_mm > 3.0:
+                return {"ok": False, "error": f"从这个姿态到不了该点，TCP 还差 {miss_mm:.1f} mm", "miss_mm": miss_mm}
+            loop.set_target(q)
+            out = self.points.status()
+            out["miss_mm"] = miss_mm
+            return out
+        except (ValueError, KeyError, FileNotFoundError, OSError) as exc:
+            out = self.points.status()
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
 
     def require_loop(self) -> ArmLoop:
         self.reader()
@@ -403,6 +521,15 @@ class Handler(BaseHTTPRequestHandler):
                 posted = APP.payload.handle_post(path, body)
             if posted is not None:
                 _json(self, 200, posted)
+                return
+            if path.startswith("/api/tcp/"):
+                _json(self, 200, APP.tcp_post(path, body))
+                return
+            if path.startswith("/api/points/"):
+                if path == "/api/points/goto":
+                    _json(self, 200, APP.point_goto(body, APP.require_loop()))
+                else:
+                    _json(self, 200, APP.point_post(path, body))
                 return
             loop = APP.require_loop()
             if path == "/api/engage":
