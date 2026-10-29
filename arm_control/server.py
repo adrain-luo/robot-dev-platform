@@ -50,6 +50,7 @@ import poses as posesets
 import validate as vali
 from api import PayloadAPI
 from board_touch import BoardTouch
+from runtime_config import ConfigLockedError, RuntimeConfig
 from spatial_points import SpatialPoints, list_saved as list_spatial_saved, solve_tcp_ik
 from tcp_calib import TcpSession, list_saved as list_tcp_saved
 import session as he_session
@@ -150,6 +151,7 @@ class App:
         self.tcp = TcpSession()
         self.points = SpatialPoints()
         self.board = BoardTouch(self)
+        self.runtime = RuntimeConfig(self)
         try:
             self.tcp.restore_active()
             self.points.restore_active()
@@ -295,8 +297,36 @@ class App:
             "tcp": self.tcp.status(),
             "spatial": self.points.status(),
             "board": self.board.status(),
+            "runtime": self.runtime.snapshot(),
             "arms": arms,
         }
+
+    def runtime_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            if path == "/api/runtime-config/lock":
+                return self.runtime.set_locked(bool(body.get("locked")))
+            if path == "/api/runtime-config/stereo":
+                return self.runtime.apply_stereo(active_result=body.get("active_result"))
+            if path == "/api/runtime-config/gravity":
+                return self.runtime.apply_gravity(str(body.get("arm") or "right"), str(body.get("name") or ""))
+            if path == "/api/runtime-config/tcp":
+                return self.runtime.apply_tcp(
+                    str(body.get("name") or ""),
+                    arm=body.get("arm"),
+                )
+            if path == "/api/runtime-config":
+                return self.runtime.snapshot()
+            return {"ok": False, "error": "没有这个配置接口"}
+        except ConfigLockedError as exc:
+            out = self.runtime.snapshot()
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
+        except (ValueError, FileNotFoundError, OSError, KeyError, json.JSONDecodeError) as exc:
+            out = self.runtime.snapshot()
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
 
     def tcp_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -484,6 +514,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 _file(self, mesh, "application/octet-stream")
                 return
+            if path == "/api/runtime-config":
+                _json(self, 200, APP.runtime.snapshot())
+                return
             if path == "/api/status":
                 q = parse_qs(parsed.query)
                 arm = (q.get("arm") or ["right"])[0]
@@ -522,14 +555,27 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = _read_json(self)
+            if path.startswith("/api/runtime-config"):
+                _json(self, 200, APP.runtime_post(path, body))
+                return
+            try:
+                APP.runtime.guard_path(path, body)
+            except ConfigLockedError as exc:
+                _json(self, 200, {"ok": False, "error": str(exc), "runtime": APP.runtime.snapshot()})
+                return
             posted = APP.handeye.handle_post(path, body)
             if posted is None:
                 posted = APP.payload.handle_post(path, body)
             if posted is not None:
+                if isinstance(posted, dict):
+                    posted.setdefault("runtime", APP.runtime.snapshot())
                 _json(self, 200, posted)
                 return
             if path.startswith("/api/tcp/"):
-                _json(self, 200, APP.tcp_post(path, body))
+                out = APP.tcp_post(path, body)
+                if isinstance(out, dict):
+                    out.setdefault("runtime", APP.runtime.snapshot())
+                _json(self, 200, out)
                 return
             if path.startswith("/api/board/"):
                 if path == "/api/board/look":
@@ -587,6 +633,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/control-arm":
                 loop.set_arm(str(body["arm"]))
                 APP.payload.restore(loop)
+                APP.tcp.restore_for_arm(loop.arm)
             else:
                 self.send_error(404)
                 return

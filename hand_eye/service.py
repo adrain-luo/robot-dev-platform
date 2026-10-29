@@ -652,22 +652,37 @@ class HandEyeAPI:
             raise ValueError("先选一次已经求解的采集会话")
         data_dir = he_session.session_dir(session)
         doc = he_results.save_named(name, data_dir)
-        cfg["active_result"] = doc["name"]
-        cfg["session"] = session
+        self._bind_handeye_doc(cfg, doc)
         save_config(cfg)
+        self._matcher = None
+        self._matcher_key = ""
         stt = self.status()
         stt["intrinsics_fit"] = doc.get("intrinsics_fit")
         stt["result"] = doc.get("result")
         stt["active_result"] = doc["name"]
         return stt
 
-    def _load_named(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        doc = he_results.load_saved(str(body.get("name") or ""))
-        cfg = load_config()
+    @staticmethod
+    def _bind_handeye_doc(cfg: Dict[str, Any], doc: Dict[str, Any]) -> None:
+        """手眼结果与其自带双目 yaml 成套写入配置，不允许拆开。"""
         cfg["active_result"] = doc["name"]
         if doc.get("session"):
             cfg["session"] = doc["session"]
+        yaml_path = str(doc.get("intrinsics_yaml") or "")
+        if not yaml_path:
+            cand = he_results.RESULTS_DIR / f"{doc['name']}.yaml"
+            if cand.is_file():
+                yaml_path = str(cand)
+        if yaml_path and Path(yaml_path).is_file():
+            cfg["intrinsics"] = yaml_path
+
+    def _load_named(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        doc = he_results.load_saved(str(body.get("name") or ""))
+        cfg = load_config()
+        self._bind_handeye_doc(cfg, doc)
         save_config(cfg)
+        self._matcher = None
+        self._matcher_key = ""
         stt = self.status()
         stt["intrinsics_fit"] = doc.get("intrinsics_fit")
         stt["result"] = doc.get("result")

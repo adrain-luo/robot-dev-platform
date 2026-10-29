@@ -352,6 +352,57 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
   -webkit-overflow-scrolling: touch;
 }
 .aside { color: var(--muted); font-size: 11px; font-weight: 500; }
+.cfg-now {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(28, 25, 21, .06);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.cfg-now.locked {
+  background: rgba(163, 59, 50, .1);
+  border: 1px solid rgba(163, 59, 50, .25);
+}
+#cfg-lock-badge.locked { color: var(--danger); font-weight: 700; }
+.cfg-shared { margin-bottom: 10px; }
+.cfg-arms {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.cfg-arm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(255,255,255,.55);
+  border: 1px solid rgba(28, 25, 21, .06);
+  min-width: 0;
+}
+.cfg-arm-head {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  color: var(--ink);
+}
+.cfg-arm-now {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  min-height: 2.8em;
+}
+.cfg-arm .field { min-width: 0; width: 100%; }
+.cfg-arm button { width: 100%; }
+@media (max-width: 420px) {
+  .cfg-arms { grid-template-columns: 1fr; }
+}
 
 .fields, .still, .checks, .cmds { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 8px 0; }
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 88px; color: var(--muted); font-size: 11px; }

@@ -53,26 +53,69 @@ def list_saved() -> List[Dict[str, Any]]:
     return out
 
 
-def _read_active_name() -> str:
+def _read_active_map() -> Dict[str, str]:
+    """左右臂各自生效的 TCP 名。兼容旧格式 {"name": "..."}。"""
+    out = {"left": "", "right": ""}
     if not _ACTIVE_PATH.is_file():
-        return ""
+        return out
     try:
         doc = json.loads(_ACTIVE_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return ""
-    return str(doc.get("name") or "")
-
-
-def _write_active_name(name: str) -> None:
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        return out
+    if not isinstance(doc, dict):
+        return out
+    if "left" in doc or "right" in doc:
+        out["left"] = str(doc.get("left") or "")
+        out["right"] = str(doc.get("right") or "")
+        return out
+    # 旧版只有一个 name：按结果文件里的 arm 归位
+    name = str(doc.get("name") or "")
     if not name:
+        return out
+    path = RESULTS_DIR / f"{name}.json"
+    arm = ""
+    if path.is_file():
+        try:
+            arm = str(json.loads(path.read_text(encoding="utf-8")).get("arm") or "")
+        except (OSError, json.JSONDecodeError):
+            arm = ""
+    if arm in ("left", "right"):
+        out[arm] = name
+    else:
+        out["right"] = name
+    return out
+
+
+def _write_active_map(active: Dict[str, str]) -> None:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    left = str(active.get("left") or "")
+    right = str(active.get("right") or "")
+    if not left and not right:
         if _ACTIVE_PATH.is_file():
             _ACTIVE_PATH.unlink()
         return
     _ACTIVE_PATH.write_text(
-        json.dumps({"name": name}, ensure_ascii=False, indent=2),
+        json.dumps({"left": left, "right": right}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _set_active_for_arm(arm: str, name: str) -> None:
+    arm = "left" if arm == "left" else "right"
+    m = _read_active_map()
+    m[arm] = str(name or "")
+    _write_active_map(m)
+
+
+def _clear_active_name(name: str) -> None:
+    m = _read_active_map()
+    changed = False
+    for arm in ("left", "right"):
+        if m.get(arm) == name:
+            m[arm] = ""
+            changed = True
+    if changed:
+        _write_active_map(m)
 
 
 def solve_pivot(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -131,6 +174,7 @@ class TcpSession:
         self.note = ""
 
     def status(self) -> Dict[str, Any]:
+        active = _read_active_map()
         return {
             "ok": True,
             "arm": self.arm,
@@ -138,19 +182,31 @@ class TcpSession:
             "n": len(self.samples),
             "result": self.result,
             "active_name": self.active_name,
+            "active_left": active.get("left") or "",
+            "active_right": active.get("right") or "",
             "note": self.note,
             "saved": list_saved(),
         }
 
-    def restore_active(self) -> None:
-        name = _read_active_name()
+    def restore_active(self, arm: Optional[str] = None) -> None:
+        """恢复某臂生效的 TCP；未指定臂时优先右、再左。"""
+        active = _read_active_map()
+        if arm in ("left", "right"):
+            name = active.get(arm) or ""
+        else:
+            name = active.get("right") or active.get("left") or ""
         if not name or not _result_path(name).is_file():
             return
         self._apply_doc(json.loads(_result_path(name).read_text(encoding="utf-8")))
 
+    def restore_for_arm(self, arm: str) -> None:
+        self.restore_active(arm)
+
     def save(self, name: str, note: str = "") -> Dict[str, Any]:
         if self.result is None:
             raise ValueError("先计算，再命名保存")
+        if self.arm not in ("left", "right"):
+            raise ValueError("先记录某一侧手臂的姿态")
         name = _check_name(name)
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         doc = {
@@ -167,7 +223,7 @@ class TcpSession:
         _result_path(name).write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
         self.active_name = name
         self.note = doc["note"]
-        _write_active_name(name)
+        _set_active_for_arm(self.arm, name)
         return self.status()
 
     def load(self, name: str) -> Dict[str, Any]:
@@ -175,7 +231,9 @@ class TcpSession:
         if not path.is_file():
             raise FileNotFoundError(f"没有 TCP 结果 {name}")
         self._apply_doc(json.loads(path.read_text(encoding="utf-8")))
-        _write_active_name(self.active_name)
+        if self.arm not in ("left", "right"):
+            raise ValueError(f"「{name}」没有左右臂标记，不能调用")
+        _set_active_for_arm(self.arm, self.active_name)
         return self.status()
 
     def delete(self, name: str) -> Dict[str, Any]:
@@ -183,9 +241,14 @@ class TcpSession:
         if not path.is_file():
             raise FileNotFoundError(f"没有 TCP 结果 {name}")
         path.unlink()
+        _clear_active_name(name)
         if self.active_name == name:
-            self.clear()
-            _write_active_name("")
+            self.samples.clear()
+            self.arm = ""
+            self.tip_link = ""
+            self.result = None
+            self.active_name = ""
+            self.note = ""
         return self.status()
 
     def _apply_doc(self, doc: Dict[str, Any]) -> None:
@@ -226,13 +289,13 @@ class TcpSession:
         return self.status()
 
     def clear(self) -> Dict[str, Any]:
+        # 只清空当前标定会话，不改左右各自已生效的命名结果
         self.samples.clear()
         self.arm = ""
         self.tip_link = ""
         self.result = None
         self.active_name = ""
         self.note = ""
-        _write_active_name("")
         return self.status()
 
     def solve(self) -> Dict[str, Any]:
