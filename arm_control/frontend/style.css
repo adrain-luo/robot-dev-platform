@@ -131,30 +131,37 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
   top: 72px; right: 14px; bottom: 92px;
   width: min(360px, calc(100vw - 28px));
   display: flex; flex-direction: column; gap: 8px;
-  overflow: visible;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   pointer-events: none;
   padding-bottom: 8px;
 }
 .floats-left {
   top: 72px; left: 14px; right: auto; bottom: auto;
   width: min(280px, calc(100vw - 28px));
+  max-height: calc(100vh - 180px);
 }
 .floats-left .float.open { max-height: min(72vh, 680px); }
 .floats-left .he-view { max-height: none; }
 .float {
   pointer-events: auto;
+  flex: 0 0 auto;
   border-radius: 16px;
   background: var(--glass);
   border: 1px solid rgba(255,255,255,.5);
   box-shadow: 0 10px 28px rgba(0,0,0,.22);
   backdrop-filter: blur(16px);
   overflow: hidden;
-  min-height: 0;
 }
 .float-toggle {
   width: 100%;
+  flex: 0 0 auto;
+  height: 40px;
+  min-height: 40px;
   cursor: pointer;
   padding: 11px 14px;
+  font-size: 13px;
   font-weight: 650;
   text-align: left;
   border: 0;
@@ -165,14 +172,20 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
   justify-content: space-between;
   gap: 8px;
 }
-.float-toggle::after { content: "▸"; color: var(--muted); font-size: 11px; }
+.float-toggle::after { content: "▸"; color: var(--muted); font-size: 11px; flex: 0 0 auto; }
 .float.open .float-toggle::after { content: "▾"; }
 .float-toggle:hover,
 .float-toggle:active {
   background: rgba(28, 25, 21, .06);
   transform: none;
 }
-.float.open { max-height: min(58vh, 520px); display: flex; flex-direction: column; min-height: 0; }
+.float.open {
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: min(58vh, 520px);
+  display: flex;
+  flex-direction: column;
+}
 .float-body {
   display: none;
 }

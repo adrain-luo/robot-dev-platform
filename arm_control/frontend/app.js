@@ -443,9 +443,12 @@ function refillSelects() {
     renderPayloadSelect(lastIdentify.profiles || [], lastIdentify.applied_name);
     renderSessionSelect(lastIdentify.sessions || [], lastIdentify.session);
   }
-  fillValSelect();
+  // 打开卡片时若还没拉过列表，不要用空 valList 冲掉服务端注入的选项
+  if (valList.length) fillValSelect();
+  else refreshValList().catch(() => {});
 }
 window.refillSelects = refillSelects;
+refreshValList().catch(() => {});
 refreshPoseList().catch((e) => {
   const m = document.getElementById("msg");
   if (!m) return;
