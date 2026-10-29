@@ -235,6 +235,37 @@ async function poll() {
 
 ensureGotoInputs();
 V3.init();
+
+function bindBook(book) {
+  const marks = [...book.querySelectorAll(".bookmark")];
+  const pages = [...book.querySelectorAll(".page")];
+  function openPage(name) {
+    const current = marks.find((m) => m.classList.contains("active"))?.dataset.page;
+    if (book.classList.contains("open") && current === name) {
+      book.classList.remove("open");
+      marks.forEach((m) => {
+        m.classList.remove("active");
+        m.setAttribute("aria-pressed", "false");
+      });
+      return;
+    }
+    book.classList.add("open");
+    marks.forEach((m) => {
+      const on = m.dataset.page === name;
+      m.classList.toggle("active", on);
+      m.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    pages.forEach((p) => {
+      p.classList.toggle("active", p.dataset.page === name);
+    });
+    if (typeof window.refillSelects === "function") {
+      setTimeout(() => window.refillSelects(), 0);
+    }
+  }
+  marks.forEach((m) => m.addEventListener("click", () => openPage(m.dataset.page)));
+}
+document.querySelectorAll(".book").forEach(bindBook);
+
 document.querySelectorAll(".float").forEach((card) => {
   const btn = card.querySelector(".float-toggle");
   if (!btn) return;
@@ -1147,7 +1178,8 @@ window.applyHeRun = applyHeRun;
 let camPreviewBusy = false;
 setInterval(async () => {
   const card = $("panel-cam");
-  if (!card || !card.classList.contains("open") || camPreviewBusy) return;
+  const book = card && card.closest(".book");
+  if (!card || !card.classList.contains("open") || (book && !book.classList.contains("open")) || camPreviewBusy) return;
   const img = $("cam-preview");
   if (!img) return;
   camPreviewBusy = true;
