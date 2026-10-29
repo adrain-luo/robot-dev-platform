@@ -148,7 +148,8 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
   border: 1px solid rgba(255,255,255,.5);
   box-shadow: 0 10px 28px rgba(0,0,0,.22);
   backdrop-filter: blur(16px);
-  overflow: visible;
+  overflow: hidden;
+  min-height: 0;
 }
 .float-toggle {
   width: 100%;
@@ -171,15 +172,20 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
   background: rgba(28, 25, 21, .06);
   transform: none;
 }
-.float.open { max-height: min(58vh, 520px); display: flex; flex-direction: column; }
+.float.open { max-height: min(58vh, 520px); display: flex; flex-direction: column; min-height: 0; }
 .float-body {
   display: none;
 }
 .float.open .float-body {
   display: block;
-  max-height: min(52vh, 480px);
-  overflow: visible;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0 12px 12px;
+  -webkit-overflow-scrolling: touch;
 }
 .aside { color: var(--muted); font-size: 11px; font-weight: 500; }
 
@@ -248,8 +254,7 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
   display: block; width: 100%; max-height: 180px; object-fit: contain;
   border-radius: 10px; background: #1c1915; margin-bottom: 8px;
 }
-#panel-he.open .float-body { overflow: auto; }
-#panel-cam.open .float-body { overflow: auto; max-height: min(64vh, 620px); }
+#panel-cam.open { max-height: min(72vh, 680px); }
 #he-result { margin-top: 8px; }
 #he-result .stat { margin-bottom: 6px; }
 
