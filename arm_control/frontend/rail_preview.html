@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>G1D 书签分块预览</title>
+<style>
+:root {
+  --ink: #1c1915;
+  --muted: #6d655c;
+  --teal: #0f6e62;
+  --glass: rgba(255, 252, 247, .94);
+  --page-w: min(360px, calc(100vw - 56px));
+  --page-w-left: min(280px, calc(100vw - 56px));
+  --tab-w: 34px;
+  --ease: cubic-bezier(.22, 1, .36, 1);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  color: var(--ink);
+  font: 13px/1.4 "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #0c1016;
+  overflow: hidden;
+}
+button, input, select { font: inherit; color: inherit; }
+button {
+  border: 1px solid transparent;
+  background: rgba(255,255,255,.88);
+  border-radius: 12px;
+  padding: 0 14px;
+  height: 40px;
+  cursor: pointer;
+}
+button.primary { background: var(--teal); color: #fff; font-weight: 650; }
+button:hover { filter: brightness(1.03); }
+
+#stage {
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(1200px 700px at 35% 40%, #1a2433 0%, transparent 55%),
+    radial-gradient(900px 500px at 70% 70%, #152018 0%, transparent 50%),
+    #0c1016;
+}
+#stage::after {
+  content: "";
+  position: absolute; inset: 12% 18% 22% 12%;
+  border: 1px dashed rgba(213, 219, 227, .14);
+  border-radius: 24px;
+  pointer-events: none;
+}
+.hint {
+  position: absolute; left: 50%; top: 42%;
+  transform: translate(-50%, -50%);
+  color: #8d97a3;
+  text-align: center;
+  pointer-events: none;
+  max-width: 28rem;
+}
+.hint strong { display: block; color: #d5dbe3; font-size: 18px; margin-bottom: 8px; font-weight: 650; }
+
+.hud {
+  position: fixed; z-index: 4;
+  top: 14px; left: 16px; right: 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  pointer-events: none;
+}
+.brand { display: flex; align-items: center; gap: 10px; color: #f4efe6; }
+.mark {
+  width: 34px; height: 34px; border-radius: 12px;
+  background:
+    linear-gradient(#1c1915, #1c1915) center/14px 2px no-repeat,
+    linear-gradient(#1c1915, #1c1915) center/2px 14px no-repeat,
+    linear-gradient(160deg, #f7e7c6, #d7efe9);
+}
+.brand h1 { margin: 0; font-size: 16px; letter-spacing: -.03em; }
+.brand p { margin: 1px 0 0; color: #c5ced8; font-size: 12px; }
+.tag {
+  pointer-events: auto;
+  padding: 6px 12px; border-radius: 999px;
+  background: var(--glass); border: 1px solid rgba(255,255,255,.4);
+  font-size: 12px; font-weight: 650; color: var(--muted);
+}
+
+.dock {
+  position: fixed; z-index: 4;
+  left: 14px; right: 14px; bottom: 14px;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 10px;
+  border-radius: 18px;
+  background: var(--glass);
+  border: 1px solid rgba(255,255,255,.55);
+  box-shadow: 0 16px 40px rgba(0,0,0,.28);
+  backdrop-filter: blur(16px);
+}
+.dock .ghost { color: #5c564e; font-size: 12px; margin-left: 8px; }
+
+.banner {
+  position: fixed; z-index: 5;
+  left: 50%; top: 18px; transform: translateX(-50%);
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(15, 110, 98, .92);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  box-shadow: 0 8px 24px rgba(0,0,0,.28);
+  pointer-events: none;
+}
+
+/*
+  书块 = 书签 + 书页 一体平移。
+  右侧：签在板块左边  [签][页]；收起时整块右藏，只露签在屏右缘。
+  左侧：签在板块右边  [页][签]；收起时整块左藏，只露签在屏左缘。
+*/
+.book {
+  position: fixed; z-index: 3;
+  top: 72px; bottom: 92px;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  pointer-events: none;
+  transition: transform .38s var(--ease);
+  will-change: transform;
+}
+.book-right { right: 0; }
+.book-left { left: 0; }
+.book-right:not(.open) {
+  transform: translateX(calc(100% - var(--tab-w)));
+}
+.book-left:not(.open) {
+  transform: translateX(calc(-100% + var(--tab-w)));
+}
+.book.open { transform: translateX(0); }
+
+.bookmarks {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: flex-start;
+  padding: 0;
+  width: var(--tab-w);
+  flex: 0 0 var(--tab-w);
+  z-index: 2;
+  align-self: stretch;
+}
+.bookmark {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: .22em;
+  width: var(--tab-w);
+  min-height: 108px;
+  height: auto;
+  padding: 16px 0;
+  border: 1px solid rgba(255,255,255,.35);
+  background: rgba(255, 252, 247, .88);
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  transition: background .2s ease, color .2s ease, filter .2s ease, transform .2s ease;
+}
+/* 右书：签在页左侧，圆角朝画面中心 */
+.book-right .bookmark {
+  border-right: 0;
+  border-radius: 12px 0 0 12px;
+  box-shadow: -4px 6px 16px rgba(0,0,0,.2);
+}
+/* 左书：签在页右侧，圆角朝画面中心 */
+.book-left .bookmark {
+  border-left: 0;
+  border-radius: 0 12px 12px 0;
+  box-shadow: 4px 6px 16px rgba(0,0,0,.2);
+}
+.bookmark:hover {
+  background: #fff;
+  color: var(--ink);
+}
+.book-right .bookmark:hover { transform: translateX(-3px); }
+.book-left .bookmark:hover { transform: translateX(3px); }
+.bookmark.active {
+  background: var(--teal);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 8px 20px rgba(15, 110, 98, .4);
+}
+.bookmark .count {
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  letter-spacing: 0;
+  display: block;
+  margin-top: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  opacity: .7;
+  text-align: center;
+}
+
+.pages {
+  pointer-events: none;
+  position: relative;
+  width: var(--page-w);
+  flex: 0 0 var(--page-w);
+  min-height: 0;
+}
+.book-left .pages {
+  width: var(--page-w-left);
+  flex-basis: var(--page-w-left);
+}
+.book.open .pages { pointer-events: auto; }
+
+.page {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+}
+.page.active { display: flex; }
+
+.page-sheet {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 0;
+  border-radius: 0;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+/* 卡片外的书页底：实色 → 透明，不罩住卡片 */
+.page-sheet::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255,252,247,.52) 0%, rgba(255,252,247,.22) 40%, rgba(255,252,247,.06) 70%, rgba(255,252,247,0) 100%),
+    linear-gradient(270deg, rgba(255,252,247,.4) 0%, rgba(255,252,247,.12) 50%, transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+}
+.book-left .page-sheet::before {
+  background:
+    linear-gradient(180deg, rgba(255,252,247,.52) 0%, rgba(255,252,247,.22) 40%, rgba(255,252,247,.06) 70%, rgba(255,252,247,0) 100%),
+    linear-gradient(90deg, rgba(255,252,247,.4) 0%, rgba(255,252,247,.12) 50%, transparent 100%);
+}
+.page-sheet > * { position: relative; z-index: 1; }
+.page-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 8px;
+  color: #f0ebe3;
+  text-shadow: 0 1px 8px rgba(0,0,0,.45);
+  border-bottom: 1px solid rgba(255,255,255,.12);
+}
+.page-head strong {
+  color: #f7f2ea;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.page-head span {
+  color: rgba(245, 240, 232, .7);
+  font-size: 11px;
+}
+.page-cards {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.float {
+  flex: 0 0 auto;
+  border-radius: 14px;
+  background: rgba(255,255,255,.72);
+  border: 1px solid rgba(28, 25, 21, .06);
+  overflow: hidden;
+}
+.float.open {
+  flex: 1 1 auto;
+  min-height: 100px;
+  max-height: min(46vh, 420px);
+  display: flex;
+  flex-direction: column;
+}
+.book-left .float.open { max-height: min(58vh, 560px); }
+.float-toggle {
+  width: 100%;
+  flex: 0 0 auto;
+  height: 38px;
+  min-height: 38px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+.float-toggle::after { content: "▸"; color: var(--muted); font-size: 11px; }
+.float.open .float-toggle::after { content: "▾"; }
+.float-toggle:hover { background: rgba(28, 25, 21, .05); }
+.float-body {
+  display: none;
+  padding: 0 12px 12px;
+  overflow: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.float.open .float-body { display: block; }
+.note { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+.aside { color: var(--muted); font-size: 11px; font-weight: 500; }
+.cmds { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.fields { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 88px; color: var(--muted); font-size: 11px; }
+.field input, .field select {
+  width: 100%;
+  border: 1px solid #e4ddd2;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fff;
+}
+.fake-row {
+  display: flex; justify-content: space-between;
+  padding: 8px 10px; margin: 4px 0;
+  border-radius: 12px; background: rgba(255,255,255,.85);
+  font: 12px ui-monospace, monospace;
+}
+.he-view {
+  width: 100%; height: 110px;
+  border-radius: 10px; background: #1c1915; margin-bottom: 8px;
+  color: #8d97a3; font-size: 12px;
+  display: grid; place-items: center;
+}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="hint">
+    <strong>书签贴在板块内侧</strong>
+    右边是 [签|页]，左边是 [页|签]。收起只露签；点开整块拉出，签始终在板块靠中心的一侧。
+  </div>
+</div>
+
+<div class="banner">预览页 · /rail-preview</div>
+
+<header class="hud">
+  <div class="brand">
+    <div class="mark" aria-hidden="true"></div>
+    <div>
+      <h1>G1D 臂控</h1>
+      <p>书签分块预览</p>
+    </div>
+  </div>
+  <span class="tag">预览模式</span>
+</header>
+
+<nav class="dock">
+  <button class="primary" type="button">接管</button>
+  <button type="button">拖拽</button>
+  <button type="button">急停</button>
+  <button type="button">出发</button>
+  <span class="ghost">底栏不变</span>
+</nav>
+
+<!-- 左：结构 [页][签]，签在板块右边（朝中心）；收起左藏只露签 -->
+<section class="book book-left open" data-book="left">
+  <div class="pages">
+    <div class="page active" data-page="vision">
+      <div class="page-sheet">
+        <div class="page-head"><strong>视觉</strong><span>1 张卡片</span></div>
+        <div class="page-cards">
+          <article class="float open">
+            <button type="button" class="float-toggle">双目</button>
+            <div class="float-body">
+              <p class="note">左右目、视差、点云匹配。</p>
+              <div class="he-view">左右目</div>
+              <div class="cmds">
+                <button type="button">匹配点云</button>
+                <button type="button">调试口匹配</button>
+              </div>
+              <div class="he-view">视差</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </div>
+  <nav class="bookmarks" aria-label="左侧书签">
+    <button type="button" class="bookmark active" data-page="vision" aria-pressed="true">
+      视觉<span class="count">1</span>
+    </button>
+  </nav>
+</section>
+
+<!-- 右：结构 [签][页]，签在板块左边（朝中心）；收起右藏只露签 -->
+<section class="book book-right open" data-book="right">
+  <nav class="bookmarks" aria-label="右侧书签">
+    <button type="button" class="bookmark active" data-page="calib" aria-pressed="true">
+      标定<span class="count">6</span>
+    </button>
+    <button type="button" class="bookmark" data-page="control" aria-pressed="false">
+      控制<span class="count">4</span>
+    </button>
+  </nav>
+  <div class="pages">
+    <div class="page active" data-page="calib">
+      <div class="page-sheet">
+        <div class="page-head"><strong>标定</strong><span>6 张卡片</span></div>
+        <div class="page-cards">
+          <article class="float open">
+            <button type="button" class="float-toggle">姿态集 <span class="aside">右 · 12 点</span></button>
+            <div class="float-body">
+              <p class="note">示教姿态、镜像到对侧、保存集。</p>
+              <div class="fields">
+                <label class="field grow">当前集
+                  <select><option>G1D右手1线</option></select>
+                </label>
+              </div>
+              <div class="cmds">
+                <button type="button">记录</button>
+                <button class="primary" type="button">新建</button>
+              </div>
+            </div>
+          </article>
+          <article class="float">
+            <button type="button" class="float-toggle">末端负载</button>
+            <div class="float-body">
+              <p class="note">测量姿态集力矩，辨识质量与质心。</p>
+              <div class="cmds"><button class="primary" type="button">测量当前集</button></div>
+            </div>
+          </article>
+          <article class="float">
+            <button type="button" class="float-toggle">到位对比</button>
+            <div class="float-body">
+              <p class="note">基线 / 补偿 / 补偿+修正。</p>
+              <div class="cmds"><button class="primary" type="button">开始对比</button></div>
+            </div>
+          </article>
+          <article class="float">
+            <button type="button" class="float-toggle">手眼标定</button>
+            <div class="float-body">
+              <p class="note">按姿态集采图，求相机到躯干。</p>
+              <div class="cmds"><button type="button">采集</button><button class="primary" type="button">求解</button></div>
+            </div>
+          </article>
+          <article class="float">
+            <button type="button" class="float-toggle">TCP</button>
+            <div class="float-body">
+              <p class="note">固定点转腕标定爪尖偏置。</p>
+              <div class="cmds"><button type="button">记录姿态</button><button class="primary" type="button">计算</button></div>
+            </div>
+          </article>
+          <article class="float">
+            <button type="button" class="float-toggle">棋盘触摸</button>
+            <div class="float-body">
+              <p class="note">手眼角点 → TCP 上方 → 下降 → 抬起。</p>
+              <div class="cmds"><button class="primary" type="button">开始路径</button></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" data-page="control">
+      <div class="page-sheet">
+        <div class="page-head"><strong>控制</strong><span>4 张卡片</span></div>
+        <div class="page-cards">
+          <article class="float open">
+            <button type="button" class="float-toggle">关节</button>
+            <div class="float-body">
+              <p class="note">实时 q / dq / τ。</p>
+              <div class="fake-row"><span>肩 pitch</span><span>12.4°</span></div>
+              <div class="fake-row"><span>肩 roll</span><span>-3.1°</span></div>
+              <div class="fake-row"><span>肘</span><span>48.0°</span></div>
+            </div>
+          </article>
+          <article class="float">
+            <button type="button" class="float-toggle">腰</button>
+            <div class="float-body">
+              <p class="note">旋转 / 俯仰，与臂共用限速。</p>
+              <div class="fields">
+                <label class="field">旋转 °<input value="0"></label>
+                <label class="field">俯仰 °<input value="0"></label>
+              </div>
+              <div class="cmds"><button class="primary" type="button">出发</button></div>
+            </div>
+          </article>
+          <article class="float">
+            <button type="button" class="float-toggle">单点角度</button>
+            <div class="float-body">
+              <p class="note">填七轴目标角后出发。</p>
+              <div class="cmds"><button type="button">填入当前角</button><button class="primary" type="button">出发</button></div>
+            </div>
+          </article>
+          <article class="float">
+            <button type="button" class="float-toggle">空间点</button>
+            <div class="float-body">
+              <p class="note">黄点目标，按 TCP 偏置去碰。</p>
+              <div class="cmds"><button type="button">保存当前</button><button class="primary" type="button">去该点</button></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+(function () {
+  function bindBook(book) {
+    const marks = [...book.querySelectorAll(".bookmark")];
+    const pages = [...book.querySelectorAll(".page")];
+
+    function openPage(name) {
+      const current = marks.find((m) => m.classList.contains("active"))?.dataset.page;
+      if (book.classList.contains("open") && current === name) {
+        book.classList.remove("open");
+        marks.forEach((m) => {
+          m.classList.remove("active");
+          m.setAttribute("aria-pressed", "false");
+        });
+        return;
+      }
+      book.classList.add("open");
+      marks.forEach((m) => {
+        const on = m.dataset.page === name;
+        m.classList.toggle("active", on);
+        m.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      pages.forEach((p) => {
+        p.classList.toggle("active", p.dataset.page === name);
+      });
+    }
+
+    marks.forEach((m) => m.addEventListener("click", () => openPage(m.dataset.page)));
+  }
+
+  document.querySelectorAll(".book").forEach(bindBook);
+
+  document.querySelectorAll(".float-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const card = btn.closest(".float");
+      if (card) card.classList.toggle("open");
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -454,6 +454,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if path in ("/rail-preview", "/rail-preview.html"):
+                _file(self, FRONTEND / "rail_preview.html", "text/html; charset=utf-8")
+                return
             if path == "/static/style.css":
                 _file(self, FRONTEND / "style.css", "text/css; charset=utf-8")
                 return
