@@ -8,7 +8,7 @@ unitree-joint-control-ab/config/robot.yaml.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -75,9 +75,29 @@ WAIST_YAW_LIMIT_RAD = (-2.7053, 2.7053)
 WAIST_PITCH_JOINT = "Yaw_Joint"
 WAIST_PITCH_MOTOR_INDEX = 14
 WAIST_PITCH_LIMIT_RAD = (-0.04363, 2.3562)
-# G1 29-DoF 腰组：生产 HAL 在纯臂模式会一起写 12/13/14。13 是腰 roll，这份 URDF 没有对应活动关节。
+# G1 29-DoF 腰组：生产 HAL 在纯臂模式会一起写 12/13/14。13 在标准 G1 是腰 roll；
+# 这份 G1D URDF 没有 roll 活动关节，但有 LZ_* 升降棱柱。高度不在 rt/lowstate，
+# 官方走 AgvClient.HeightAdjust + 订阅 rt/hispeed_state（Point32.y 高度 / .z 速度）。
 WAIST_MOTOR_INDICES = (12, 13, 14)
+LIFT_TOPIC = "rt/hispeed_state"
+LIFT_JOINT_CANDIDATES = ("LZ_mt_Joint", "LZ_it_Joint")  # URDF 两级棱柱，各约 0～0.21 m
+LIFT_STAGE_LIMIT_M = 0.21
+LIFT_STROKE_MAX_M = 0.42  # 两级合计；与整机最低/最高差约 420 mm 一致
+# 真机收到最低位时 rt/hispeed_state Point32.y（2026-03-29 实测约 -0.1897）
+LIFT_HEIGHT_ZERO_M = -0.1897
 BASE_LINK = "torso_link"
+
+
+def lift_height_to_joints(
+    height_m: float, *, zero_m: Optional[float] = None
+) -> Dict[str, float]:
+    """把 hispeed 高度映到 URDF 两级棱柱（先伸 LZ_mt，再伸 LZ_it）。"""
+    zero = float(LIFT_HEIGHT_ZERO_M if zero_m is None else zero_m)
+    stroke = float(height_m) - zero
+    stroke = max(0.0, min(LIFT_STROKE_MAX_M, stroke))
+    q_mt = max(0.0, min(LIFT_STAGE_LIMIT_M, stroke))
+    q_it = max(0.0, min(LIFT_STAGE_LIMIT_M, stroke - LIFT_STAGE_LIMIT_M))
+    return {"LZ_mt_Joint": q_mt, "LZ_it_Joint": q_it}
 
 
 def get_arm(name: str) -> ArmLayout:

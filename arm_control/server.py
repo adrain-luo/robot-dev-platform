@@ -34,7 +34,11 @@ if str(HAND_EYE_ROOT) not in sys.path:
 
 from config_loader import load_settings
 from controller.arm_loop import ArmLoop, PermissionErrorMotion
+from dds.agv_client import AgvClient
+from dds.hispeed import HispeedStateReader
 from dds.lowstate import LowStateReader
+import lift_calib
+from lift_control import LiftController
 from model.fk_scene import RobotKinematics
 from model.layout import (
     ARMS,
@@ -42,7 +46,10 @@ from model.layout import (
     WAIST_PITCH_MOTOR_INDEX,
     WAIST_YAW_JOINT,
     WAIST_YAW_MOTOR_INDEX,
+    LIFT_JOINT_CANDIDATES,
+    LIFT_TOPIC,
     get_arm,
+    lift_height_to_joints,
     short_joint_label,
 )
 import identify as iden
@@ -50,6 +57,7 @@ import poses as posesets
 import validate as vali
 from api import PayloadAPI
 from board_touch import BoardTouch
+from detect_localize import DetectLocalize
 from runtime_config import ConfigLockedError, RuntimeConfig
 from spatial_points import SpatialPoints, list_saved as list_spatial_saved, solve_tcp_ik
 from tcp_calib import TcpSession, list_saved as list_tcp_saved
@@ -145,12 +153,16 @@ class App:
         self.kin = kin
         self.allow_real_motion = bool(allow_real_motion)
         self._reader: Optional[LowStateReader] = None
+        self._hispeed: Optional[HispeedStateReader] = None
+        self._agv: Optional[AgvClient] = None
+        self._lift_ctrl: Optional[LiftController] = None
         self.loop: Optional[ArmLoop] = None
         self._lock = threading.Lock()
         self.payload = PayloadAPI(self)
         self.tcp = TcpSession()
         self.points = SpatialPoints()
         self.board = BoardTouch(self)
+        self.detect = DetectLocalize(self)
         self.runtime = RuntimeConfig(self)
         try:
             self.tcp.restore_active()
@@ -184,6 +196,96 @@ class App:
                     )
                     self.payload.restore(self.loop)
             return self._reader
+
+    def hispeed(self) -> HispeedStateReader:
+        # 先起 lowstate（ChannelFactory）；勿在 _lock 里调 reader，锁不可重入
+        self.reader()
+        with self._lock:
+            if self._hispeed is None:
+                self._hispeed = HispeedStateReader(
+                    network_interface=self.settings.network_interface,
+                    state_topic=LIFT_TOPIC,
+                    dds_domain=self.settings.dds_domain,
+                    timeout_s=self.settings.lowstate_timeout_s,
+                    sdk_path=self.settings.unitree_sdk_path,
+                    wait=False,
+                )
+            return self._hispeed
+
+    def agv(self) -> AgvClient:
+        self.reader()
+        with self._lock:
+            if self._agv is None:
+                self._agv = AgvClient(
+                    network_interface=self.settings.network_interface,
+                    dds_domain=self.settings.dds_domain,
+                    sdk_path=self.settings.unitree_sdk_path,
+                    timeout_s=3.0,
+                )
+            return self._agv
+
+    def lift_ctrl(self) -> LiftController:
+        with self._lock:
+            if self._lift_ctrl is None:
+                # hispeed/agv 在锁外初始化，避免重入
+                pass
+        hs = self.hispeed()
+        agv = self.agv()
+        with self._lock:
+            if self._lift_ctrl is None:
+                self._lift_ctrl = LiftController(hispeed=hs, agv=agv)
+            return self._lift_ctrl
+
+    def require_motion(self) -> None:
+        if not self.allow_real_motion:
+            raise PermissionErrorMotion("只读模式，不能发运动指令（需 --allow-real-motion）")
+
+    def lift_set_zero_now(self) -> Dict[str, Any]:
+        st = self.hispeed().latest()
+        if st is None:
+            return {"ok": False, "error": f"还没有 {LIFT_TOPIC} 数据，稍后再试", "lift": None}
+        out = lift_calib.save_zero(st.height_m)
+        # 立刻按新零位重算，给前端刷新
+        scene = self.both_scenes()
+        out["lift"] = scene.get("lift")
+        out["message"] = (
+            f"已记最低点 {st.height_m:.4f} m（{st.height_m * 1000.0:.1f} mm），三维行程归零"
+        )
+        return out
+
+    def lift_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        if path == "/api/lift/set-zero":
+            return self.lift_set_zero_now()
+        if path == "/api/lift/stop":
+            if self._lift_ctrl is None and self._agv is None:
+                return {"ok": True, "busy": False, "message": "立柱本来就没在动"}
+            return self.lift_ctrl().stop()
+        self.require_motion()
+        ctrl = self.lift_ctrl()
+        if path == "/api/lift/goto":
+            if "stroke_mm" in body and body.get("stroke_mm") not in (None, ""):
+                zero = lift_calib.load_zero()
+                height = zero + float(body["stroke_mm"]) / 1000.0
+            elif "height_m" in body and body.get("height_m") not in (None, ""):
+                height = float(body["height_m"])
+            else:
+                return {"ok": False, "error": "需要 stroke_mm 或 height_m"}
+            out = ctrl.goto(height)
+            out["message"] = f"立柱目标行程 {(out.get('target_m', height) - lift_calib.load_zero()) * 1000.0:.1f} mm"
+            return out
+        if path == "/api/lift/step":
+            if "delta_mm" in body and body.get("delta_mm") not in (None, ""):
+                delta = float(body["delta_mm"]) / 1000.0
+            elif "delta_m" in body and body.get("delta_m") not in (None, ""):
+                delta = float(body["delta_m"])
+            else:
+                return {"ok": False, "error": "需要 delta_mm"}
+            out = ctrl.step(delta)
+            if out.get("ok"):
+                sign = "升" if delta > 0 else "降"
+                out["message"] = f"立柱{sign}一步 {abs(delta) * 1000.0:.1f} mm"
+            return out
+        return {"ok": False, "error": "没有这个立柱接口"}
 
     def ctrl_status(self) -> Dict[str, Any]:
         base = {
@@ -274,14 +376,68 @@ class App:
                 err = f"{type(e).__name__}: {e}"
                 arms[name] = None
         waist = {}
+        lift = {}
         try:
-            q = self.reader().read_motors((WAIST_YAW_MOTOR_INDEX, WAIST_PITCH_MOTOR_INDEX))
+            q = self.reader().read_motors(
+                (WAIST_YAW_MOTOR_INDEX, WAIST_PITCH_MOTOR_INDEX)
+            )
             waist = {
                 WAIST_YAW_JOINT: q[WAIST_YAW_MOTOR_INDEX],
                 WAIST_PITCH_JOINT: q[WAIST_PITCH_MOTOR_INDEX],
             }
         except Exception:
             waist = {}
+        # 官方：rt/hispeed_state Point32.y=高度 .z=速度（不在 lowstate）
+        try:
+            hs = self.hispeed()
+            st = hs.latest()
+            age = hs.age_s()
+            calib = lift_calib.status()
+            zero_m = float(calib["height_zero_m"])
+            if st is None:
+                lift = {
+                    "available": False,
+                    "topic": LIFT_TOPIC,
+                    "height_m": None,
+                    "velocity_mps": None,
+                    "age_s": None,
+                    "joints": {n: 0.0 for n in LIFT_JOINT_CANDIDATES},
+                    "joints_urdf": list(LIFT_JOINT_CANDIDATES),
+                    "calib": calib,
+                    "note": f"等待 {LIFT_TOPIC}（Point32.y 高度 / .z 速度）。升降不在 rt/lowstate。",
+                }
+            else:
+                joints = lift_height_to_joints(st.height_m, zero_m=zero_m)
+                stroke = sum(joints.values())
+                lift = {
+                    "available": True,
+                    "topic": LIFT_TOPIC,
+                    "height_m": st.height_m,
+                    "height_mm": st.height_m * 1000.0,
+                    "stroke_m": stroke,
+                    "stroke_mm": stroke * 1000.0,
+                    "velocity_mps": st.velocity_mps,
+                    "velocity_mms": st.velocity_mps * 1000.0,
+                    "x": st.x,
+                    "age_s": age,
+                    "joints": joints,
+                    "joints_urdf": list(LIFT_JOINT_CANDIDATES),
+                    "calib": calib,
+                    "note": "来自 rt/hispeed_state；已映射到 LZ_mt / LZ_it 驱动三维",
+                }
+        except Exception as e:
+            lift = {
+                "available": False,
+                "topic": LIFT_TOPIC,
+                "error": f"{type(e).__name__}: {e}",
+                "calib": lift_calib.status(),
+                "note": "订阅 rt/hispeed_state 失败",
+            }
+        if self._lift_ctrl is not None:
+            try:
+                lift = {**lift, "ctrl": self._lift_ctrl.status()}
+            except Exception:
+                pass
         return {
             "ok": err is None,
             "error": err,
@@ -294,9 +450,11 @@ class App:
             "identify": self.payload.identify_status(),
             "handeye": self.handeye.status(),
             "waist": waist,
+            "lift": lift,
             "tcp": self.tcp.status(),
             "spatial": self.points.status(),
             "board": self.board.status(),
+            "detect": self.detect.status(),
             "runtime": self.runtime.snapshot(),
             "arms": arms,
         }
@@ -597,11 +755,29 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     _json(self, 200, {"ok": False, "error": "没有这个棋盘接口"})
                 return
+            if path.startswith("/api/detect/") and path != "/api/detect/grab":
+                if path == "/api/detect/points":
+                    _json(self, 200, APP.detect.acquire_points(body))
+                elif path == "/api/detect/calibrate":
+                    _json(self, 200, APP.detect.calibrate())
+                elif path == "/api/detect/center":
+                    _json(self, 200, APP.detect.extract_center())
+                elif path == "/api/detect/clear":
+                    _json(self, 200, APP.detect.clear())
+                else:
+                    _json(self, 200, {"ok": False, "error": "没有这个识别定位接口"})
+                return
             if path.startswith("/api/points/"):
                 if path == "/api/points/goto":
                     _json(self, 200, APP.point_goto(body, APP.require_loop()))
                 else:
                     _json(self, 200, APP.point_post(path, body))
+                return
+            if path.startswith("/api/lift/"):
+                try:
+                    _json(self, 200, APP.lift_post(path, body))
+                except PermissionErrorMotion as e:
+                    _json(self, 403, {"ok": False, "error": str(e)})
                 return
             loop = APP.require_loop()
             if path == "/api/engage":
@@ -610,6 +786,10 @@ class Handler(BaseHTTPRequestHandler):
                 loop.release()
             elif path == "/api/hold":
                 APP.board.request_stop()
+                try:
+                    APP.lift_post("/api/lift/stop", {})
+                except Exception:
+                    traceback.print_exc()
                 loop.estop_hold()
             elif path == "/api/teach":
                 if bool(body.get("enabled", True)):

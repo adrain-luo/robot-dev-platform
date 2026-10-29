@@ -91,6 +91,66 @@ function renderTable(snap) {
   }
 }
 
+function renderLift(lift) {
+  const el = $("lift-now");
+  const deltaEl = $("lift-delta");
+  if (!el) return;
+  if (!lift) {
+    el.textContent = "立柱高度 — 无状态";
+    if (deltaEl) deltaEl.textContent = "";
+    return;
+  }
+  const calib = lift.calib || {};
+  if (lift.available && lift.height_m != null) {
+    const live = lift.velocity_mps != null && Math.abs(lift.velocity_mps) > 0.001;
+    const parts = [
+      `${Number(lift.height_m).toFixed(4)} m`,
+      `${Number(lift.height_mm).toFixed(1)} mm`,
+    ];
+    if (lift.stroke_mm != null) parts.push(`行程 ${Number(lift.stroke_mm).toFixed(1)} mm`);
+    if (lift.joints) {
+      const mt = lift.joints.LZ_mt_Joint;
+      const it = lift.joints.LZ_it_Joint;
+      if (mt != null && it != null) {
+        parts.push(`LZ ${(Number(mt) * 1000).toFixed(0)}+${(Number(it) * 1000).toFixed(0)} mm`);
+      }
+    }
+    if (lift.velocity_mps != null) {
+      parts.push(`vz ${Number(lift.velocity_mms).toFixed(1)} mm/s${live ? " · 在动" : ""}`);
+    }
+    if (lift.age_s != null && Number.isFinite(lift.age_s)) {
+      parts.push(`龄 ${Number(lift.age_s).toFixed(2)} s`);
+    }
+    el.textContent = "立柱高度 " + parts.join(" · ");
+  } else {
+    el.textContent = `立柱高度 — 等待 ${lift.topic || "rt/hispeed_state"}`;
+  }
+  if (deltaEl) {
+    const zero = calib.height_zero_m;
+    const zeroTxt = zero != null
+      ? `当前零位 ${Number(zero).toFixed(4)} m（${Number(calib.height_zero_mm).toFixed(1)} mm）`
+      : "尚未标定零位";
+    deltaEl.textContent = `${zeroTxt}。降到机械最低后点「记为最低点」写入并应用到三维。`;
+  }
+}
+
+if ($("btn-lift-zero")) {
+  $("btn-lift-zero").onclick = async () => {
+    try {
+      const d = await post("/api/lift/set-zero", {});
+      if (!d.ok) { flash(d.error || "记最低点失败", false); return; }
+      if (d.lift) {
+        window.lastLift = d.lift;
+        renderLift(d.lift);
+      }
+      flash(d.message || "已记为最低点", true);
+      poll();
+    } catch (e) {
+      flash(String(e), false);
+    }
+  };
+}
+
 function setPill(ok, text, cls) {
   const el = $("pill");
   el.textContent = text;
@@ -143,7 +203,7 @@ function applyCtrl(ctrl) {
   const allow = !!ctrl.allow_real_motion;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "btn-waist-fill", "btn-waist-go", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use", "btn-he-run"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "btn-waist-fill", "btn-waist-go", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use", "btn-he-run"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
   const mirror = $("btn-poseset-mirror");
@@ -162,6 +222,13 @@ function applyCtrl(ctrl) {
   $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;
   const waistGo = $("btn-waist-go");
   if (waistGo) waistGo.disabled = !allow || !ctrl.engaged || !!ctrl.float;
+  // 立柱走 Agv 服务，不要求臂接管；停止按钮只读也可按
+  ["btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step"].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = !allow;
+  });
+  const liftStop = $("btn-lift-stop");
+  if (liftStop) liftStop.disabled = false;
   ["waist-yaw", "waist-pitch"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = !allow || !!ctrl.float;
@@ -214,11 +281,15 @@ async function poll() {
       for (const j of (arm && arm.joints) || []) joints[j.name] = j.q_rad;
     }
     Object.assign(joints, data.waist || {});
+    if (data.lift && data.lift.joints) Object.assign(joints, data.lift.joints);
     window.lastWaist = data.waist || {};
     renderWaist(data);
+    window.lastLift = data.lift || null;
+    renderLift(data.lift);
     renderTcp(data.tcp, { left: left && left.scene, right: right && right.scene });
     renderSpatial(data.spatial);
     renderBoard(data.board);
+    renderDetect(data.detect);
     if (data.runtime) renderRuntimeConfig(data.runtime);
     V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel };
     V3.draw();
@@ -813,14 +884,87 @@ $("btn-speed").onclick = async () => {
 function waistDeg(rad) {
   return Number.isFinite(rad) ? (rad * 180 / Math.PI).toFixed(2) + "°" : "—";
 }
+let liftSliderDragging = false;
 function renderWaist(data) {
   const note = $("waist-now");
   if (!note) return;
   const w = data.waist || {};
   const tgt = (data.ctrl && data.ctrl.waist_target_rad) || null;
-  let text = `实测 旋转 ${waistDeg(w.torso_Joint)} · 俯仰 ${waistDeg(w.Yaw_Joint)}`;
+  let text = `腰实测 旋转 ${waistDeg(w.torso_Joint)} · 俯仰 ${waistDeg(w.Yaw_Joint)}`;
   if (tgt) text += `　指令 旋转 ${waistDeg(Number(tgt["12"]))} · 俯仰 ${waistDeg(Number(tgt["14"]))}`;
   note.textContent = text;
+  renderLiftCtrl(data.lift);
+}
+function renderLiftCtrl(lift) {
+  const note = $("lift-ctrl-now");
+  if (!note) return;
+  if (!lift || !lift.available || lift.height_m == null) {
+    note.textContent = "立柱 — 等待高度";
+    return;
+  }
+  const ctrl = lift.ctrl || {};
+  const stroke = lift.stroke_mm != null ? Number(lift.stroke_mm) : null;
+  const maxMm = ctrl.stroke_max_mm != null ? Number(ctrl.stroke_max_mm) : 420;
+  const slider = $("lift-slider");
+  if (slider) {
+    slider.max = String(Math.round(maxMm));
+    if (!liftSliderDragging && stroke != null) {
+      slider.value = String(Math.round(Math.max(0, Math.min(maxMm, stroke))));
+    }
+  }
+  const targetEl = $("lift-target");
+  if (targetEl && !liftSliderDragging && document.activeElement !== targetEl && stroke != null) {
+    // 不覆盖用户正在编辑的目标；条形拖动时也不抢
+    if (!window.liftTargetDirty) targetEl.value = String(Math.round(stroke));
+  }
+  const parts = [
+    `行程 ${stroke != null ? stroke.toFixed(1) : "—"} mm`,
+    `高度 ${Number(lift.height_m).toFixed(4)} m`,
+  ];
+  if (ctrl.busy && ctrl.target_m != null) {
+    const zero = (lift.calib && lift.calib.height_zero_m != null)
+      ? Number(lift.calib.height_zero_m)
+      : (ctrl.zero_m != null ? Number(ctrl.zero_m) : null);
+    const tStroke = zero != null ? (Number(ctrl.target_m) - zero) * 1000 : null;
+    parts.push(`前往 ${tStroke != null ? tStroke.toFixed(1) : "—"} mm`);
+  }
+  if (ctrl.error) parts.push(ctrl.error);
+  note.textContent = "立柱 " + parts.join(" · ");
+}
+function liftStrokeFromUi() {
+  const n = parseFloat($("lift-target")?.value);
+  return Number.isFinite(n) ? n : parseFloat($("lift-slider")?.value);
+}
+function syncLiftTargetFromSlider() {
+  const sl = $("lift-slider");
+  const tg = $("lift-target");
+  if (sl && tg) tg.value = sl.value;
+  window.liftTargetDirty = true;
+}
+if ($("lift-slider")) {
+  $("lift-slider").addEventListener("pointerdown", () => { liftSliderDragging = true; });
+  $("lift-slider").addEventListener("pointerup", async () => {
+    syncLiftTargetFromSlider();
+    liftSliderDragging = false;
+    const mm = liftStrokeFromUi();
+    if (!Number.isFinite(mm)) return;
+    try {
+      const d = await post("/api/lift/goto", { stroke_mm: mm });
+      if (!d.ok) { flash(d.error || "立柱失败", false); return; }
+      flash(d.message || `立柱前往 ${mm} mm`, true);
+      window.liftTargetDirty = false;
+      poll();
+    } catch (e) { flash(String(e), false); }
+  });
+  $("lift-slider").addEventListener("input", syncLiftTargetFromSlider);
+}
+if ($("lift-target")) {
+  $("lift-target").addEventListener("input", () => {
+    window.liftTargetDirty = true;
+    const sl = $("lift-slider");
+    const v = parseFloat($("lift-target").value);
+    if (sl && Number.isFinite(v)) sl.value = String(Math.round(v));
+  });
 }
 $("btn-waist-fill").onclick = () => {
   const w = window.lastWaist || {};
@@ -831,6 +975,41 @@ $("btn-waist-fill").onclick = () => {
   $("waist-yaw").value = (w.torso_Joint * 180 / Math.PI).toFixed(2);
   $("waist-pitch").value = (w.Yaw_Joint * 180 / Math.PI).toFixed(2);
 };
+async function liftStep(sign) {
+  const step = parseFloat($("lift-step")?.value);
+  if (!Number.isFinite(step) || step <= 0) { flash("步长无效", false); return; }
+  try {
+    const d = await post("/api/lift/step", { delta_mm: sign * step });
+    if (!d.ok) { flash(d.error || "立柱步进失败", false); return; }
+    flash(d.message || "立柱步进", true);
+    window.liftTargetDirty = false;
+    poll();
+  } catch (e) { flash(String(e), false); }
+}
+if ($("btn-lift-up")) $("btn-lift-up").onclick = () => liftStep(1);
+if ($("btn-lift-down")) $("btn-lift-down").onclick = () => liftStep(-1);
+if ($("btn-lift-go")) {
+  $("btn-lift-go").onclick = async () => {
+    const mm = liftStrokeFromUi();
+    if (!Number.isFinite(mm)) { flash("目标行程无效", false); return; }
+    try {
+      const d = await post("/api/lift/goto", { stroke_mm: mm });
+      if (!d.ok) { flash(d.error || "立柱失败", false); return; }
+      flash(d.message || `立柱前往 ${mm} mm`, true);
+      window.liftTargetDirty = false;
+      poll();
+    } catch (e) { flash(String(e), false); }
+  };
+}
+if ($("btn-lift-stop")) {
+  $("btn-lift-stop").onclick = async () => {
+    try {
+      const d = await post("/api/lift/stop", {});
+      flash(d.ok ? "立柱已停" : (d.error || "停止失败"), !!d.ok);
+      poll();
+    } catch (e) { flash(String(e), false); }
+  };
+}
 function tcpOnWrist(tcp, arms) {
   const offset = tcp && tcp.result && tcp.result.tcp_m;
   const scene = tcp && tcp.arm === "left" ? arms && arms.left : arms && arms.right;
@@ -1408,25 +1587,199 @@ setInterval(async () => {
     camPreviewBusy = false;
   }
 }, 700);
+function syncRenderNote(extra) {
+  const el = $("render-note");
+  if (!el || !window.RobotView || !window.RobotView.cloudStatus) return;
+  const st = window.RobotView.cloudStatus();
+  const frame = st.frame === "scene" ? "场景" : "视觉";
+  const stack = st.accumulate ? "固定" : "单帧";
+  let text = `${frame} · ${stack} · ${st.layers} 层 · ${st.points} 点`;
+  if (st.hasCompare) text += " · 含调试层";
+  if (extra) text += ` · ${extra}`;
+  el.textContent = text;
+}
+
+function applyRenderControlsFromUi() {
+  if (!window.RobotView) return;
+  const frame = $("render-frame")?.value || "vision";
+  const stack = $("render-stack")?.value || "single";
+  if (window.RobotView.setCloudFrame) window.RobotView.setCloudFrame(frame);
+  if (window.RobotView.setCloudAccumulate) window.RobotView.setCloudAccumulate(stack === "fixed");
+  syncRenderNote();
+}
+
+if ($("render-frame")) {
+  $("render-frame").onchange = () => {
+    applyRenderControlsFromUi();
+    flash($("render-frame").value === "scene" ? "点云钉在场景" : "点云跟随躯干", true);
+  };
+}
+if ($("render-stack")) {
+  $("render-stack").onchange = () => {
+    applyRenderControlsFromUi();
+    flash($("render-stack").value === "fixed" ? "固定场景：匹配会叠加" : "单帧场景：匹配会替换", true);
+  };
+}
+if ($("btn-cloud-clear")) {
+  $("btn-cloud-clear").onclick = () => {
+    if (!window.RobotView || !window.RobotView.clearClouds) {
+      flash("三维还没准备好", false);
+      return;
+    }
+    window.RobotView.clearClouds();
+    syncRenderNote("已清除");
+    flash("点云已清除（棋盘/红黄点保留）", true);
+  };
+}
+if ($("btn-cloud-optimize")) {
+  $("btn-cloud-optimize").onclick = () => {
+    if (!window.RobotView || !window.RobotView.optimizeClouds) {
+      flash("三维还没准备好", false);
+      return;
+    }
+    const r = window.RobotView.optimizeClouds();
+    if (!r.ok) { flash(r.error || "优化失败", false); return; }
+    syncRenderNote(`滤除 ${r.dropped}，剩 ${r.kept}`);
+    flash(`点云优化：去掉 ${r.dropped} 个噪点，剩 ${r.kept}`, true);
+  };
+}
+window.addEventListener("robot-view-ready", () => {
+  applyRenderControlsFromUi();
+  syncRenderNote();
+});
+
 async function matchCloud(body, slot) {
   const msg = $("cam-match");
   if (msg) msg.textContent = slot === "compare" ? "正在用调试口的内外参匹配…" : "正在匹配…";
   try {
+    applyRenderControlsFromUi();
     const d = await post("/api/handeye/match", body);
     const img = $("cam-disp");
     if (img && d.disparity_jpeg) img.src = "data:image/jpeg;base64," + d.disparity_jpeg;
     const drawn = d.cloud && window.RobotView && window.RobotView.setCloud(d.cloud.xyz, d.cloud.rgb, slot);
     const dep = d.depth_m || {};
+    const st = window.RobotView && window.RobotView.cloudStatus ? window.RobotView.cloudStatus() : null;
     let text = `有效 ${d.valid} 点，画面上 ${d.saved} 点。深度中位 ${Number(dep.median).toFixed(2)} m。`
       + (drawn ? " 已画到中央模型上。" : " 三维画面还没准备好。");
+    if (st) {
+      text += st.accumulate ? ` 固定场景第 ${st.layers} 层。` : " 单帧已替换。";
+      text += st.frame === "scene" ? " 挂接：场景。" : " 挂接：视觉。";
+    }
     if (d.note) text += " " + d.note;
     if (msg) msg.textContent = text;
+    syncRenderNote(drawn ? "刚匹配" : null);
   } catch (e) {
     if (msg) msg.textContent = String(e);
   }
 }
 $("btn-cam-match").onclick = () => matchCloud({}, "main");
 $("btn-cam-match-debug").onclick = () => matchCloud({ source: "debug" }, "compare");
+if ($("btn-render-match")) $("btn-render-match").onclick = () => matchCloud({}, "main");
+
+function renderDetect(det) {
+  if (!det) return;
+  const left = det.left_xyz || null;
+  const right = det.right_xyz || null;
+  const center = det.center_xyz || null;
+  const key = [
+    det.phase || "",
+    left && left.length ? left.length + ":" + left[0] + ":" + left[left.length - 1] : "",
+    right && right.length ? right.length + ":" + right[0] + ":" + right[right.length - 1] : "",
+    center && center.length ? center.join(",") : "",
+  ].join("|");
+  if (key === window.detectPointKey) return;
+  if (window.RobotView && window.RobotView.setDetectPoints
+      && window.RobotView.setDetectPoints(left, right, center)) {
+    window.detectPointKey = key;
+  }
+}
+async function detectLocalize(path, body, busyText) {
+  const note = $("detect-note");
+  const btns = ["btn-detect-points", "btn-detect-calibrate", "btn-detect-center"]
+    .map((id) => $(id)).filter(Boolean);
+  if (note && busyText) note.textContent = busyText;
+  btns.forEach((b) => { b.disabled = true; });
+  try {
+    const d = await post(path, body || {});
+    renderDetect(d);
+    if (!d.ok) {
+      if (note) note.textContent = d.error || "失败";
+      flash(d.error || "失败", false);
+      return d;
+    }
+    if (note) note.textContent = d.message || d.phase || "完成";
+    flash(d.message || "完成", true);
+    return d;
+  } catch (e) {
+    if (note) note.textContent = String(e);
+    flash(String(e), false);
+    return null;
+  } finally {
+    btns.forEach((b) => { b.disabled = false; });
+  }
+}
+if ($("btn-detect-grab")) {
+  $("btn-detect-grab").onclick = async () => {
+    const note = $("detect-note");
+    const btn = $("btn-detect-grab");
+    const params = ($("detect-params")?.value || "").trim();
+    if (note) note.textContent = params ? `正在取图（${params}）…` : "正在从调试口取 YOLO 图…";
+    if (btn) btn.disabled = true;
+    try {
+      const body = {};
+      if (params) body.query = params;
+      const d = await post("/api/detect/grab", body);
+      if (!d.ok) {
+        if (note) note.textContent = d.error || "取图失败";
+        flash(d.error || "取图失败", false);
+        return;
+      }
+      const left = d.left || { image_jpeg: d.image_jpeg, mask_jpeg: d.mask_jpeg };
+      const right = d.right || {};
+      const setEye = (side, eye) => {
+        const base = $(`detect-${side}-base`);
+        const mask = $(`detect-${side}-mask`);
+        if (base && eye && eye.image_jpeg) base.src = "data:image/jpeg;base64," + eye.image_jpeg;
+        if (mask && eye && eye.mask_jpeg) mask.src = "data:image/jpeg;base64," + eye.mask_jpeg;
+      };
+      setEye("left", left);
+      setEye("right", right);
+      const eyes = $("detect-eyes");
+      if (eyes) eyes.hidden = false;
+      const parts = [];
+      if (d.requested_label) parts.push(`请求 ${d.requested_label}`);
+      if (d.display_name || d.label) parts.push(`选中 ${d.display_name || d.label}`);
+      if (d.confidence != null) parts.push(`置信度 ${Number(d.confidence).toFixed(3)}`);
+      if (d.class_id != null) parts.push(`class ${d.class_id}`);
+      if (d.pose_query) parts.push(`query ${d.pose_query}`);
+      parts.push("左右目 · 各 50% 叠显");
+      if (note) note.textContent = parts.join(" · ");
+      const mismatch = d.requested_label && d.label && String(d.requested_label) !== String(d.label);
+      flash(mismatch ? `已取左右图，但选中 ${d.label} ≠ 请求 ${d.requested_label}` : "已取左右 YOLO 图", !mismatch);
+    } catch (e) {
+      if (note) note.textContent = String(e);
+      flash(String(e), false);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  };
+}
+if ($("btn-detect-points")) {
+  $("btn-detect-points").onclick = async () => {
+    const params = ($("detect-params")?.value || "").trim();
+    const body = {};
+    if (params) body.query = params;
+    await detectLocalize("/api/detect/points", body, "点位获取中（YOLO 四边形 → 10×10 网格 → SGBM）…");
+  };
+}
+if ($("btn-detect-calibrate")) {
+  $("btn-detect-calibrate").onclick = () =>
+    detectLocalize("/api/detect/calibrate", {}, "校准中（贴平面）…");
+}
+if ($("btn-detect-center")) {
+  $("btn-detect-center").onclick = () =>
+    detectLocalize("/api/detect/center", {}, "提取中心点…");
+}
 $("btn-he-run").onclick = async () => {
   if (!posesetName()) { flash("先在姿态集里选一套已经记好的点", false); return; }
   const arm = window.currentSet && window.currentSet.arm;

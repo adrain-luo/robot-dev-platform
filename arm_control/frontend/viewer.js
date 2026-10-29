@@ -21,10 +21,58 @@ function skipLink(name) {
   return /dex1|hand_/i.test(name || "");
 }
 
+function denoisePoints(xyz, rgb01, { voxel = 0.018, minNeighbors = 6 } = {}) {
+  const n = Math.floor(xyz.length / 3);
+  if (n < 20) return { xyz, rgb: rgb01, kept: n, dropped: 0 };
+  const inv = 1 / voxel;
+  const bins = new Map();
+  for (let i = 0; i < n; i++) {
+    const ix = Math.floor(xyz[i * 3] * inv);
+    const iy = Math.floor(xyz[i * 3 + 1] * inv);
+    const iz = Math.floor(xyz[i * 3 + 2] * inv);
+    const k = `${ix},${iy},${iz}`;
+    let arr = bins.get(k);
+    if (!arr) { arr = []; bins.set(k, arr); }
+    arr.push(i);
+  }
+  const keep = [];
+  for (let i = 0; i < n; i++) {
+    const ix = Math.floor(xyz[i * 3] * inv);
+    const iy = Math.floor(xyz[i * 3 + 1] * inv);
+    const iz = Math.floor(xyz[i * 3 + 2] * inv);
+    let c = 0;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const arr = bins.get(`${ix + dx},${iy + dy},${iz + dz}`);
+          if (arr) c += arr.length;
+        }
+      }
+    }
+    if (c >= minNeighbors) keep.push(i);
+  }
+  if (keep.length === n) return { xyz, rgb: rgb01, kept: n, dropped: 0 };
+  const outX = new Float32Array(keep.length * 3);
+  const outC = new Float32Array(keep.length * 3);
+  for (let j = 0; j < keep.length; j++) {
+    const i = keep[j];
+    outX[j * 3] = xyz[i * 3];
+    outX[j * 3 + 1] = xyz[i * 3 + 1];
+    outX[j * 3 + 2] = xyz[i * 3 + 2];
+    outC[j * 3] = rgb01[i * 3];
+    outC[j * 3 + 1] = rgb01[i * 3 + 1];
+    outC[j * 3 + 2] = rgb01[i * 3 + 2];
+  }
+  return { xyz: outX, rgb: outC, kept: keep.length, dropped: n - keep.length };
+}
+
 const View = {
   ready: false,
   links: new Map(),
   motions: new Map(),
+  cloudFrame: "vision", // vision=跟躯干；scene=钉在世界
+  cloudAccumulate: false, // false=单帧；true=固定场景累加
+  cloudLayers: [],
   async attach(canvas) {
     if (this.canvas) return;
     this.canvas = canvas;
@@ -184,29 +232,162 @@ const View = {
     this.controls.update();
     this.render();
   },
+  _cloudParent() {
+    if (this.cloudFrame === "scene") return this.scene3;
+    return this.links.get("torso_link") || null;
+  },
+  _disposePoints(obj) {
+    if (!obj) return;
+    if (obj.parent) obj.parent.remove(obj);
+    obj.geometry?.dispose();
+    obj.material?.dispose();
+  },
+  _xyzToWorld(xyz, torso) {
+    torso.updateMatrixWorld(true);
+    const m = torso.matrixWorld;
+    const out = new Float32Array(xyz.length);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < xyz.length; i += 3) {
+      v.set(xyz[i], xyz[i + 1], xyz[i + 2]).applyMatrix4(m);
+      out[i] = v.x; out[i + 1] = v.y; out[i + 2] = v.z;
+    }
+    return out;
+  },
+  _xyzWorldToTorso(xyz, torso) {
+    torso.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(torso.matrixWorld).invert();
+    const out = new Float32Array(xyz.length);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < xyz.length; i += 3) {
+      v.set(xyz[i], xyz[i + 1], xyz[i + 2]).applyMatrix4(inv);
+      out[i] = v.x; out[i + 1] = v.y; out[i + 2] = v.z;
+    }
+    return out;
+  },
+  clearClouds({ keepCompare = false } = {}) {
+    for (const layer of this.cloudLayers) this._disposePoints(layer);
+    this.cloudLayers = [];
+    if (this.cloud) {
+      this._disposePoints(this.cloud);
+      this.cloud = null;
+    }
+    if (!keepCompare && this.cloudCompare) {
+      this._disposePoints(this.cloudCompare);
+      this.cloudCompare = null;
+    }
+    this.render();
+    return true;
+  },
+  setCloudFrame(frame) {
+    const next = frame === "scene" ? "scene" : "vision";
+    if (next === this.cloudFrame) return this.cloudStatus();
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso || !this.scene3) {
+      this.cloudFrame = next;
+      return this.cloudStatus();
+    }
+    const layers = [...this.cloudLayers];
+    if (this.cloudCompare) layers.push(this.cloudCompare);
+    for (const pts of layers) {
+      const pos = pts.geometry.getAttribute("position");
+      const arr = pos.array;
+      const wasScene = pts.userData.frame === "scene";
+      let nextArr;
+      if (next === "scene" && !wasScene) nextArr = this._xyzToWorld(arr, torso);
+      else if (next === "vision" && wasScene) nextArr = this._xyzWorldToTorso(arr, torso);
+      else continue;
+      pos.array.set(nextArr);
+      pos.needsUpdate = true;
+      pts.geometry.computeBoundingSphere();
+      pts.userData.frame = next;
+      if (pts.parent) pts.parent.remove(pts);
+      (next === "scene" ? this.scene3 : torso).add(pts);
+    }
+    this.cloudFrame = next;
+    this.render();
+    return this.cloudStatus();
+  },
+  setCloudAccumulate(on) {
+    this.cloudAccumulate = !!on;
+    return this.cloudStatus();
+  },
+  cloudStatus() {
+    let n = 0;
+    for (const layer of this.cloudLayers) {
+      const pos = layer.geometry?.getAttribute("position");
+      if (pos) n += pos.count;
+    }
+    if (this.cloudCompare) {
+      const pos = this.cloudCompare.geometry?.getAttribute("position");
+      if (pos) n += pos.count;
+    }
+    return {
+      frame: this.cloudFrame,
+      accumulate: this.cloudAccumulate,
+      layers: this.cloudLayers.length,
+      points: n,
+      hasCompare: !!this.cloudCompare,
+    };
+  },
   setCloud(xyz, rgb, slot) {
     const torso = this.links.get("torso_link");
-    if (!this.ready || !torso || !xyz || xyz.length < 3) return false;
-    const key = slot === "compare" ? "cloudCompare" : "cloud";
-    if (this[key]) {
-      torso.remove(this[key]);
-      this[key].geometry.dispose();
-      this[key].material.dispose();
+    if (!this.ready || !torso || !this.scene3 || !xyz || xyz.length < 3) return false;
+    const compare = slot === "compare";
+    if (compare) {
+      this._disposePoints(this.cloudCompare);
+      this.cloudCompare = null;
+    } else if (!this.cloudAccumulate) {
+      this.clearClouds({ keepCompare: true });
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(xyz, 3));
+
+    let positions = Float32Array.from(xyz);
     const colors = new Float32Array(rgb.length);
     for (let i = 0; i < rgb.length; i++) colors[i] = rgb[i] / 255;
+    const frame = this.cloudFrame;
+    if (frame === "scene") {
+      positions = this._xyzToWorld(positions, torso);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     const mat = new THREE.PointsMaterial({
-      size: slot === "compare" ? 2.6 : 2.2,
+      size: compare ? 2.6 : 2.2,
       vertexColors: true,
       sizeAttenuation: false,
     });
-    this[key] = new THREE.Points(geo, mat);
-    torso.add(this[key]);
+    const pts = new THREE.Points(geo, mat);
+    pts.userData.frame = frame;
+    pts.userData.slot = compare ? "compare" : "main";
+    (frame === "scene" ? this.scene3 : torso).add(pts);
+    if (compare) this.cloudCompare = pts;
+    else {
+      this.cloudLayers.push(pts);
+      this.cloud = pts; // 兼容旧引用：最近一层
+    }
     this.render();
     return true;
+  },
+  optimizeClouds() {
+    if (!this.ready) return { ok: false, error: "三维还没准备好" };
+    const targets = [...this.cloudLayers];
+    if (this.cloudCompare) targets.push(this.cloudCompare);
+    if (!targets.length) return { ok: false, error: "没有点云可优化" };
+    let kept = 0;
+    let dropped = 0;
+    for (const pts of targets) {
+      const pos = pts.geometry.getAttribute("position");
+      const col = pts.geometry.getAttribute("color");
+      if (!pos || !col) continue;
+      const out = denoisePoints(pos.array, col.array);
+      dropped += out.dropped;
+      kept += out.kept;
+      if (out.dropped <= 0) continue;
+      pts.geometry.setAttribute("position", new THREE.Float32BufferAttribute(out.xyz, 3));
+      pts.geometry.setAttribute("color", new THREE.Float32BufferAttribute(out.rgb, 3));
+      pts.geometry.computeBoundingSphere();
+    }
+    this.render();
+    return { ok: true, kept, dropped, ...this.cloudStatus() };
   },
   setFixedPoint(xyz) {
     const torso = this.links.get("torso_link");
@@ -286,6 +467,47 @@ const View = {
     head.position.set(xyz[0], xyz[1], xyz[2]);
     group.add(head);
     this.boardPoints = group;
+    torso.add(group);
+    this.render();
+    return true;
+  },
+  /** 识别定位：左红 / 右蓝 / 中心绿。传入 flat xyz 数组或 null 清除。 */
+  setDetectPoints(leftXyz, rightXyz, centerXyz) {
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso) return false;
+    if (this.detectPoints) {
+      torso.remove(this.detectPoints);
+      this.detectPoints.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+      });
+      this.detectPoints = null;
+    }
+    const hasL = leftXyz && leftXyz.length >= 3;
+    const hasR = rightXyz && rightXyz.length >= 3;
+    const hasC = centerXyz && centerXyz.length >= 3;
+    if (!hasL && !hasR && !hasC) {
+      this.render();
+      return true;
+    }
+    const group = new THREE.Group();
+    const addCloud = (xyz, color, size) => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(xyz, 3));
+      group.add(new THREE.Points(geo, new THREE.PointsMaterial({
+        color, size, sizeAttenuation: false,
+      })));
+    };
+    if (hasL) addCloud(leftXyz, 0xff2a2a, 6);
+    if (hasR) addCloud(rightXyz, 0x3b82f6, 6);
+    if (hasC) {
+      const geo = new THREE.SphereGeometry(0.014, 18, 14);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x22c55e, depthTest: true });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(centerXyz[0], centerXyz[1], centerXyz[2]);
+      group.add(mesh);
+    }
+    this.detectPoints = group;
     torso.add(group);
     this.render();
     return true;

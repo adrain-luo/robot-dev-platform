@@ -248,6 +248,8 @@ class HandEyeAPI:
             return self._delete_named(body)
         if path == "/api/handeye/match":
             return self._match(body)
+        if path == "/api/detect/grab":
+            return self._grab_detect(body)
         return None
 
     def preview_jpeg(self) -> Tuple[Optional[bytes], str]:
@@ -268,6 +270,163 @@ class HandEyeAPI:
         if not ok:
             return None, "编码预览失败"
         return buf.tobytes(), ""
+
+    def _debug_base(self, preferred: str = "") -> str:
+        """只解析主机，不请求 /debug（空参 /debug 会跑一次自动类别，冲掉 label）。"""
+        hosts: List[str] = []
+        raw = (preferred or "").strip().rstrip("/")
+        if raw:
+            hosts.append(raw.split("/debug")[0].split("/pose")[0])
+        for host in _DEBUG_HOSTS:
+            if host not in hosts:
+                hosts.append(host)
+        if not hosts:
+            raise RuntimeError("没有配置调试口地址")
+        return hosts[0]
+
+    def _parse_pose_extra(self, body: Dict[str, Any]) -> Dict[str, str]:
+        """从前端 body 解析要传给 /pose 的 query。"""
+        from urllib.parse import parse_qsl, urlsplit
+
+        extra: Dict[str, str] = {}
+        raw_params = body.get("params")
+        if isinstance(raw_params, dict):
+            for k, v in raw_params.items():
+                if v is None:
+                    continue
+                extra[str(k)] = str(v)
+        qtext = str(body.get("query") or body.get("params_text") or "").strip()
+        if qtext.startswith("?"):
+            qtext = qtext[1:]
+        if qtext.startswith("/pose?"):
+            qtext = qtext[len("/pose?") :]
+        if qtext.startswith("http://") or qtext.startswith("https://"):
+            qtext = urlsplit(qtext).query
+        if not qtext:
+            return extra
+        if qtext.startswith("{"):
+            try:
+                obj = json.loads(qtext)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"参数 JSON 无效：{exc}") from exc
+            if not isinstance(obj, dict):
+                raise ValueError("params JSON 必须是对象")
+            for k, v in obj.items():
+                if v is None:
+                    continue
+                extra[str(k)] = str(v)
+            return extra
+        for k, v in parse_qsl(qtext, keep_blank_values=True):
+            extra[str(k)] = str(v)
+        return extra
+
+    def _pose_url_with_params(self, base: str, body: Dict[str, Any]) -> Tuple[str, str]:
+        """只拼用户参数 + 新 t，不合并调试页旧 query（避免空参 /debug 的自动结果）。"""
+        from urllib.parse import urlencode, urlsplit, urlunsplit
+
+        extra = self._parse_pose_extra(body)
+        query = dict(extra)
+        query["t"] = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        # 用户若写了 t 则保留用户的
+        if "t" in extra:
+            query["t"] = extra["t"]
+        new_query = urlencode(list(query.items()))
+        base_parts = urlsplit(base)
+        pose_url = urlunsplit((base_parts.scheme, base_parts.netloc, "/pose", new_query, ""))
+        return pose_url, new_query
+
+    def _grab_detect(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """从调试口取左右目原图 + YOLO 掩膜标注图，供前端半透明叠显。"""
+        import base64
+        import time as _time
+
+        try:
+            base = self._debug_base(str(body.get("url") or ""))
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+        overlay = str(body.get("overlay") or "points").strip().lower()
+        if overlay not in ("points", "candidates"):
+            overlay = "points"
+        ov_suffix = "points.jpg" if overlay == "points" else "candidates.jpg"
+        stamp = _time.time_ns()
+        pose: Dict[str, Any] = {}
+        pose_query = ""
+        try:
+            pose_url, pose_query = self._pose_url_with_params(base, body)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        try:
+            # 只打 /pose?label=...，不要先打空参 /debug
+            got = _http_json(pose_url, 25)
+            if isinstance(got, dict):
+                pose = got
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"调试口 /pose 失败：{exc.__class__.__name__}: {exc}",
+                "pose_url": pose_url,
+                "pose_query": pose_query,
+            }
+
+        def _jpeg(path: str) -> Tuple[Optional[bytes], str]:
+            try:
+                data = _http_body(f"{base}/latest/{path}?t={stamp}", 12)
+            except Exception as exc:
+                return None, f"{path}: {exc.__class__.__name__}: {exc}"
+            if not data or data[:2] != b"\xff\xd8":
+                return None, f"{path} 不是 JPEG"
+            return data, ""
+
+        left_raw, err = _jpeg("left_input.jpg")
+        if left_raw is None:
+            return {"ok": False, "error": f"左目原图失败：{err}"}
+        left_mask, err = _jpeg(f"left_{ov_suffix}")
+        if left_mask is None:
+            return {"ok": False, "error": f"左目掩膜图失败：{err}"}
+        right_raw, right_raw_err = _jpeg("right_input.jpg")
+        right_mask, right_mask_err = _jpeg(f"right_{ov_suffix}")
+        if right_raw is None or right_mask is None:
+            return {
+                "ok": False,
+                "error": "右目图失败：" + "；".join(x for x in (right_raw_err, right_mask_err) if x),
+            }
+
+        def _b64(data: bytes) -> str:
+            return base64.b64encode(data).decode("ascii")
+
+        yolo = ((pose.get("g1d_visualization") or {}).get("yolo") or {}) if pose else {}
+        requested = pose.get("requested_yolo_label")
+        label = pose.get("selected_yolo_label") or yolo.get("label")
+        name = yolo.get("display_name") or label
+        conf = pose.get("selected_yolo_confidence")
+        if conf is None:
+            conf = yolo.get("confidence")
+        note = "左右目各：原图 + YOLO 掩膜，前端 50% 叠显。"
+        if requested not in (None, "") and label not in (None, "") and str(requested) != str(label):
+            note += f" 请求 label={requested}，实际选中 {label}。"
+        if pose.get("ok") is False and pose.get("error"):
+            note += f" 姿态接口：{pose.get('error')}。"
+        left = {"image_jpeg": _b64(left_raw), "mask_jpeg": _b64(left_mask)}
+        right = {"image_jpeg": _b64(right_raw), "mask_jpeg": _b64(right_mask)}
+        return {
+            "ok": True,
+            "host": base,
+            "pose_url": pose_url,
+            "pose_query": pose_query,
+            "overlay": overlay,
+            "requested_label": requested,
+            "label": label,
+            "display_name": name,
+            "confidence": None if conf is None else float(conf),
+            "class_id": pose.get("selected_yolo_class_id") if pose else yolo.get("class_id"),
+            "left": left,
+            "right": right,
+            # 兼容旧前端字段（等同左目）
+            "image_jpeg": left["image_jpeg"],
+            "mask_jpeg": left["mask_jpeg"],
+            "pose_ok": bool(pose.get("ok")) if pose else None,
+            "note": note,
+        }
 
     def _match(self, body: Dict[str, Any]) -> Dict[str, Any]:
         import base64
