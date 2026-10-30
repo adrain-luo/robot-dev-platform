@@ -77,17 +77,33 @@ function fmt(v, n = 2) {
   return Number(v).toFixed(n);
 }
 
-function renderTable(snap) {
-  const tb = $("joints-table").querySelector("tbody");
-  tb.innerHTML = "";
-  if (!snap) return;
-  for (const j of snap.joints) {
+function appendJointRows(tb, joints, { section } = {}) {
+  if (section) {
+    const hr = document.createElement("tr");
+    hr.className = "j-section";
+    hr.innerHTML = `<td colspan="5" class="j-sub">${section}</td>`;
+    tb.appendChild(hr);
+  }
+  for (const j of joints || []) {
     const tr = document.createElement("tr");
     const live = Math.abs(j.dq) > 0.02;
-    tr.innerHTML = `<td class="j-name">${j.label}</td><td class="j-q">${fmt(j.q_deg)}°</td>` +
+    tr.innerHTML =
+      `<td class="j-name">${j.label}</td>` +
+      `<td class="j-q">${fmt(j.q_deg)}°</td>` +
       `<td class="j-sub">电机 ${j.motor}</td>` +
-      `<td class="j-sub ${live ? "dq-live" : ""}">dq ${fmt(j.dq, 3)}</td><td class="j-sub">τ ${fmt(j.tau_est)}</td>`;
+      `<td class="j-sub ${live ? "dq-live" : ""}">dq ${fmt(j.dq, 3)}</td>` +
+      `<td class="j-sub">τ ${fmt(j.tau_est)}</td>`;
     tb.appendChild(tr);
+  }
+}
+function renderTable(snap, waist) {
+  const tb = $("joints-table").querySelector("tbody");
+  tb.innerHTML = "";
+  if (snap && snap.joints && snap.joints.length) {
+    appendJointRows(tb, snap.joints, { section: `臂 · ${snap.arm || ""}` });
+  }
+  if (waist && waist.joints && waist.joints.length) {
+    appendJointRows(tb, waist.joints, { section: "腰 · 12 旋转 / 14 俯仰" });
   }
 }
 
@@ -203,7 +219,7 @@ function applyCtrl(ctrl) {
   const allow = !!ctrl.allow_real_motion;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "btn-waist-fill", "btn-waist-go", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use", "btn-he-run"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use", "btn-he-run"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
   const mirror = $("btn-poseset-mirror");
@@ -220,8 +236,14 @@ function applyCtrl(ctrl) {
     : "只读（加 --allow-real-motion 后可接管）";
   document.querySelectorAll(".g-q").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
   $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;
-  const waistGo = $("btn-waist-go");
-  if (waistGo) waistGo.disabled = !allow || !ctrl.engaged || !!ctrl.float;
+  const waistNeed = !allow || !ctrl.engaged || !!ctrl.float;
+  ["btn-waist-go", "btn-waist-fill", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p",
+   "waist-yaw", "waist-pitch", "waist-step", "waist-yaw-slider", "waist-pitch-slider"].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = waistNeed;
+  });
+  const waistStop = $("btn-waist-stop");
+  if (waistStop) waistStop.disabled = !allow || !ctrl.engaged;
   // 立柱走 Agv 服务，不要求臂接管；停止按钮只读也可按
   ["btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step"].forEach((id) => {
     const el = $(id);
@@ -229,10 +251,6 @@ function applyCtrl(ctrl) {
   });
   const liftStop = $("btn-lift-stop");
   if (liftStop) liftStop.disabled = false;
-  ["waist-yaw", "waist-pitch"].forEach((id) => {
-    const el = $(id);
-    if (el) el.disabled = !allow || !!ctrl.float;
-  });
   const sp = $("speed");
   if (ctrl.max_speed_rad_s != null && document.activeElement !== sp && !window.speedDirty) {
     const v = Number(ctrl.max_speed_rad_s);
@@ -296,7 +314,7 @@ async function poll() {
     const view = $("arm-select").value;
     const ctrlArm = data.ctrl?.arm || "right";
     const tableArm = view === "left" ? left : view === "right" ? right : (ctrlArm === "left" ? left : right);
-    renderTable(tableArm);
+    renderTable(tableArm, data.waist);
   } catch (e) {
     flash(String(e), false);
     setPill(false, "服务断开");
@@ -885,14 +903,29 @@ function waistDeg(rad) {
   return Number.isFinite(rad) ? (rad * 180 / Math.PI).toFixed(2) + "°" : "—";
 }
 let liftSliderDragging = false;
+let waistSliderDragging = false;
 function renderWaist(data) {
   const note = $("waist-now");
   if (!note) return;
   const w = data.waist || {};
   const tgt = (data.ctrl && data.ctrl.waist_target_rad) || null;
-  let text = `腰实测 旋转 ${waistDeg(w.torso_Joint)} · 俯仰 ${waistDeg(w.Yaw_Joint)}`;
+  const yawRad = w.torso_Joint;
+  const pitchRad = w.Yaw_Joint;
+  let text = `腰实测 旋转 ${waistDeg(yawRad)}（电机12） · 俯仰 ${waistDeg(pitchRad)}（电机14）`;
   if (tgt) text += `　指令 旋转 ${waistDeg(Number(tgt["12"]))} · 俯仰 ${waistDeg(Number(tgt["14"]))}`;
   note.textContent = text;
+  if (!waistSliderDragging && !window.waistTargetDirty) {
+    const yawDeg = Number.isFinite(yawRad) ? yawRad * 180 / Math.PI : null;
+    const pitchDeg = Number.isFinite(pitchRad) ? pitchRad * 180 / Math.PI : null;
+    if (yawDeg != null) {
+      if ($("waist-yaw") && document.activeElement !== $("waist-yaw")) $("waist-yaw").value = yawDeg.toFixed(1);
+      if ($("waist-yaw-slider")) $("waist-yaw-slider").value = String(yawDeg);
+    }
+    if (pitchDeg != null) {
+      if ($("waist-pitch") && document.activeElement !== $("waist-pitch")) $("waist-pitch").value = pitchDeg.toFixed(1);
+      if ($("waist-pitch-slider")) $("waist-pitch-slider").value = String(pitchDeg);
+    }
+  }
   renderLiftCtrl(data.lift);
 }
 function renderLiftCtrl(lift) {
@@ -966,6 +999,59 @@ if ($("lift-target")) {
     if (sl && Number.isFinite(v)) sl.value = String(Math.round(v));
   });
 }
+function syncWaistTargetFromSliders() {
+  if ($("waist-yaw-slider") && $("waist-yaw")) $("waist-yaw").value = $("waist-yaw-slider").value;
+  if ($("waist-pitch-slider") && $("waist-pitch")) $("waist-pitch").value = $("waist-pitch-slider").value;
+  window.waistTargetDirty = true;
+}
+function syncWaistSlidersFromInputs() {
+  const y = parseFloat($("waist-yaw")?.value);
+  const p = parseFloat($("waist-pitch")?.value);
+  if ($("waist-yaw-slider") && Number.isFinite(y)) $("waist-yaw-slider").value = String(y);
+  if ($("waist-pitch-slider") && Number.isFinite(p)) $("waist-pitch-slider").value = String(p);
+  window.waistTargetDirty = true;
+}
+async function waistGotoFromUi(confirmGo) {
+  const yaw = parseFloat($("waist-yaw")?.value);
+  const pitch = parseFloat($("waist-pitch")?.value);
+  if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) { flash("腰目标无效", false); return; }
+  if (confirmGo && !confirm(`腰将限速转到旋转 ${yaw}°、俯仰 ${pitch}°。扶住、守急停。继续？`)) return;
+  try {
+    await post("/api/waist", { yaw_deg: yaw, pitch_deg: pitch });
+    flash(`腰前往 旋转 ${yaw}° · 俯仰 ${pitch}°`, true);
+    window.waistTargetDirty = false;
+    poll();
+  } catch (e) { flash(String(e), false); }
+}
+async function waistStep(axis, sign) {
+  const step = parseFloat($("waist-step")?.value);
+  if (!Number.isFinite(step) || step <= 0) { flash("腰步长无效", false); return; }
+  const body = axis === "yaw"
+    ? { delta_yaw_deg: sign * step }
+    : { delta_pitch_deg: sign * step };
+  try {
+    await post("/api/waist/step", body);
+    flash(`腰${axis === "yaw" ? "旋转" : "俯仰"}${sign > 0 ? "+" : "−"}${step}°`, true);
+    window.waistTargetDirty = false;
+    poll();
+  } catch (e) { flash(String(e), false); }
+}
+["waist-yaw-slider", "waist-pitch-slider"].forEach((id) => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener("pointerdown", () => { waistSliderDragging = true; });
+  el.addEventListener("input", syncWaistTargetFromSliders);
+  el.addEventListener("pointerup", async () => {
+    syncWaistTargetFromSliders();
+    waistSliderDragging = false;
+    await waistGotoFromUi(false);
+  });
+});
+["waist-yaw", "waist-pitch"].forEach((id) => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener("input", syncWaistSlidersFromInputs);
+});
 $("btn-waist-fill").onclick = () => {
   const w = window.lastWaist || {};
   if (!Number.isFinite(w.torso_Joint) || !Number.isFinite(w.Yaw_Joint)) {
@@ -974,7 +1060,23 @@ $("btn-waist-fill").onclick = () => {
   }
   $("waist-yaw").value = (w.torso_Joint * 180 / Math.PI).toFixed(2);
   $("waist-pitch").value = (w.Yaw_Joint * 180 / Math.PI).toFixed(2);
+  syncWaistSlidersFromInputs();
+  window.waistTargetDirty = true;
 };
+if ($("btn-waist-yaw-m")) $("btn-waist-yaw-m").onclick = () => waistStep("yaw", -1);
+if ($("btn-waist-yaw-p")) $("btn-waist-yaw-p").onclick = () => waistStep("yaw", 1);
+if ($("btn-waist-pitch-m")) $("btn-waist-pitch-m").onclick = () => waistStep("pitch", -1);
+if ($("btn-waist-pitch-p")) $("btn-waist-pitch-p").onclick = () => waistStep("pitch", 1);
+if ($("btn-waist-stop")) {
+  $("btn-waist-stop").onclick = async () => {
+    try {
+      await post("/api/waist/stop", {});
+      flash("腰已停在当前角", true);
+      window.waistTargetDirty = false;
+      poll();
+    } catch (e) { flash(String(e), false); }
+  };
+}
 async function liftStep(sign) {
   const step = parseFloat($("lift-step")?.value);
   if (!Number.isFinite(step) || step <= 0) { flash("步长无效", false); return; }
@@ -1283,14 +1385,7 @@ $("btn-cfg-unlock").onclick = async () => {
   catch (e) { flash(String(e), false); }
 };
 
-$("btn-waist-go").onclick = async () => {
-  const yaw = parseFloat($("waist-yaw").value);
-  const pitch = parseFloat($("waist-pitch").value);
-  if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) { flash("填旋转和俯仰", false); return; }
-  if (!confirm(`腰将限速转到旋转 ${yaw}°、俯仰 ${pitch}°。扶住、守急停。继续？`)) return;
-  try { await post("/api/waist", { yaw_deg: yaw, pitch_deg: pitch }); flash("腰已设目标", true); }
-  catch (e) { flash(String(e), false); }
-};
+$("btn-waist-go").onclick = () => waistGotoFromUi(true);
 $("btn-goto").onclick = async () => {
   const q = [...document.querySelectorAll(".g-q")].map((el) => parseFloat(el.value));
   if (q.some((x) => !Number.isFinite(x))) { flash("目标角不完整", false); return; }

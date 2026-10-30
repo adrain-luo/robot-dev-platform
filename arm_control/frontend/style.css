@@ -470,6 +470,13 @@ input[type="range"] {
   display: flex; flex-direction: column; gap: 1px;
   padding: 8px 10px; border-radius: 12px; background: rgba(255,255,255,.72);
 }
+#joints-table tr.j-section {
+  grid-column: 1 / -1;
+  padding: 4px 2px 0;
+  background: transparent;
+  border-radius: 0;
+}
+#joints-table tr.j-section td { font-size: 12px; font-weight: 600; color: var(--muted); }
 #joints-table td { border: 0; padding: 0; }
 #joints-table .j-name, #joints-table .j-sub { font-size: 11px; color: var(--muted); }
 #joints-table .j-q { font: 600 18px/1.15 ui-monospace, monospace; }

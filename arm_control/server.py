@@ -43,8 +43,11 @@ from model.fk_scene import RobotKinematics
 from model.layout import (
     ARMS,
     WAIST_PITCH_JOINT,
+    WAIST_PITCH_LIMIT_RAD,
     WAIST_PITCH_MOTOR_INDEX,
+    WAIST_READ_MOTORS,
     WAIST_YAW_JOINT,
+    WAIST_YAW_LIMIT_RAD,
     WAIST_YAW_MOTOR_INDEX,
     LIFT_JOINT_CANDIDATES,
     LIFT_TOPIC,
@@ -378,12 +381,40 @@ class App:
         waist = {}
         lift = {}
         try:
-            q = self.reader().read_motors(
-                (WAIST_YAW_MOTOR_INDEX, WAIST_PITCH_MOTOR_INDEX)
-            )
+            st_w = self.reader().read_motor_states(WAIST_READ_MOTORS)
+            yaw = st_w[WAIST_YAW_MOTOR_INDEX]
+            pitch = st_w[WAIST_PITCH_MOTOR_INDEX]
+            def _tau(v: float):
+                return None if v != v else float(v)  # NaN → None
             waist = {
-                WAIST_YAW_JOINT: q[WAIST_YAW_MOTOR_INDEX],
-                WAIST_PITCH_JOINT: q[WAIST_PITCH_MOTOR_INDEX],
+                WAIST_YAW_JOINT: yaw["q"],
+                WAIST_PITCH_JOINT: pitch["q"],
+                "yaw_deg": math.degrees(yaw["q"]),
+                "pitch_deg": math.degrees(pitch["q"]),
+                "limits_deg": {
+                    "yaw": [math.degrees(WAIST_YAW_LIMIT_RAD[0]), math.degrees(WAIST_YAW_LIMIT_RAD[1])],
+                    "pitch": [math.degrees(WAIST_PITCH_LIMIT_RAD[0]), math.degrees(WAIST_PITCH_LIMIT_RAD[1])],
+                },
+                "joints": [
+                    {
+                        "name": WAIST_YAW_JOINT,
+                        "label": "waist_yaw",
+                        "motor": WAIST_YAW_MOTOR_INDEX,
+                        "q_rad": yaw["q"],
+                        "q_deg": math.degrees(yaw["q"]),
+                        "dq": yaw["dq"],
+                        "tau_est": _tau(yaw["tau_est"]),
+                    },
+                    {
+                        "name": WAIST_PITCH_JOINT,
+                        "label": "waist_pitch",
+                        "motor": WAIST_PITCH_MOTOR_INDEX,
+                        "q_rad": pitch["q"],
+                        "q_deg": math.degrees(pitch["q"]),
+                        "dq": pitch["dq"],
+                        "tau_est": _tau(pitch["tau_est"]),
+                    },
+                ],
             }
         except Exception:
             waist = {}
@@ -810,6 +841,21 @@ class Handler(BaseHTTPRequestHandler):
                     None if yaw in (None, "") else math.radians(float(yaw)),
                     None if pitch in (None, "") else math.radians(float(pitch)),
                 )
+            elif path == "/api/waist/step":
+                # 相对当前目标（或实测）步进；与立柱 step 同思路
+                st_w = APP.reader().read_motor_states(WAIST_READ_MOTORS)
+                cur_yaw = st_w[WAIST_YAW_MOTOR_INDEX]["q"]
+                cur_pitch = st_w[WAIST_PITCH_MOTOR_INDEX]["q"]
+                tgt = (APP.ctrl_status() or {}).get("waist_target_rad") or {}
+                base_yaw = float(tgt.get(str(WAIST_YAW_MOTOR_INDEX), cur_yaw))
+                base_pitch = float(tgt.get(str(WAIST_PITCH_MOTOR_INDEX), cur_pitch))
+                dy = body.get("delta_yaw_deg")
+                dp = body.get("delta_pitch_deg")
+                new_yaw = base_yaw if dy in (None, "") else base_yaw + math.radians(float(dy))
+                new_pitch = base_pitch if dp in (None, "") else base_pitch + math.radians(float(dp))
+                loop.set_waist(new_yaw, new_pitch)
+            elif path == "/api/waist/stop":
+                loop.hold_waist()
             elif path == "/api/control-arm":
                 loop.set_arm(str(body["arm"]))
                 APP.payload.restore(loop)

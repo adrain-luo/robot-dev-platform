@@ -209,6 +209,15 @@ class ArmLoop:
             if pitch_rad is not None:
                 self._waist_target[WAIST_PITCH_MOTOR_INDEX] = _clamp_span(float(pitch_rad), WAIST_PITCH_LIMIT_RAD)
 
+    def hold_waist(self) -> None:
+        """停在当前实测角（取消未走完的腰目标）。"""
+        waist_now = self._read_waist()
+        with self._lock:
+            if not self._engaged or self._waist_target is None:
+                raise PermissionErrorMotion("先接管再停腰")
+            self._waist_cmd = waist_now
+            self._waist_target = dict(waist_now)
+
     def enable_teach(self) -> None:
         with self._lock:
             if not self._engaged:

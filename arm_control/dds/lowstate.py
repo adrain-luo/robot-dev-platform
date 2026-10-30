@@ -109,3 +109,21 @@ class LowStateReader:
         if msg is None:
             raise RuntimeError("lowstate message missing after wait")
         return {int(i): float(msg.motor_state[int(i)].q) for i in motor_indices}
+
+    def read_motor_states(self, motor_indices: Sequence[int]) -> Dict[int, Dict[str, float]]:
+        """返回 {idx: {q, dq, tau_est}}；tau_est 缺失时为 nan。"""
+        self.wait_for_message(timeout_s=self._timeout_s)
+        with self._lock:
+            msg = self._msg
+        if msg is None:
+            raise RuntimeError("lowstate message missing after wait")
+        out: Dict[int, Dict[str, float]] = {}
+        for i in motor_indices:
+            ms = msg.motor_state[int(i)]
+            tau = getattr(ms, "tau_est", None)
+            out[int(i)] = {
+                "q": float(ms.q),
+                "dq": float(ms.dq),
+                "tau_est": float("nan") if tau is None else float(tau),
+            }
+        return out

@@ -368,27 +368,56 @@ class HandEyeAPI:
                 "pose_query": pose_query,
             }
 
-        def _jpeg(path: str) -> Tuple[Optional[bytes], str]:
-            try:
-                data = _http_body(f"{base}/latest/{path}?t={stamp}", 12)
-            except Exception as exc:
-                return None, f"{path}: {exc.__class__.__name__}: {exc}"
-            if not data or data[:2] != b"\xff\xd8":
-                return None, f"{path} 不是 JPEG"
-            return data, ""
+        def _explain_non_jpeg(data: bytes, tried: str) -> str:
+            text = (data or b"")[:400].decode("utf-8", errors="replace").strip()
+            if text.startswith("{"):
+                try:
+                    obj = json.loads(text)
+                    err = obj.get("error") or obj.get("error_code") or text
+                    return f"{tried} → {err}"
+                except Exception:
+                    pass
+            if not data:
+                return f"{tried} 空响应"
+            return f"{tried} 不是 JPEG（{text[:120] or data[:12]!r}）"
+
+        def _jpeg(name: str) -> Tuple[Optional[bytes], str]:
+            """叠图优先 /latest；没有则走 /debug/<name>?参数（会按参数重跑一帧）。
+
+            注意：没有 /debug/latest/... 这种路径。
+            """
+            q = pose_query or f"t={stamp}"
+            if "t=" not in q:
+                q = f"{q}&t={stamp}"
+            urls = [
+                f"{base}/latest/{name}?t={stamp}",
+                f"{base}/debug/{name}?{q}",
+            ]
+            errors: List[str] = []
+            for url in urls:
+                try:
+                    data = _http_body(url, 20)
+                except Exception as exc:
+                    errors.append(f"{url}: {exc.__class__.__name__}: {exc}")
+                    continue
+                if data and data[:2] == b"\xff\xd8":
+                    return data, ""
+                errors.append(_explain_non_jpeg(data or b"", url.replace(base, "")))
+            return None, "；".join(errors)
 
         left_raw, err = _jpeg("left_input.jpg")
         if left_raw is None:
-            return {"ok": False, "error": f"左目原图失败：{err}"}
+            return {"ok": False, "error": f"左目原图失败：{err}", "pose_query": pose_query}
         left_mask, err = _jpeg(f"left_{ov_suffix}")
         if left_mask is None:
-            return {"ok": False, "error": f"左目掩膜图失败：{err}"}
+            return {"ok": False, "error": f"左目掩膜图失败：{err}", "pose_query": pose_query}
         right_raw, right_raw_err = _jpeg("right_input.jpg")
         right_mask, right_mask_err = _jpeg(f"right_{ov_suffix}")
         if right_raw is None or right_mask is None:
             return {
                 "ok": False,
                 "error": "右目图失败：" + "；".join(x for x in (right_raw_err, right_mask_err) if x),
+                "pose_query": pose_query,
             }
 
         def _b64(data: bytes) -> str:

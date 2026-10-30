@@ -431,7 +431,7 @@
           <article class="float" id="panel-joints">
             <button type="button" class="float-toggle">关节</button>
             <div class="float-body">
-              <p class="note">视图所选；双臂时显示控制臂</p>
+              <p class="note">臂：视图所选（双臂时显示控制臂）。腰：电机 12 旋转 / 14 俯仰（官方 G1D 表）。</p>
               <div class="table-scroll">
                 <table id="joints-table">
                   <thead>
@@ -451,19 +451,33 @@
           <article class="float" id="panel-waist">
             <button type="button" class="float-toggle">躯体控制</button>
             <div class="float-body">
-              <p class="note">腰：接管后停在当前角，和手臂共用限速。旋转 ±155°，俯仰 -2.5° 到 135°。</p>
+              <p class="note">腰：接管后与手臂共用限速。电机 12 旋转 ±155°，电机 14 俯仰 -2.5°～135°。条形拖到目标松手后走。</p>
+              <p class="note" id="waist-now">腰 —</p>
+              <label class="field grow">旋转 °
+                <input id="waist-yaw-slider" type="range" min="-155" max="155" step="0.5" value="0">
+              </label>
+              <label class="field grow">俯仰 °
+                <input id="waist-pitch-slider" type="range" min="-2.5" max="135" step="0.5" value="0">
+              </label>
               <div class="fields">
-                <label class="field">旋转 °
+                <label class="field">旋转目标 °
                   <input id="waist-yaw" type="number" step="0.5" min="-155" max="155" value="0">
                 </label>
-                <label class="field">俯仰 °
+                <label class="field">俯仰目标 °
                   <input id="waist-pitch" type="number" step="0.5" min="-2.5" max="135" value="0">
                 </label>
+                <label class="field">步长 °
+                  <input id="waist-step" type="number" step="0.5" min="0.5" max="30" value="5">
+                </label>
               </div>
-              <p class="note" id="waist-now">腰实测 —</p>
               <div class="cmds">
                 <button id="btn-waist-fill" type="button">填入当前角</button>
-                <button id="btn-waist-go" class="primary" type="button">腰出发</button>
+                <button id="btn-waist-yaw-m" type="button">旋转−</button>
+                <button id="btn-waist-yaw-p" type="button">旋转+</button>
+                <button id="btn-waist-pitch-m" type="button">俯仰−</button>
+                <button id="btn-waist-pitch-p" type="button">俯仰+</button>
+                <button id="btn-waist-go" class="primary" type="button">到目标</button>
+                <button id="btn-waist-stop" class="danger" type="button">停止腰</button>
               </div>
               <p class="note" style="margin-top:12px">立柱：用 Agv HeightAdjust 闭环到行程。条形拖到目标松手后走；也可按步长升/降一步。</p>
               <p class="note" id="lift-ctrl-now">立柱 —</p>

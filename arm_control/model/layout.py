@@ -68,17 +68,19 @@ LEFT = ArmLayout(
 
 ARMS: Dict[str, ArmLayout] = {"right": RIGHT, "left": LEFT}
 
-WAIST_YAW_JOINT = "torso_Joint"
+# 官方 G1D 关节表（LowState/LowCmd motor_state 下标）：
+#   12 = WAIST_YAW，13 = 无效（WaistRoll，G1D 不响应），14 = WAIST_PITCH（mode_pr==1 时称 WAIST_B）
+# 见 https://support.unitree.com/home/zh/G1D_Developer/joint%20control
+WAIST_YAW_JOINT = "torso_Joint"  # URDF：左右转（yaw）
 WAIST_YAW_MOTOR_INDEX = 12
-WAIST_YAW_LIMIT_RAD = (-2.7053, 2.7053)
-# URDF 里名叫 Yaw_Joint，轴是 Y，实际是前后倾。电机 14 没有母线电压和温度，角度恒为 0。
+WAIST_YAW_LIMIT_RAD = (-2.7053, 2.7053)  # ≈ ±155°
+# URDF 名叫 Yaw_Joint，轴是 Y，实际是前后俯仰（pitch），对应电机 14
 WAIST_PITCH_JOINT = "Yaw_Joint"
 WAIST_PITCH_MOTOR_INDEX = 14
-WAIST_PITCH_LIMIT_RAD = (-0.04363, 2.3562)
-# G1 29-DoF 腰组：生产 HAL 在纯臂模式会一起写 12/13/14。13 在标准 G1 是腰 roll；
-# 这份 G1D URDF 没有 roll 活动关节，但有 LZ_* 升降棱柱。高度不在 rt/lowstate，
-# 官方走 AgvClient.HeightAdjust + 订阅 rt/hispeed_state（Point32.y 高度 / .z 速度）。
+WAIST_PITCH_LIMIT_RAD = (-0.04363, 2.3562)  # ≈ -2.5° … 135°
+# 生产 HAL 纯臂模式常连写 12/13/14；13 在 G1D 无效，仍跟写以免 HAL 侧漂移。
 WAIST_MOTOR_INDICES = (12, 13, 14)
+WAIST_READ_MOTORS = (WAIST_YAW_MOTOR_INDEX, WAIST_PITCH_MOTOR_INDEX)
 LIFT_TOPIC = "rt/hispeed_state"
 LIFT_JOINT_CANDIDATES = ("LZ_mt_Joint", "LZ_it_Joint")  # URDF 两级棱柱，各约 0～0.21 m
 LIFT_STAGE_LIMIT_M = 0.21
