@@ -383,13 +383,13 @@ button:hover { filter: brightness(1.03); }
 </nav>
 
 <!-- 左：结构 [页][签]，签在板块右边（朝中心）；收起左藏只露签 -->
-<section class="book book-left open" data-book="left">
+<section class="book book-left" data-book="left">
   <div class="pages">
-    <div class="page active" data-page="vision">
+    <div class="page" data-page="vision">
       <div class="page-sheet">
         <div class="page-head"><strong>视觉</strong><span>1 张卡片</span></div>
         <div class="page-cards">
-          <article class="float open">
+          <article class="float">
             <button type="button" class="float-toggle">双目</button>
             <div class="float-body">
               <p class="note">左右目、视差、点云匹配。</p>
@@ -406,16 +406,16 @@ button:hover { filter: brightness(1.03); }
     </div>
   </div>
   <nav class="bookmarks" aria-label="左侧书签">
-    <button type="button" class="bookmark active" data-page="vision" aria-pressed="true">
+    <button type="button" class="bookmark" data-page="vision" aria-pressed="false">
       视觉<span class="count">1</span>
     </button>
   </nav>
 </section>
 
 <!-- 右：结构 [签][页]，签在板块左边（朝中心）；收起右藏只露签 -->
-<section class="book book-right open" data-book="right">
+<section class="book book-right" data-book="right">
   <nav class="bookmarks" aria-label="右侧书签">
-    <button type="button" class="bookmark active" data-page="calib" aria-pressed="true">
+    <button type="button" class="bookmark" data-page="calib" aria-pressed="false">
       标定<span class="count">6</span>
     </button>
     <button type="button" class="bookmark" data-page="control" aria-pressed="false">
@@ -423,11 +423,11 @@ button:hover { filter: brightness(1.03); }
     </button>
   </nav>
   <div class="pages">
-    <div class="page active" data-page="calib">
+    <div class="page" data-page="calib">
       <div class="page-sheet">
         <div class="page-head"><strong>标定</strong><span>6 张卡片</span></div>
         <div class="page-cards">
-          <article class="float open">
+          <article class="float">
             <button type="button" class="float-toggle">姿态集 <span class="aside">右 · 12 点</span></button>
             <div class="float-body">
               <p class="note">示教姿态、镜像到对侧、保存集。</p>
@@ -485,7 +485,7 @@ button:hover { filter: brightness(1.03); }
       <div class="page-sheet">
         <div class="page-head"><strong>控制</strong><span>4 张卡片</span></div>
         <div class="page-cards">
-          <article class="float open">
+          <article class="float">
             <button type="button" class="float-toggle">关节</button>
             <div class="float-body">
               <p class="note">实时 q / dq / τ。</p>
@@ -506,7 +506,7 @@ button:hover { filter: brightness(1.03); }
             </div>
           </article>
           <article class="float">
-            <button type="button" class="float-toggle">单点角度</button>
+            <button type="button" class="float-toggle">手臂控制</button>
             <div class="float-body">
               <p class="note">填七轴目标角后出发。</p>
               <div class="cmds"><button type="button">填入当前角</button><button class="primary" type="button">出发</button></div>

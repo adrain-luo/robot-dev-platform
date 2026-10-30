@@ -179,21 +179,110 @@ function flash(text, ok) {
   el.textContent = text;
 }
 
-const LABELS = ["sh_pitch", "sh_roll", "sh_yaw", "elbow", "wr_roll", "wr_pitch", "wr_yaw"];
+const ARM_JOINTS = [
+  { key: "sh_pitch", fallback: [-177, 153] },
+  { key: "sh_roll", fallback: [-129, 129] },
+  { key: "sh_yaw", fallback: [-150, 150] },
+  { key: "elbow", fallback: [-60, 120] },
+  { key: "wr_roll", fallback: [-113, 113] },
+  { key: "wr_pitch", fallback: [-92.5, 92.5] },
+  { key: "wr_yaw", fallback: [-92.5, 92.5] },
+];
+let armSliderDragging = false;
+let armTargetDirty = false;
+let lastArmJoints = null; // 控制臂实测 joints[]
+
 function ensureGotoInputs() {
   const row = $("goto-inputs");
-  if (row.querySelector("input")) return;
-  LABELS.forEach((lab) => {
-    const label = document.createElement("label");
-    label.className = "field";
-    label.innerHTML = `<span>${lab}</span><input class="g-q" type="number" step="0.01">`;
-    row.appendChild(label);
+  if (!row || row.querySelector(".arm-joint")) return;
+  ARM_JOINTS.forEach((spec, i) => {
+    const [lo, hi] = spec.fallback;
+    const wrap = document.createElement("div");
+    wrap.className = "arm-joint";
+    wrap.dataset.idx = String(i);
+    wrap.innerHTML =
+      `<div class="arm-lab">${spec.key}<em class="arm-motor">电机 —</em></div>` +
+      `<input class="g-slider" type="range" min="${lo}" max="${hi}" step="0.5" value="0">` +
+      `<input class="g-q" type="number" step="0.5" min="${lo}" max="${hi}" value="0">`;
+    const slider = wrap.querySelector(".g-slider");
+    const num = wrap.querySelector(".g-q");
+    slider.addEventListener("pointerdown", () => { armSliderDragging = true; });
+    slider.addEventListener("input", () => {
+      num.value = slider.value;
+      armTargetDirty = true;
+    });
+    slider.addEventListener("pointerup", async () => {
+      armSliderDragging = false;
+      await armGotoFromUi(false);
+    });
+    num.addEventListener("input", () => {
+      const v = parseFloat(num.value);
+      if (Number.isFinite(v)) slider.value = String(v);
+      armTargetDirty = true;
+    });
+    num.addEventListener("change", async () => { await armGotoFromUi(false); });
+    row.appendChild(wrap);
   });
 }
 
-function fillQ(q) {
+function applyArmLimits(joints) {
   ensureGotoInputs();
-  [...document.querySelectorAll(".g-q")].forEach((el, i) => { el.value = Number(q[i]).toFixed(3); });
+  const rows = [...document.querySelectorAll("#goto-inputs .arm-joint")];
+  rows.forEach((row, i) => {
+    const j = joints && joints[i];
+    const [flo, fhi] = ARM_JOINTS[i].fallback;
+    const lo = j && j.limit_deg ? Number(j.limit_deg[0]) : flo;
+    const hi = j && j.limit_deg ? Number(j.limit_deg[1]) : fhi;
+    const slider = row.querySelector(".g-slider");
+    const num = row.querySelector(".g-q");
+    const motor = row.querySelector(".arm-motor");
+    if (slider) { slider.min = String(lo); slider.max = String(hi); }
+    if (num) { num.min = String(lo); num.max = String(hi); }
+    if (motor) motor.textContent = j && j.motor != null ? `电机 ${j.motor}` : "电机 —";
+  });
+}
+
+function fillQ(qRad) {
+  ensureGotoInputs();
+  [...document.querySelectorAll("#goto-inputs .arm-joint")].forEach((row, i) => {
+    const rad = Number(qRad[i]);
+    if (!Number.isFinite(rad)) return;
+    const deg = rad * 180 / Math.PI;
+    const slider = row.querySelector(".g-slider");
+    const num = row.querySelector(".g-q");
+    if (slider) slider.value = String(deg);
+    if (num) num.value = deg.toFixed(1);
+  });
+  armTargetDirty = true;
+}
+
+function readArmTargetRad() {
+  return [...document.querySelectorAll("#goto-inputs .arm-joint")].map((row) => {
+    const v = parseFloat(row.querySelector(".g-q")?.value);
+    return Number.isFinite(v) ? v * Math.PI / 180 : NaN;
+  });
+}
+
+function syncArmSlidersFromLive(joints) {
+  if (!joints || !joints.length) return;
+  lastArmJoints = joints;
+  applyArmLimits(joints);
+  if (armSliderDragging || armTargetDirty) return;
+  if ([...document.querySelectorAll("#goto-inputs .g-q")].some((el) => document.activeElement === el)) return;
+  fillQ(joints.map((j) => j.q_rad));
+  armTargetDirty = false;
+}
+
+async function armGotoFromUi(confirmGo) {
+  const q = readArmTargetRad();
+  if (q.some((x) => !Number.isFinite(x))) { flash("手臂目标角不完整", false); return; }
+  if (confirmGo && !confirm("将限速走到目标关节角。扶住、守急停。继续？")) return;
+  try {
+    await post("/api/target", { q });
+    flash("手臂目标已更新", true);
+    armTargetDirty = false;
+    poll();
+  } catch (e) { flash(String(e), false); }
 }
 
 async function post(path, body) {
@@ -234,7 +323,7 @@ function applyCtrl(ctrl) {
           }`
         : "未接管")
     : "只读（加 --allow-real-motion 后可接管）";
-  document.querySelectorAll(".g-q").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
+  document.querySelectorAll(".g-q, .g-slider").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
   $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;
   const waistNeed = !allow || !ctrl.engaged || !!ctrl.float;
   ["btn-waist-go", "btn-waist-fill", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p",
@@ -315,6 +404,13 @@ async function poll() {
     const ctrlArm = data.ctrl?.arm || "right";
     const tableArm = view === "left" ? left : view === "right" ? right : (ctrlArm === "left" ? left : right);
     renderTable(tableArm, data.waist);
+    const ctrlSnap = ctrlArm === "left" ? left : right;
+    if (ctrlSnap && ctrlSnap.joints) syncArmSlidersFromLive(ctrlSnap.joints);
+    const note = $("arm-ctrl-now");
+    if (note && ctrlSnap && ctrlSnap.joints) {
+      const live = ctrlSnap.joints.map((j) => `${j.label} ${Number(j.q_deg).toFixed(1)}°`).join(" · ");
+      note.textContent = `控制臂 ${ctrlArm} · ${live}`;
+    }
   } catch (e) {
     flash(String(e), false);
     setPill(false, "服务断开");
@@ -367,6 +463,17 @@ document.querySelectorAll(".float").forEach((card) => {
     }
     if (opening && card.id === "panel-he" && typeof window.refreshHandeye === "function") {
       window.refreshHandeye();
+    }
+    if (card.id === "panel-cam") {
+      if (opening) refreshCamPreview();
+      else {
+        const img = $("cam-preview");
+        if (img && img.dataset.obj) {
+          URL.revokeObjectURL(img.dataset.obj);
+          delete img.dataset.obj;
+          img.removeAttribute("src");
+        }
+      }
     }
   });
 });
@@ -844,10 +951,14 @@ async function recordPose() {
 try {
 $("arm-select").onchange = () => { poll(); window.V3.draw(); };
 $("btn-fill").onclick = () => {
-  const view = $("arm-select").value === "left" ? "left" : $("control-arm").value;
+  const view = $("control-arm")?.value || "right";
   fetch("/api/status?arm=" + view).then((r) => r.json()).then((d) => {
-    if (d.ok) fillQ(d.joints.map((j) => j.q_rad));
-  });
+    if (d.ok) {
+      applyArmLimits(d.joints);
+      fillQ(d.joints.map((j) => j.q_rad));
+      flash("已填入当前角", true);
+    }
+  }).catch((e) => flash(String(e), false));
 };
 $("btn-engage").onclick = async () => {
   if (!confirm("将发布 rt/lowcmd 接管（可能释放高层运动模式）。请扶住机器人。继续？")) return;
@@ -1386,12 +1497,7 @@ $("btn-cfg-unlock").onclick = async () => {
 };
 
 $("btn-waist-go").onclick = () => waistGotoFromUi(true);
-$("btn-goto").onclick = async () => {
-  const q = [...document.querySelectorAll(".g-q")].map((el) => parseFloat(el.value));
-  if (q.some((x) => !Number.isFinite(x))) { flash("目标角不完整", false); return; }
-  if (!confirm("将限速走到目标关节角。扶住、守急停。继续？")) return;
-  try { await post("/api/target", { q }); flash("已设目标", true); } catch (e) { flash(String(e), false); }
-};
+$("btn-goto").onclick = () => armGotoFromUi(true);
 $("control-arm").onchange = async () => {
   try { await post("/api/control-arm", { arm: $("control-arm").value }); flash("控制臂已切换", true); }
   catch (e) { flash(String(e), false); }
@@ -1653,15 +1759,24 @@ function applyHeRun(st) {
 }
 window.applyHeRun = applyHeRun;
 let camPreviewBusy = false;
-setInterval(async () => {
+function camPreviewWanted() {
   const card = $("panel-cam");
-  const book = card && card.closest(".book");
-  if (!card || !card.classList.contains("open") || (book && !book.classList.contains("open")) || camPreviewBusy) return;
+  if (!card || !card.classList.contains("open")) return false;
+  const book = card.closest(".book");
+  if (book && !book.classList.contains("open")) return false;
+  const page = card.closest(".page");
+  if (page && !page.classList.contains("active")) return false;
+  if (typeof document.hidden === "boolean" && document.hidden) return false;
+  return true;
+}
+async function refreshCamPreview() {
+  if (!camPreviewWanted() || camPreviewBusy) return;
   const img = $("cam-preview");
   if (!img) return;
   camPreviewBusy = true;
   try {
     const res = await fetch("/api/handeye/preview.jpg?t=" + Date.now(), { cache: "no-store" });
+    if (!camPreviewWanted()) return; // 拉取中途若已收起，丢弃
     const msg = $("cam-msg");
     if (!res.ok) {
       let text = "双目没有画面";
@@ -1681,7 +1796,11 @@ setInterval(async () => {
   } finally {
     camPreviewBusy = false;
   }
-}, 700);
+}
+setInterval(refreshCamPreview, 700);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && camPreviewWanted()) refreshCamPreview();
+});
 function syncRenderNote(extra) {
   const el = $("render-note");
   if (!el || !window.RobotView || !window.RobotView.cloudStatus) return;

@@ -338,20 +338,26 @@ class App:
             scene["payload_mass"] = float(mass or 0.0)
             scene["payload_name"] = ctrl.get("payload_name")
             scene["payload_com_m"] = [float(v) for v in com]
+        try:
+            lim = self.kin.arms[layout.name].model.joint_limits()
+        except Exception:
+            lim = None
         joints = []
         for i, name in enumerate(layout.joint_names):
             tau = st.tau_est[i]
-            joints.append(
-                {
-                    "name": name,
-                    "label": short_joint_label(name),
-                    "motor": layout.motor_indices[i],
-                    "q_rad": st.q[i],
-                    "q_deg": math.degrees(st.q[i]),
-                    "dq": st.dq[i],
-                    "tau_est": None if tau is None else float(tau),
-                }
-            )
+            row = {
+                "name": name,
+                "label": short_joint_label(name),
+                "motor": layout.motor_indices[i],
+                "q_rad": st.q[i],
+                "q_deg": math.degrees(st.q[i]),
+                "dq": st.dq[i],
+                "tau_est": None if tau is None else float(tau),
+            }
+            if lim is not None:
+                row["limit_rad"] = [float(lim[i, 0]), float(lim[i, 1])]
+                row["limit_deg"] = [math.degrees(float(lim[i, 0])), math.degrees(float(lim[i, 1]))]
+            joints.append(row)
         return {
             "ok": True,
             "mode": "real" if self.allow_real_motion else "readonly",

@@ -462,6 +462,29 @@ input[type="range"] {
 
 .q-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .q-grid .field { min-width: 0; }
+.arm-sliders { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.arm-joint {
+  display: grid;
+  grid-template-columns: 78px 1fr 72px;
+  gap: 8px;
+  align-items: center;
+}
+.arm-joint .arm-lab {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.2;
+}
+.arm-joint .arm-lab em {
+  display: block;
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.8;
+}
+.arm-joint input[type="range"] { width: 100%; min-width: 0; }
+.arm-joint input[type="number"] {
+  width: 100%;
+  font: 600 13px/1.2 ui-monospace, monospace;
+}
 
 #joints-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 #joints-table thead { display: none; }

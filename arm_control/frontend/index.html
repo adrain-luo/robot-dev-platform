@@ -61,15 +61,16 @@
 </nav>
 
 <!-- 左书：视觉 [页|签] -->
-<section class="book book-left open" data-book="left">
+<section class="book book-left" data-book="left">
   <div class="pages">
-    <div class="page active" data-page="vision">
+    <div class="page" data-page="vision">
       <div class="page-sheet">
         <div class="page-head"><strong>视觉</strong><span>3 张卡片</span></div>
         <div class="page-cards">
-          <article class="float open" id="panel-cam">
+          <article class="float" id="panel-cam">
             <button type="button" class="float-toggle">双目</button>
             <div class="float-body">
+              <p class="note">展开后才从相机取预览（约 0.7 s 一帧）；收起即停，不占带宽。</p>
               <img id="cam-preview" alt="左右目" class="he-view">
               <div class="cmds">
                 <button id="btn-cam-match" type="button">匹配点云</button>
@@ -80,7 +81,7 @@
               <div id="cam-msg" class="note"></div>
             </div>
           </article>
-          <article class="float open" id="panel-render">
+          <article class="float" id="panel-render">
             <button type="button" class="float-toggle">渲染</button>
             <div class="float-body">
               <p class="note">控制中央画布的彩色点云。棋盘角点、红点、黄点不受清除影响。</p>
@@ -106,7 +107,7 @@
               <p class="note" id="render-note">视觉 · 单帧 · 0 层</p>
             </div>
           </article>
-          <article class="float open" id="panel-detect">
+          <article class="float" id="panel-detect">
             <button type="button" class="float-toggle">识别定位</button>
             <div class="float-body">
               <p class="note">从调试口（YOLO）取<strong>左右目</strong>原图与掩膜，再按四边形网格投影到点云：左红 · 右蓝 · 中心绿。</p>
@@ -144,16 +145,16 @@
     </div>
   </div>
   <nav class="bookmarks" aria-label="左侧书签">
-    <button type="button" class="bookmark active" data-page="vision" aria-pressed="true">
+    <button type="button" class="bookmark" data-page="vision" aria-pressed="false">
       视觉<span class="count">3</span>
     </button>
   </nav>
 </section>
 
 <!-- 右书：标定 / 控制 [签|页] -->
-<section class="book book-right open" data-book="right">
+<section class="book book-right" data-book="right">
   <nav class="bookmarks" aria-label="右侧书签">
-    <button type="button" class="bookmark active" data-page="calib" aria-pressed="true">
+    <button type="button" class="bookmark" data-page="calib" aria-pressed="false">
       标定<span class="count">6</span>
     </button>
     <button type="button" class="bookmark" data-page="control" aria-pressed="false">
@@ -161,11 +162,11 @@
     </button>
   </nav>
   <div class="pages">
-    <div class="page active" data-page="calib">
+    <div class="page" data-page="calib">
       <div class="page-sheet">
         <div class="page-head"><strong>标定</strong><span>6 张卡片</span></div>
         <div class="page-cards">
-          <article class="float open" id="panel-poses">
+          <article class="float" id="panel-poses">
             <button type="button" class="float-toggle">姿态集 <span id="pose-cond" class="aside"></span></button>
             <div class="float-body">
               <p class="note">拖拽到位后按空格或「记录」。镜像关于躯干 y=0：roll/yaw 反号，pitch 同号。</p>
@@ -381,7 +382,7 @@
       <div class="page-sheet">
         <div class="page-head"><strong>控制</strong><span>5 张卡片</span></div>
         <div class="page-cards">
-          <article class="float open" id="panel-config">
+          <article class="float" id="panel-config">
             <button type="button" class="float-toggle">配置 <span id="cfg-lock-badge" class="aside"></span></button>
             <div class="float-body">
               <p class="note">共用项在上；左右臂分两列。锁定后其它板块不能改这些配置；解锁只在这里。</p>
@@ -502,8 +503,11 @@
           </article>
 
           <article class="float" id="panel-motion">
-            <button type="button" class="float-toggle">单点角度</button>
+            <button type="button" class="float-toggle">手臂控制</button>
             <div class="float-body">
+              <p class="note">控制臂 7 轴。拖滑条松手后，只改该关节、其余保持目标/实测，按网页限速走。也可用底栏「填入当前角 / 出发」。</p>
+              <p class="note" id="arm-ctrl-now">手臂 —</p>
+              <div class="arm-sliders" id="goto-inputs"></div>
               <div class="still" title="测量/走点到达后等实测角停住。窗口内 max|dq| 小于速度阈，且位置峰峰值小于漂移阈。">
                 <label class="field">速度阈
                   <input id="still-dq" type="number" step="0.005" min="0.02" value="0.05">
@@ -519,7 +523,6 @@
                 </label>
                 <button id="btn-still">设置</button>
               </div>
-              <div class="q-grid" id="goto-inputs"></div>
             </div>
           </article>
 
