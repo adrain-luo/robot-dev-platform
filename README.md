@@ -1,27 +1,36 @@
-# g1d
+# g1d（眼在手外 · 臂控与标定）
 
-G1D 侧功能区。控制底座与各标定/辨识项目分目录存放；H2 参考项目在 `../arm_payload_gravity`，本树不改它。
+G1D 侧的臂控底座、负载辨识、手眼、TCP、空间点与识别定位，都挂在**同一个网页进程**里。
 
-Python 用 conda 环境 `abyss`（`conda activate abyss`）。不要用 `base`、裸 `python3` 或 `/usr/bin/python3`。Unitree SDK 与 G1D URDF 在本树 `third_party/`、`arm_control/config/g1_d.urdf`。
+仓库：<https://github.com/Abyss-hhy/g1d_eye_to_hand>
 
-| 目录 | 用途 |
+## 怎么跑
+
+```bash
+conda activate abyss          # 不要用 base / 系统 python3
+cd ~/abyss/project/g1d/arm_control
+python server.py              # 只读：http://<本机>:10184/
+# 真机发令（先停掉占用 rt/lowcmd 的任务，扶臂、守急停）：
+python server.py --allow-real-motion --max-speed 0.2
+```
+
+首次若没有 `abyss` 环境：`conda env create -f environment.yml`，或跑 `./setup_env.sh`。
+
+## 目录分工
+
+| 目录 | 职责 |
 |------|------|
-| `arm_control/` | 共用臂控：DDS、限速、接管、3D。只有这里发令 |
-| `arm_payload_gravity/` | 末端负载辨识、姿态集、到位对比。挂在臂控同一个网页上 |
-| `tcp_calib/` | TCP 标定 |
-| `hand_eye/` | 手眼标定 |
+| `arm_control/` | **唯一发令处**：DDS、限速循环、URDF、前端、腰/立柱、TCP、空间点、棋盘触摸、识别定位 |
+| `arm_payload_gravity/` | 姿态集、末端负载辨识、摩擦带、到位对比（接口挂在臂控网页上） |
+| `hand_eye/` | 头相机取流、棋盘检测、内参、手眼外参、SGBM 点云 |
+| `tcp_calib/` | 早期占位；现行 TCP 在 `arm_control/tcp_calib.py` |
+| `third_party/unitree_sdk2_python/` | Unitree SDK |
+| `功能说明.md` | 按模块写的详细说明（算法、坐标、文件路径） |
 
-## 边界
+**边界：** 只有 `arm_control` 订阅/发布 `rt/lowstate`、`rt/lowcmd`（立柱另用 Agv + `rt/hispeed_state`）。其它目录不另起服务、不另发 DDS。页面只有 `arm_control/frontend/` 一份。
 
-只有 `arm_control` 发 DDS（`rt/lowstate` / `rt/lowcmd`）。功能目录不另起进程，由 `arm_control/server.py` 挂上它们的接口。页面只有 `arm_control/frontend/` 这一份。真机发令需 `--allow-real-motion` 并在网页上接管。
+## 文档去哪看
 
-重力前馈的**施加**留在 `arm_control` 的控制循环里，因为那是发令的一部分。质量、质心怎么辨识出来，以及姿态集、补偿文件、摩擦带、到位对比，都在 `arm_payload_gravity`。它走点、改前馈时调用臂控的控制循环，不自己发令。
-
-| 内容 | 位置 |
-|------|------|
-| 启动 | `cd arm_control && python server.py` |
-| 网页 | `arm_control/frontend/`，只有这一份 |
-| 姿态集、补偿文件 | `arm_payload_gravity/config/` |
-| 测量会话、对比记录 | `arm_payload_gravity/data/` |
-
-`hand_eye` 是眼在手外求解和同一网页上的采集。标定板在左手，末端 `left_wrist_yaw_link`。内参 yaml 求解时传入。`tcp_calib` 仍是占位。
+- 启动与安全操作 → [`arm_control/README.md`](arm_control/README.md)
+- 功能原理与数据路径 → [`功能说明.md`](功能说明.md)
+- 手眼目录说明 → [`hand_eye/README.md`](hand_eye/README.md)

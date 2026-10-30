@@ -1,66 +1,73 @@
 # arm_control
 
-G1D 独立臂控底座。供 `arm_payload_gravity` / `tcp_calib` / `hand_eye` 复用。
+G1D 控制与标定的**唯一网页入口**。其它模块（负载、手眼、TCP…）都挂在这里，不另开页面、不另发 DDS。
 
-## 目录
-
-- `dds/` — lowstate 订阅；可运动时 `ArmLoop` 发 `rt/lowcmd`
-- `controller/` — hold、矢量同步限速 `set_target`
-- `model/` — 关节布局 + URDF FK
-- `frontend/` — 整页：3D、接管、姿态集、辨识、对比
-- `config/` — `g1d.json`
-
-用独立 conda 环境 `abyss`（Python 3.10，不读 `~/.local`）。首次若环境不在：
-
-```bash
-conda env create -f ~/abyss/project/g1d/environment.yml
-```
-
-日常：
-
-```bash
-conda activate abyss
-```
-
-## 只读
+## 启动
 
 ```bash
 conda activate abyss
 cd ~/abyss/project/g1d/arm_control
-python server.py
-# http://<本机IP>:10184/
+
+python server.py                              # 只读，按钮灰色
+python server.py --allow-real-motion --max-speed 0.2   # 真机
+# 打开 http://<本机IP>:10184/
 ```
 
-不创建发令循环。网页按钮为灰。
+常用参数：`--host` / `--port`（默认 `0.0.0.0:10184`）、`--iface`、`--max-speed`（0.02–1.0 rad/s）。
 
-## 可运动（⚠ 真机）
+真机前：停掉占用 `rt/lowcmd` 的其它任务；有人扶臂、守急停。
 
-先停掉占用 `rt/lowcmd` 的任务（如 vision-arm-control service）。有人扶臂、守急停。
+## 网页结构（书签）
 
-```bash
-conda activate abyss
-cd ~/abyss/project/g1d/arm_control
-python server.py --allow-real-motion --max-speed 0.2
-```
+左侧偏视觉，右侧偏标定/控制。卡片可多开，内容区可滚动。
 
-1. 徽标「可运动」→ 点「接管」：在当前角保持（会 `ReleaseMode` 高层模式）。
-2. 「填入当前角」改几个数 →「出发」：限速逼近。
-3. 「急停(保持)」冻结目标；「释放」停止发令（请扶住）。
+| 区域 | 做什么 |
+|------|--------|
+| **渲染 / 双目** | 头相机或调试口匹配点云；固定场景累加 |
+| **识别定位** | YOLO 取图 → 点位获取（网格投影）→ 校准（贴平面剔点）→ 中心点提取 |
+| **运行配置** | 手眼结果、重力补偿、TCP 成套调用；可锁定防误改 |
+| **姿态集 / 负载 / 到位对比** | 记点、辨识、摩擦带对比（数据在 `arm_payload_gravity/`） |
+| **手眼标定** | 按姿态集采集 → 内参 → 外参 → 命名保存/调用 |
+| **TCP / 空间点** | 爪尖偏置标定；躯干系定点，可规划「让 TCP 去碰」 |
+| **棋盘触摸** | 「看一眼」角点 → 限速逐点摸（验手眼+TCP） |
+| **关节** | 当前臂 7 轴 + 腰 12/14 读数；立柱高度与「记为最低点」 |
+| **躯体控制** | 腰（滑条/步进/到目标/停止）+ 立柱行程（Agv HeightAdjust） |
+| **单点角度 / 接管** | 填角出发、拖拽卸力、急停保持、释放 |
 
-灰虚线=指令，蓝虚线=目标，实线=实测。网页限速（点「设」，0.02–1.0 rad/s）是循环里同一把尺子：单点「出发」、点姿态芯片走点、接管后腰回 0 都走它。改完必须点「设」。拖拽卸力不限速。
+更细的算法与文件路径见仓库根目录 [`功能说明.md`](../功能说明.md)。
 
-接管后：**拖拽** = 当前臂 kp=0 + URDF 重力前馈（α=1）；**急停(保持)** = 退出拖拽并锁在当前角。可勾选「重力前馈」。接管后腰电机 12/13/14 按限速回到 0，用锁腰增益 kp=200 / kd=4 钉住（比默认腰 kp=60 硬；仍是 PD，大力仍能掰，并可能微振）。释放后停发令即一起放开。
+## 发令要点
 
-## 重力前馈示教姿态集
+1. 徽标「可运动」→ **接管**：手臂与腰停在当前角（退出高层运动模式）。
+2. 网页限速（点「设」）是同一把尺子：单点出发、姿态芯片走点、腰目标逼近都用它。拖拽卸力不限速。
+3. **拖拽** = 当前臂 kp=0 + URDF 重力前馈；**急停(保持)** = 退出拖拽并锁当前角（棋盘触摸若在跑也会停）。
+4. **释放** = 停发 `rt/lowcmd`（请扶住）。
 
-网页「姿态集」在 `arm_payload_gravity`：选控制臂 → 新建名字 → 拖拽到位 → 空格/「记录」。JSON 在 `arm_payload_gravity/config/posesets/`。
+腰电机按官方表：**12 = 旋转（yaw）**，**14 = 俯仰（pitch）**；13 在 G1D 无效，跟写即可。立柱高度在 `rt/hispeed_state`，不在 lowstate。
 
-「镜像到对侧」按躯干矢状面（y=0）映射，不是抄同一组关节角。G1D 左右轴定义相同，符号为 `[1,-1,-1, 1,-1, 1,-1]`（pitch 同号，roll/yaw 反号），末端 xyz 会变成 `(x,-y,z)`。点芯片可填入该角；已接管且非拖拽则按上面同一限速走过去。`regressor_cond` 是末端负载回归条件数，点太少或太挤时会很大。
+画面：灰虚线=指令，蓝虚线=目标，实线=实测。红点=当前 TCP 爪尖，黄点=选中空间点。
 
-## 末端负载辨识
+## 本目录代码
 
-测量样本在 `arm_payload_gravity/data/measure/<时间戳>_<臂>/`。重启后不必再走点：选同一姿态集，下拉测量会话选那次目录，点「求解」即可用旧样本重算。力矩源可选 `tau_pd`（默认）或 `tau_est`。补偿文件 `arm_payload_gravity/config/payloads/<名字>.json`。
+| 路径 | 作用 |
+|------|------|
+| `server.py` | HTTP + 汇总各模块 API |
+| `controller/` | `ArmLoop` 限速、接管、腰保持 |
+| `dds/` | `lowstate`、立柱 `hispeed`、Agv |
+| `model/` | 关节布局、URDF FK、重力 |
+| `frontend/` | 唯一前端 |
+| `detect_localize.py` | 识别定位流水线 |
+| `board_touch.py` | 棋盘看一眼 + 触摸 |
+| `tcp_calib.py` / `spatial_points.py` | TCP 与空间点 |
+| `lift_*.py` | 立柱零位与闭环 |
+| `runtime_config.py` | 可锁定的成套配置 |
+| `config/` | `g1d.json`、URDF、TCP/空间点/立柱零位等 |
 
-## 到位对比与摩擦带修正
+## 数据落在哪
 
-网页「到位对比」：勾选基线 / 补偿 / 补偿+修正。摩擦停驻带来自双向测量落点差的一半（`arm_payload_gravity/friction.py`），带内关节不推指令。结果 `arm_payload_gravity/data/validate/<时间戳>_<臂>.json`。重启后网页下拉「打开已保存的对比」即可看回表格和末端最大误差。
+| 内容 | 位置 |
+|------|------|
+| 姿态集、补偿文件 | `../arm_payload_gravity/config/` |
+| 负载测量、到位对比 | `../arm_payload_gravity/data/`（一般不进 git） |
+| 手眼会话与结果 | `../hand_eye/data/`、`../hand_eye/config/results/` |
+| TCP / 空间点 / 立柱零位 | `config/tcp_results/`、`config/spatial_points/`、`config/lift_zero.json` |
