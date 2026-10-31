@@ -678,7 +678,22 @@ class App:
             # 碰点：当前控制臂 + 该臂当前 TCP（与点文件无关）
             tcp_name, tcp = self._tcp_for_arm(loop.arm)
             model = self.kin.arms[loop.arm].model
-            point_arr = np.asarray(point, dtype=float).reshape(3)
+            base_arr = np.asarray(point, dtype=float).reshape(3)
+            # 前端碰点策略：躯干系偏置 mm → 瞄准点（不改空间点文件）
+            off = body.get("offset_mm") or body.get("offset") or [0, 0, 0]
+            try:
+                if isinstance(off, dict):
+                    off_mm = np.array(
+                        [float(off.get("x", 0)), float(off.get("y", 0)), float(off.get("z", 0))],
+                        dtype=float,
+                    )
+                else:
+                    off_mm = np.asarray(off, dtype=float).reshape(3)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"偏置无效：{exc}") from exc
+            if not np.all(np.isfinite(off_mm)):
+                raise ValueError("偏置含非有限数")
+            point_arr = base_arr + off_mm / 1000.0
             stop = threading.Event()
             q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
             q, plan_miss_mm = solve_tcp_ik(model, q0, tcp, point_arr)
@@ -694,11 +709,15 @@ class App:
             first = self._goto_settle_measure(loop, model, q, tcp, point_arr, stop)
             measured_before_mm = float(first["measured_miss_mm"])
             refine_passes = 0
-            # 2) 误差补偿：假设跟点偏置近似定常，下一次瞄准
+            # 2) 误差补偿（可选）：假设跟点偏置近似定常，下一次瞄准
             #    aim = target + (target - tcp_meas) = 2*target - tcp_meas
-            #    而不是再对同一 target 求 IK（那样指令几乎不变，实测也不会变）
+            refine_on = body.get("refine")
+            if refine_on is None:
+                refine_on = True
+            else:
+                refine_on = bool(refine_on)
             refine_thresh_mm = float(body.get("refine_thresh_mm") or 1.5)
-            max_refine = int(body.get("refine_passes") or 2)
+            max_refine = int(body.get("refine_passes") or 2) if refine_on else 0
             max_refine = max(0, min(max_refine, 3))
             gain = float(body.get("refine_gain") or 1.0)
             gain = max(0.2, min(gain, 1.5))
@@ -725,13 +744,18 @@ class App:
             out["measured_miss_mm"] = measured_miss_mm
             out["measured_before_mm"] = measured_before_mm
             out["refine_passes"] = refine_passes
-            out["refine_mode"] = "error_compensate"
+            out["refine"] = bool(refine_on)
+            out["refine_mode"] = "error_compensate" if refine_on else "off"
             out["measured_tcp_m"] = [float(v) for v in tcp_now.tolist()]
             out["measured_tcp_mm"] = [float(v) * 1000.0 for v in tcp_now.tolist()]
             out["settle_s"] = float(cur["settle_s"])
             out["settle_timed_out"] = bool(cur["settle_timed_out"])
             out["goto_arm"] = loop.arm
             out["goto_tcp"] = tcp_name
+            out["offset_mm"] = [float(v) for v in off_mm.tolist()]
+            out["target_m"] = [float(v) for v in point_arr.tolist()]
+            out["target_mm"] = [float(v) * 1000.0 for v in point_arr.tolist()]
+            out["base_mm"] = [float(v) * 1000.0 for v in base_arr.tolist()]
             return out
         except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
             out = self.points.status()

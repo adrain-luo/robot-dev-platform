@@ -1336,12 +1336,50 @@ function renderSpatial(pt) {
   if (pt.source) text += ` · ${pt.source}`;
   if (pt.note) text += `。${pt.note}`;
   note.textContent = text;
+  window.lastSpatialPointM = pt.point_m || null;
   const p = pt.point_m;
   const key = p ? p.map((v) => Number(v).toFixed(4)).join(",") : "";
-  if (key === window.spatialPointKey) return;
-  if (window.RobotView && window.RobotView.setSpatialPoint && window.RobotView.setSpatialPoint(p || null)) {
-    window.spatialPointKey = key;
+  if (key !== window.spatialPointKey) {
+    if (window.RobotView && window.RobotView.setSpatialPoint && window.RobotView.setSpatialPoint(p || null)) {
+      window.spatialPointKey = key;
+    }
   }
+  syncPtAimNote();
+}
+function readPtOffsetMm() {
+  const n = (id) => {
+    const v = parseFloat($(id)?.value);
+    return Number.isFinite(v) ? v : 0;
+  };
+  return { x: n("pt-off-x"), y: n("pt-off-y"), z: n("pt-off-z") };
+}
+function syncPtAimNote() {
+  const el = $("pt-aim-note");
+  if (!el) return;
+  const off = readPtOffsetMm();
+  const base = window.lastSpatialPointM;
+  const hasOff = Math.abs(off.x) + Math.abs(off.y) + Math.abs(off.z) > 1e-9;
+  if (!base || base.length < 3) {
+    el.textContent = hasOff
+      ? `偏置 Δ[${off.x}, ${off.y}, ${off.z}] mm（先选空间点）`
+      : "瞄准：与空间点重合";
+    if (window.RobotView?.setSpatialAim) window.RobotView.setSpatialAim(null);
+    return;
+  }
+  const aim = [
+    Number(base[0]) + off.x / 1000,
+    Number(base[1]) + off.y / 1000,
+    Number(base[2]) + off.z / 1000,
+  ];
+  if (!hasOff) {
+    el.textContent = "瞄准：与空间点重合";
+    if (window.RobotView?.setSpatialAim) window.RobotView.setSpatialAim(null);
+    return;
+  }
+  el.textContent =
+    `瞄准 [${(aim[0] * 1000).toFixed(1)}, ${(aim[1] * 1000).toFixed(1)}, ${(aim[2] * 1000).toFixed(1)}] mm` +
+    ` = 空间点 + Δ[${off.x}, ${off.y}, ${off.z}]`;
+  if (window.RobotView?.setSpatialAim) window.RobotView.setSpatialAim(aim);
 }
 async function pointPost(path, body) {
   const d = await post(path, body || {});
@@ -1451,16 +1489,33 @@ $("btn-board-stop").onclick = async () => {
   try { await boardPost("/api/board/stop", {}); flash("已停止", true); }
   catch (e) { flash(String(e), false); }
 };
+["pt-off-x", "pt-off-y", "pt-off-z"].forEach((id) => {
+  if ($(id)) $(id).addEventListener("input", syncPtAimNote);
+});
+if ($("btn-pt-off-clear")) {
+  $("btn-pt-off-clear").onclick = () => {
+    ["pt-off-x", "pt-off-y", "pt-off-z"].forEach((id) => { if ($(id)) $(id).value = "0"; });
+    syncPtAimNote();
+  };
+}
 $("btn-pt-goto").onclick = async () => {
   const name = $("pt-select").value;
   if (!name) { flash("先选一个空间点", false); return; }
   if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
-  if (!confirm(`将按限速用当前控制臂的 TCP 碰到「${name}」。到位后按实测误差补偿瞄准（最多 2 步）。扶住、守急停。继续？`)) return;
+  const off = readPtOffsetMm();
+  const refine = !($("pt-refine") && !$("pt-refine").checked);
+  const offTxt = `Δ[${off.x}, ${off.y}, ${off.z}] mm`;
+  const refineTxt = refine ? "到位后误差补偿（最多 2 步）" : "仅开环走到瞄准点";
+  if (!confirm(`将按限速用当前控制臂的 TCP 碰到「${name}」+ ${offTxt}。${refineTxt}。扶住、守急停。继续？`)) return;
   const btn = $("btn-pt-goto");
   if (btn) btn.disabled = true;
-  flash("正在走点 / 停稳 / 误差补偿修正…", true);
+  flash(`正在走点（${offTxt}）${refine ? " / 误差补偿" : ""}…`, true);
   try {
-    const d = await pointPost("/api/points/goto", { name });
+    const d = await pointPost("/api/points/goto", {
+      name,
+      offset_mm: [off.x, off.y, off.z],
+      refine,
+    });
     if (!d.ok) { flash(d.error || "碰点失败", false); return; }
     const side = d.goto_arm === "left" ? "左臂" : d.goto_arm === "right" ? "右臂" : "";
     const tcp = d.goto_tcp ? ` · ${d.goto_tcp}` : "";
@@ -1469,18 +1524,22 @@ $("btn-pt-goto").onclick = async () => {
     const before = Number(d.measured_before_mm);
     if (!Number.isFinite(meas)) {
       flash(
-        `服务端没返回实测误差（规划 ${Number.isFinite(plan) ? plan.toFixed(2) : "?"} mm）。请重启臂控 python server.py 后再试。`,
+        `服务端没返回实测误差（规划 ${Number.isFinite(plan) ? plan.toFixed(2) : "?"} mm）。请重启臂控后再试。`,
         false,
       );
       return;
     }
     const to = d.settle_timed_out ? "（停稳超时）" : "";
     const nRef = Number(d.refine_passes) || 0;
-    let text = `已到位（${side}${tcp}）${to}。规划 ${plan.toFixed(2)} mm`;
+    let text = `已到位（${side}${tcp}）${to}`;
+    if (Array.isArray(d.offset_mm)) {
+      text += ` · 偏置 Δ[${d.offset_mm.map((v) => Number(v).toFixed(1)).join(", ")}]`;
+    }
+    text += `。规划 ${plan.toFixed(2)} mm`;
     if (Number.isFinite(before) && nRef > 0) {
       text += ` · 修正前实测 ${before.toFixed(2)} mm → 修正 ${nRef} 步后 ${meas.toFixed(2)} mm`;
     } else {
-      text += ` · 电机实测 TCP 还差 ${meas.toFixed(2)} mm`;
+      text += ` · 电机实测相对瞄准点还差 ${meas.toFixed(2)} mm`;
     }
     if (Array.isArray(d.measured_tcp_mm) && d.measured_tcp_mm.length >= 3) {
       text += ` [${d.measured_tcp_mm.map((v) => Number(v).toFixed(1)).join(", ")}]`;

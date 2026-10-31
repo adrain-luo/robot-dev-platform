@@ -522,6 +522,28 @@ const View = {
     this.render();
     return true;
   },
+  /** 碰点瞄准（空间点+偏置）；青色。无偏置时传 null 清除。 */
+  setSpatialAim(xyz) {
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso) return false;
+    if (this.spatialAim) {
+      torso.remove(this.spatialAim);
+      this.spatialAim.geometry.dispose();
+      this.spatialAim.material.dispose();
+      this.spatialAim = null;
+    }
+    if (!xyz || xyz.length < 3) {
+      this.render();
+      return true;
+    }
+    const geo = new THREE.SphereGeometry(0.011, 16, 12);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x22d3ee, depthTest: true });
+    this.spatialAim = new THREE.Mesh(geo, mat);
+    this.spatialAim.position.set(xyz[0], xyz[1], xyz[2]);
+    torso.add(this.spatialAim);
+    this.render();
+    return true;
+  },
   setBoardPoints(xyz) {
     const torso = this.links.get("torso_link");
     if (!this.ready || !torso) return false;

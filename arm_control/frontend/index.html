@@ -552,7 +552,29 @@
                 <button id="btn-pt-center" type="button">记下当前中心点（绿）</button>
                 <button id="btn-pt-load" type="button">调用</button>
                 <button id="btn-pt-del" type="button">删除</button>
-                <button id="btn-pt-goto" class="primary" type="button">让 TCP 碰这个点</button>
+              </div>
+              <div class="pt-goto-box" id="pt-goto-box">
+                <p class="note"><strong>碰点策略</strong>：相对所选空间点的躯干系偏置（mm）。例如 Z=+10 则目标在黄点上方 10 mm；不改空间点本身。</p>
+                <div class="fields">
+                  <label class="field">ΔX mm
+                    <input id="pt-off-x" type="number" step="1" value="0">
+                  </label>
+                  <label class="field">ΔY mm
+                    <input id="pt-off-y" type="number" step="1" value="0">
+                  </label>
+                  <label class="field">ΔZ mm
+                    <input id="pt-off-z" type="number" step="1" value="0">
+                  </label>
+                  <button id="btn-pt-off-clear" type="button">清零</button>
+                </div>
+                <label class="switch">
+                  <input id="pt-refine" type="checkbox" checked>
+                  <span>启用误差补偿（到位后按实测再瞄，最多 2 步）</span>
+                </label>
+                <p class="note" id="pt-aim-note">瞄准：与空间点重合</p>
+                <div class="cmds">
+                  <button id="btn-pt-goto" class="primary" type="button">让 TCP 碰这个点</button>
+                </div>
               </div>
             </div>
           </article>
