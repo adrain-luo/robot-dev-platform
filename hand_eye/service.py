@@ -485,7 +485,8 @@ class HandEyeAPI:
         rect_l, disp, points_m = matcher.match(pair[0], pair[1])
         valid = np.isfinite(points_m).all(axis=2) & (disp > 0.5)
         z = points_m[:, :, 2]
-        valid &= (z > 0.25) & (z < 2.0)
+        # 只去掉相机背后/贴面噪声与离谱坏点；显示最远距由前端渲染滑条裁切
+        valid &= (z > 0.15) & (z < 12.0)
         n_valid = int(valid.sum())
         if n_valid < 50:
             return {"ok": False, "error": f"有效点只有 {n_valid}，匹配没有对上"}

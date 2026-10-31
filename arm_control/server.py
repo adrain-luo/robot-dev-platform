@@ -560,21 +560,50 @@ class App:
             raise ValueError("先在 TCP 卡片里调用一个结果")
         return self.tcp.arm, self.tcp.active_name or self.tcp.tip_link, np.asarray(tcp, dtype=float)
 
+    def _tcp_for_arm(self, arm: str) -> tuple:
+        """加载该臂当前生效的 TCP，返回 (tcp_name, tcp_m)。"""
+        arm = "left" if arm == "left" else "right"
+        self.tcp.restore_for_arm(arm)
+        result = self.tcp.result or {}
+        tcp = result.get("tcp_m")
+        if self.tcp.arm != arm or tcp is None:
+            side = "左" if arm == "left" else "右"
+            raise ValueError(f"先为{side}臂调用一套 TCP")
+        return self.tcp.active_name or self.tcp.tip_link, np.asarray(tcp, dtype=float)
+
     def point_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         try:
             name = str(body.get("name") or "")
             note = str(body.get("note") or "")
             if path == "/api/points/save-fixed":
-                arm, tcp_name, tcp = self._active_tcp()
+                # 固定点本身在躯干系；取点仍需当前 TCP 会话里的标定结果
+                _, _, _ = self._active_tcp()
                 fixed = (self.tcp.result or {}).get("fixed_point_m")
                 if fixed is None:
                     raise ValueError("这个 TCP 没有标定固定点")
-                status = self.points.save(name, arm, tcp_name, tcp, fixed, note)
+                status = self.points.save(name, fixed, note, source="tcp_fixed")
             elif path == "/api/points/save-now":
-                arm, tcp_name, tcp = self._active_tcp()
+                # 用当前控制臂（或请求里的臂）+ 该臂 TCP 算爪尖，但文件只存坐标
+                arm = str(body.get("arm") or (self.loop.arm if self.loop else "") or "right")
+                if arm not in ("left", "right"):
+                    arm = "right"
+                _, tcp = self._tcp_for_arm(arm)
                 st = self.reader().read_arm(get_arm(arm))
                 t, R = self.kin.arms[arm].model.fk(st.q)
-                status = self.points.save(name, arm, tcp_name, tcp, t + R @ tcp, note)
+                status = self.points.save(name, t + R @ tcp, note, source="tcp_now")
+            elif path == "/api/points/save-center":
+                det = self.detect
+                center = det.center_torso
+                if center is None:
+                    center = det.face_center_torso
+                if center is None:
+                    raise ValueError("还没有中心点：先在识别定位里做校准/中心点提取")
+                note_out = (note or "").strip() or "识别定位中心点（绿）"
+                status = self.points.save(name, center, note_out, source="detect_center")
+                status["message"] = (
+                    f"已记下中心点 [{float(center[0])*1000:.1f}, "
+                    f"{float(center[1])*1000:.1f}, {float(center[2])*1000:.1f}] mm"
+                )
             elif path == "/api/points/load":
                 status = self.points.load(name)
             elif path == "/api/points/delete":
@@ -596,16 +625,20 @@ class App:
             if not self.points.doc or self.points.active_name != name:
                 self.points.load(name)
             doc = self.points.doc or {}
-            if loop.arm != doc.get("arm"):
-                side = "左" if doc.get("arm") == "left" else "右"
-                return {"ok": False, "error": f"先把控制臂换成{side}臂"}
+            point = doc.get("point_m")
+            if point is None:
+                return {"ok": False, "error": "这个空间点没有坐标"}
+            # 碰点：当前控制臂 + 该臂当前 TCP（与点文件无关）
+            tcp_name, tcp = self._tcp_for_arm(loop.arm)
             q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
-            q, miss_mm = solve_tcp_ik(self.kin.arms[loop.arm].model, q0, doc["tcp_m"], doc["point_m"])
+            q, miss_mm = solve_tcp_ik(self.kin.arms[loop.arm].model, q0, tcp, point)
             if miss_mm > 3.0:
                 return {"ok": False, "error": f"从这个姿态到不了该点，TCP 还差 {miss_mm:.1f} mm", "miss_mm": miss_mm}
             loop.set_target(q)
             out = self.points.status()
             out["miss_mm"] = miss_mm
+            out["goto_arm"] = loop.arm
+            out["goto_tcp"] = tcp_name
             return out
         except (ValueError, KeyError, FileNotFoundError, OSError) as exc:
             out = self.points.status()

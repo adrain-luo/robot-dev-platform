@@ -40,11 +40,13 @@ def list_saved() -> List[Dict[str, Any]]:
             continue
         out.append({
             "name": doc.get("name") or path.stem,
-            "arm": doc.get("arm") or "",
-            "tcp_name": doc.get("tcp_name") or "",
+            "source": doc.get("source") or "",
             "point_mm": doc.get("point_mm") or [],
             "note": doc.get("note") or "",
             "saved_at": doc.get("saved_at") or "",
+            # 旧文件可能还有 arm/tcp_name，仅作显示兼容，碰点不再使用
+            "arm": doc.get("arm") or "",
+            "tcp_name": doc.get("tcp_name") or "",
         })
     return out
 
@@ -115,8 +117,7 @@ class SpatialPoints:
         return {
             "ok": True,
             "active_name": self.active_name,
-            "arm": doc.get("arm") or "",
-            "tcp_name": doc.get("tcp_name") or "",
+            "source": doc.get("source") or "",
             "point_m": doc.get("point_m"),
             "point_mm": doc.get("point_mm"),
             "note": doc.get("note") or "",
@@ -128,19 +129,24 @@ class SpatialPoints:
         if name and _path(name).is_file():
             self._apply(json.loads(_path(name).read_text(encoding="utf-8")))
 
-    def save(self, name: str, arm: str, tcp_name: str, tcp_m, point_m, note: str = "") -> Dict[str, Any]:
+    def save(
+        self,
+        name: str,
+        point_m,
+        note: str = "",
+        *,
+        source: str = "",
+    ) -> Dict[str, Any]:
+        """只存躯干系位置。碰点时再用当前控制臂 + 当前 TCP。"""
         name = _check_name(name)
         point = np.asarray(point_m, dtype=float).reshape(3)
-        tcp = np.asarray(tcp_m, dtype=float).reshape(3)
-        if not np.all(np.isfinite(point)) or not np.all(np.isfinite(tcp)):
-            raise ValueError("空间点或 TCP 偏置不是有限数")
+        if not np.all(np.isfinite(point)):
+            raise ValueError("空间点不是有限数")
         POINTS_DIR.mkdir(parents=True, exist_ok=True)
         doc = {
             "name": name,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
-            "arm": arm,
-            "tcp_name": tcp_name,
-            "tcp_m": tcp.tolist(),
+            "source": (source or "").strip(),
             "point_m": point.tolist(),
             "point_mm": (point * 1000.0).tolist(),
             "note": (note or "").strip(),

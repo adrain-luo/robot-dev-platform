@@ -72,6 +72,7 @@ const View = {
   motions: new Map(),
   cloudFrame: "vision", // vision=跟躯干；scene=钉在世界
   cloudAccumulate: false, // false=单帧；true=固定场景累加
+  cloudMaxDistM: 2.0, // 距机器人中心（基座原点）最远显示距离；0=不裁
   cloudLayers: [],
   async attach(canvas) {
     if (this.canvas) return;
@@ -242,6 +243,15 @@ const View = {
     obj.geometry?.dispose();
     obj.material?.dispose();
   },
+  _robotCenterWorld() {
+    // 机器人中心：基座在场景里的原点（robot 根）
+    const o = new THREE.Vector3(0, 0, 0);
+    if (this.robot) {
+      this.robot.updateMatrixWorld(true);
+      o.setFromMatrixPosition(this.robot.matrixWorld);
+    }
+    return o;
+  },
   _xyzToWorld(xyz, torso) {
     torso.updateMatrixWorld(true);
     const m = torso.matrixWorld;
@@ -263,6 +273,62 @@ const View = {
       out[i] = v.x; out[i + 1] = v.y; out[i + 2] = v.z;
     }
     return out;
+  },
+  /** 按距机器人中心裁切；xyz/rgb 为当前挂接坐标系下的完整点。 */
+  _filterByMaxDist(xyz, rgb, frame) {
+    const maxM = Number(this.cloudMaxDistM);
+    if (!(maxM > 0) || !Number.isFinite(maxM)) {
+      return { xyz: Float32Array.from(xyz), rgb: Float32Array.from(rgb), kept: xyz.length / 3, dropped: 0 };
+    }
+    const torso = this.links.get("torso_link");
+    const center = this._robotCenterWorld();
+    const max2 = maxM * maxM;
+    const n = Math.floor(xyz.length / 3);
+    const outX = new Float32Array(xyz.length);
+    const outC = new Float32Array(rgb.length);
+    let w = 0;
+    const v = new THREE.Vector3();
+    const needWorld = frame !== "scene" && torso;
+    if (needWorld) torso.updateMatrixWorld(true);
+    const m = needWorld ? torso.matrixWorld : null;
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      v.set(xyz[i3], xyz[i3 + 1], xyz[i3 + 2]);
+      if (m) v.applyMatrix4(m);
+      const dx = v.x - center.x;
+      const dy = v.y - center.y;
+      const dz = v.z - center.z;
+      if (dx * dx + dy * dy + dz * dz > max2) continue;
+      outX[w] = xyz[i3];
+      outX[w + 1] = xyz[i3 + 1];
+      outX[w + 2] = xyz[i3 + 2];
+      outC[w] = rgb[i3];
+      outC[w + 1] = rgb[i3 + 1];
+      outC[w + 2] = rgb[i3 + 2];
+      w += 3;
+    }
+    return {
+      xyz: outX.subarray(0, w),
+      rgb: outC.subarray(0, w),
+      kept: w / 3,
+      dropped: n - w / 3,
+    };
+  },
+  _applyCloudMaxDist(pts) {
+    if (!pts?.userData?.fullXyz) return;
+    const frame = pts.userData.frame || this.cloudFrame;
+    const filtered = this._filterByMaxDist(pts.userData.fullXyz, pts.userData.fullRgb, frame);
+    pts.geometry.setAttribute("position", new THREE.Float32BufferAttribute(filtered.xyz, 3));
+    pts.geometry.setAttribute("color", new THREE.Float32BufferAttribute(filtered.rgb, 3));
+    pts.geometry.computeBoundingSphere();
+  },
+  setCloudMaxDist(m) {
+    const next = Math.max(0, Number(m) || 0);
+    this.cloudMaxDistM = next;
+    for (const layer of this.cloudLayers) this._applyCloudMaxDist(layer);
+    if (this.cloudCompare) this._applyCloudMaxDist(this.cloudCompare);
+    this.render();
+    return this.cloudStatus();
   },
   clearClouds({ keepCompare = false } = {}) {
     for (const layer of this.cloudLayers) this._disposePoints(layer);
@@ -289,19 +355,29 @@ const View = {
     const layers = [...this.cloudLayers];
     if (this.cloudCompare) layers.push(this.cloudCompare);
     for (const pts of layers) {
-      const pos = pts.geometry.getAttribute("position");
-      const arr = pos.array;
       const wasScene = pts.userData.frame === "scene";
-      let nextArr;
-      if (next === "scene" && !wasScene) nextArr = this._xyzToWorld(arr, torso);
-      else if (next === "vision" && wasScene) nextArr = this._xyzWorldToTorso(arr, torso);
-      else continue;
-      pos.array.set(nextArr);
-      pos.needsUpdate = true;
-      pts.geometry.computeBoundingSphere();
+      const full = pts.userData.fullXyz;
+      let nextFull = null;
+      if (full && next === "scene" && !wasScene) nextFull = this._xyzToWorld(full, torso);
+      else if (full && next === "vision" && wasScene) nextFull = this._xyzWorldToTorso(full, torso);
+      else if (!full) {
+        const pos = pts.geometry.getAttribute("position");
+        const arr = pos.array;
+        let nextArr;
+        if (next === "scene" && !wasScene) nextArr = this._xyzToWorld(arr, torso);
+        else if (next === "vision" && wasScene) nextArr = this._xyzWorldToTorso(arr, torso);
+        else continue;
+        pos.array.set(nextArr);
+        pos.needsUpdate = true;
+        pts.geometry.computeBoundingSphere();
+      }
+      if (nextFull) {
+        pts.userData.fullXyz = nextFull;
+      }
       pts.userData.frame = next;
       if (pts.parent) pts.parent.remove(pts);
       (next === "scene" ? this.scene3 : torso).add(pts);
+      this._applyCloudMaxDist(pts);
     }
     this.cloudFrame = next;
     this.render();
@@ -313,19 +389,24 @@ const View = {
   },
   cloudStatus() {
     let n = 0;
+    let full = 0;
     for (const layer of this.cloudLayers) {
       const pos = layer.geometry?.getAttribute("position");
       if (pos) n += pos.count;
+      if (layer.userData?.fullXyz) full += layer.userData.fullXyz.length / 3;
     }
     if (this.cloudCompare) {
       const pos = this.cloudCompare.geometry?.getAttribute("position");
       if (pos) n += pos.count;
+      if (this.cloudCompare.userData?.fullXyz) full += this.cloudCompare.userData.fullXyz.length / 3;
     }
     return {
       frame: this.cloudFrame,
       accumulate: this.cloudAccumulate,
       layers: this.cloudLayers.length,
       points: n,
+      fullPoints: full || n,
+      maxDistM: this.cloudMaxDistM,
       hasCompare: !!this.cloudCompare,
     };
   },
@@ -347,9 +428,12 @@ const View = {
     if (frame === "scene") {
       positions = this._xyzToWorld(positions, torso);
     }
+    const fullXyz = Float32Array.from(positions);
+    const fullRgb = Float32Array.from(colors);
+    const filtered = this._filterByMaxDist(fullXyz, fullRgb, frame);
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(filtered.xyz, 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(filtered.rgb, 3));
     const mat = new THREE.PointsMaterial({
       size: compare ? 2.6 : 2.2,
       vertexColors: true,
@@ -358,6 +442,8 @@ const View = {
     const pts = new THREE.Points(geo, mat);
     pts.userData.frame = frame;
     pts.userData.slot = compare ? "compare" : "main";
+    pts.userData.fullXyz = fullXyz;
+    pts.userData.fullRgb = fullRgb;
     (frame === "scene" ? this.scene3 : torso).add(pts);
     if (compare) this.cloudCompare = pts;
     else {
@@ -375,16 +461,16 @@ const View = {
     let kept = 0;
     let dropped = 0;
     for (const pts of targets) {
-      const pos = pts.geometry.getAttribute("position");
-      const col = pts.geometry.getAttribute("color");
-      if (!pos || !col) continue;
-      const out = denoisePoints(pos.array, col.array);
+      const srcX = pts.userData.fullXyz || pts.geometry.getAttribute("position")?.array;
+      const srcC = pts.userData.fullRgb || pts.geometry.getAttribute("color")?.array;
+      if (!srcX || !srcC) continue;
+      const out = denoisePoints(srcX, srcC);
       dropped += out.dropped;
       kept += out.kept;
       if (out.dropped <= 0) continue;
-      pts.geometry.setAttribute("position", new THREE.Float32BufferAttribute(out.xyz, 3));
-      pts.geometry.setAttribute("color", new THREE.Float32BufferAttribute(out.rgb, 3));
-      pts.geometry.computeBoundingSphere();
+      pts.userData.fullXyz = out.xyz;
+      pts.userData.fullRgb = out.rgb;
+      this._applyCloudMaxDist(pts);
     }
     this.render();
     return { ok: true, kept, dropped, ...this.cloudStatus() };

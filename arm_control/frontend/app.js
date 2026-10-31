@@ -1315,16 +1315,25 @@ function renderSpatial(pt) {
   if (!note || !pt) return;
   const sel = $("pt-select");
   if (sel && pt.saved && document.activeElement !== sel) {
+    // 优先保留下拉框当前选择，避免 poll 用旧 active_name 把刚点的项刷回去
+    const names = new Set((pt.saved || []).map((s) => s.name));
+    const keep = (sel.value && names.has(sel.value))
+      ? sel.value
+      : (pt.active_name || "");
     writeOptions(sel, pt.saved.length ? "选择空间点…" : "还没有空间点",
       pt.saved.map((s) => {
-        const side = s.arm === "left" ? "左" : s.arm === "right" ? "右" : "";
-        return { value: s.name, label: `${s.name} · ${side} · ${s.tcp_name || ""}`.replace(/ · $/, "") };
+        const src = s.source === "detect_center" ? "绿点"
+          : s.source === "tcp_fixed" ? "固定点"
+          : s.source === "tcp_now" ? "爪尖"
+          : (s.note || "");
+        const label = src ? `${s.name} · ${src}` : s.name;
+        return { value: s.name, label };
       }),
-      pt.active_name || sel.value);
+      keep);
   }
   let text = pt.active_name ? `已选「${pt.active_name}」` : "还没有空间点";
   if (pt.point_mm) text += ` [${pt.point_mm.map((v) => Number(v).toFixed(1)).join(", ")}] mm`;
-  if (pt.tcp_name) text += ` · TCP ${pt.tcp_name}`;
+  if (pt.source) text += ` · ${pt.source}`;
   if (pt.note) text += `。${pt.note}`;
   note.textContent = text;
   const p = pt.point_m;
@@ -1361,6 +1370,23 @@ $("btn-pt-now").onclick = async () => {
     flash(`已记下「${name}」`, true);
   } catch (e) { flash(String(e), false); }
 };
+if ($("btn-pt-center")) {
+  $("btn-pt-center").onclick = async () => {
+    const name = $("pt-name").value.trim();
+    if (!name) { flash("先给空间点起个名字", false); return; }
+    const exists = [...$("pt-select").options].some((o) => o.value === name);
+    if (exists && !confirm(`覆盖空间点「${name}」？`)) return;
+    try {
+      const d = await pointPost("/api/points/save-center", {
+        name,
+        note: $("pt-note").value.trim(),
+      });
+      if (!d.ok) { flash(d.error || "记下中心点失败", false); return; }
+      $("pt-name").value = "";
+      flash(d.message || `已记下中心点「${name}」`, true);
+    } catch (e) { flash(String(e), false); }
+  };
+}
 $("btn-pt-load").onclick = async () => {
   const name = $("pt-select").value;
   if (!name) { flash("先选一个空间点", false); return; }
@@ -1429,10 +1455,12 @@ $("btn-pt-goto").onclick = async () => {
   const name = $("pt-select").value;
   if (!name) { flash("先选一个空间点", false); return; }
   if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
-  if (!confirm(`将按限速把 TCP 碰到「${name}」。扶住、守急停。继续？`)) return;
+  if (!confirm(`将按限速用当前控制臂的 TCP 碰到「${name}」。扶住、守急停。继续？`)) return;
   try {
     const d = await pointPost("/api/points/goto", { name });
-    flash(`已出发，规划终点还差 ${Number(d.miss_mm).toFixed(2)} mm`, true);
+    const side = d.goto_arm === "left" ? "左臂" : d.goto_arm === "right" ? "右臂" : "";
+    const tcp = d.goto_tcp ? ` · ${d.goto_tcp}` : "";
+    flash(`已出发（${side}${tcp}），规划终点还差 ${Number(d.miss_mm).toFixed(2)} mm`, true);
   } catch (e) { flash(String(e), false); }
 };
 $("btn-tcp-del").onclick = async () => {
@@ -1807,7 +1835,11 @@ function syncRenderNote(extra) {
   const st = window.RobotView.cloudStatus();
   const frame = st.frame === "scene" ? "场景" : "视觉";
   const stack = st.accumulate ? "固定" : "单帧";
-  let text = `${frame} · ${stack} · ${st.layers} 层 · ${st.points} 点`;
+  const dist = Number(st.maxDistM);
+  const distTxt = Number.isFinite(dist) && dist > 0 ? `≤${dist.toFixed(1)} m` : "不限距";
+  let text = `${frame} · ${stack} · ${distTxt} · ${st.layers} 层 · ${st.points}`;
+  if (st.fullPoints && st.fullPoints !== st.points) text += `/${st.fullPoints}`;
+  text += " 点";
   if (st.hasCompare) text += " · 含调试层";
   if (extra) text += ` · ${extra}`;
   el.textContent = text;
@@ -1819,7 +1851,30 @@ function applyRenderControlsFromUi() {
   const stack = $("render-stack")?.value || "single";
   if (window.RobotView.setCloudFrame) window.RobotView.setCloudFrame(frame);
   if (window.RobotView.setCloudAccumulate) window.RobotView.setCloudAccumulate(stack === "fixed");
+  const distEl = $("cloud-max-dist");
+  if (distEl && window.RobotView.setCloudMaxDist) {
+    window.RobotView.setCloudMaxDist(parseFloat(distEl.value) || 2);
+  }
   syncRenderNote();
+}
+
+function syncCloudMaxDistLabel() {
+  const sl = $("cloud-max-dist");
+  const lab = $("cloud-max-dist-val");
+  if (!sl || !lab) return;
+  lab.textContent = Number(sl.value).toFixed(1);
+}
+
+if ($("cloud-max-dist")) {
+  syncCloudMaxDistLabel();
+  $("cloud-max-dist").addEventListener("input", () => {
+    syncCloudMaxDistLabel();
+    const m = parseFloat($("cloud-max-dist").value) || 2;
+    if (window.RobotView && window.RobotView.setCloudMaxDist) {
+      window.RobotView.setCloudMaxDist(m);
+      syncRenderNote();
+    }
+  });
 }
 
 if ($("render-frame")) {
