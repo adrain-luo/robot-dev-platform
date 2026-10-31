@@ -1455,13 +1455,39 @@ $("btn-pt-goto").onclick = async () => {
   const name = $("pt-select").value;
   if (!name) { flash("先选一个空间点", false); return; }
   if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
-  if (!confirm(`将按限速用当前控制臂的 TCP 碰到「${name}」。扶住、守急停。继续？`)) return;
+  if (!confirm(`将按限速用当前控制臂的 TCP 碰到「${name}」。到位后按实测误差补偿瞄准（最多 2 步）。扶住、守急停。继续？`)) return;
+  const btn = $("btn-pt-goto");
+  if (btn) btn.disabled = true;
+  flash("正在走点 / 停稳 / 误差补偿修正…", true);
   try {
     const d = await pointPost("/api/points/goto", { name });
+    if (!d.ok) { flash(d.error || "碰点失败", false); return; }
     const side = d.goto_arm === "left" ? "左臂" : d.goto_arm === "right" ? "右臂" : "";
     const tcp = d.goto_tcp ? ` · ${d.goto_tcp}` : "";
-    flash(`已出发（${side}${tcp}），规划终点还差 ${Number(d.miss_mm).toFixed(2)} mm`, true);
+    const plan = Number(d.plan_miss_mm ?? d.miss_mm);
+    const meas = Number(d.measured_miss_mm);
+    const before = Number(d.measured_before_mm);
+    if (!Number.isFinite(meas)) {
+      flash(
+        `服务端没返回实测误差（规划 ${Number.isFinite(plan) ? plan.toFixed(2) : "?"} mm）。请重启臂控 python server.py 后再试。`,
+        false,
+      );
+      return;
+    }
+    const to = d.settle_timed_out ? "（停稳超时）" : "";
+    const nRef = Number(d.refine_passes) || 0;
+    let text = `已到位（${side}${tcp}）${to}。规划 ${plan.toFixed(2)} mm`;
+    if (Number.isFinite(before) && nRef > 0) {
+      text += ` · 修正前实测 ${before.toFixed(2)} mm → 修正 ${nRef} 步后 ${meas.toFixed(2)} mm`;
+    } else {
+      text += ` · 电机实测 TCP 还差 ${meas.toFixed(2)} mm`;
+    }
+    if (Array.isArray(d.measured_tcp_mm) && d.measured_tcp_mm.length >= 3) {
+      text += ` [${d.measured_tcp_mm.map((v) => Number(v).toFixed(1)).join(", ")}]`;
+    }
+    flash(text, true);
   } catch (e) { flash(String(e), false); }
+  finally { if (btn) btn.disabled = false; }
 };
 $("btn-tcp-del").onclick = async () => {
   const name = $("tcp-select").value;

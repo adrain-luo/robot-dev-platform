@@ -617,6 +617,53 @@ class App:
             out["error"] = str(exc)
             return out
 
+    def _tcp_pose_from_q(self, model, q, tcp_m) -> np.ndarray:
+        t, R = model.fk(np.asarray(q, dtype=float).reshape(-1))
+        tcp_vec = np.asarray(tcp_m, dtype=float).reshape(3)
+        return np.asarray(t, dtype=float).reshape(3) + np.asarray(R, dtype=float).reshape(3, 3) @ tcp_vec
+
+    def _goto_settle_measure(
+        self,
+        loop: ArmLoop,
+        model,
+        q_cmd,
+        tcp_m,
+        point_arr: np.ndarray,
+        stop: threading.Event,
+    ) -> Dict[str, Any]:
+        """限速走到 q_cmd，停稳后用电机角算 TCP 与目标差。"""
+        settle = iden.wait_settle(
+            loop,
+            q_cmd,
+            stop,
+            {
+                "still_dq_rad_s": 0.05,
+                "still_drift_rad": 0.015,
+                "still_window_s": 0.5,
+                "settle_timeout_s": 12.0,
+            },
+        )
+        st = loop.status()
+        if not st.get("engaged") or st.get("float"):
+            raise PermissionErrorMotion("到位前已释放或进入拖拽")
+        samp = loop.arm_sample(wait=True)
+        q_meas = np.asarray(samp["q_meas"], dtype=float)
+        if q_meas.size != model.n or not np.all(np.isfinite(q_meas)):
+            raise ValueError(f"电机角无效：{q_meas.tolist()}")
+        tcp_now = self._tcp_pose_from_q(model, q_meas, tcp_m)
+        if not np.all(np.isfinite(tcp_now)):
+            raise ValueError("FK 得到的 TCP 含非有限数")
+        measured_miss_mm = float(np.linalg.norm(tcp_now - point_arr) * 1000.0)
+        if not np.isfinite(measured_miss_mm):
+            raise ValueError("实测误差不是有限数")
+        return {
+            "q_meas": q_meas,
+            "tcp_now": tcp_now,
+            "measured_miss_mm": measured_miss_mm,
+            "settle_s": float(settle.get("settle_s") or 0.0),
+            "settle_timed_out": bool(settle.get("timed_out")),
+        }
+
     def point_goto(self, body: Dict[str, Any], loop: ArmLoop) -> Dict[str, Any]:
         try:
             name = str(body.get("name") or self.points.active_name or "")
@@ -630,17 +677,68 @@ class App:
                 return {"ok": False, "error": "这个空间点没有坐标"}
             # 碰点：当前控制臂 + 该臂当前 TCP（与点文件无关）
             tcp_name, tcp = self._tcp_for_arm(loop.arm)
+            model = self.kin.arms[loop.arm].model
+            point_arr = np.asarray(point, dtype=float).reshape(3)
+            stop = threading.Event()
             q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
-            q, miss_mm = solve_tcp_ik(self.kin.arms[loop.arm].model, q0, tcp, point)
-            if miss_mm > 3.0:
-                return {"ok": False, "error": f"从这个姿态到不了该点，TCP 还差 {miss_mm:.1f} mm", "miss_mm": miss_mm}
-            loop.set_target(q)
+            q, plan_miss_mm = solve_tcp_ik(model, q0, tcp, point_arr)
+            if plan_miss_mm > 3.0:
+                return {
+                    "ok": False,
+                    "error": f"从这个姿态到不了该点，规划 TCP 还差 {plan_miss_mm:.1f} mm",
+                    "miss_mm": plan_miss_mm,
+                    "plan_miss_mm": plan_miss_mm,
+                }
+
+            # 1) 开环：IK 到真实目标 → 停稳 → 电机角测 TCP
+            first = self._goto_settle_measure(loop, model, q, tcp, point_arr, stop)
+            measured_before_mm = float(first["measured_miss_mm"])
+            refine_passes = 0
+            # 2) 误差补偿：假设跟点偏置近似定常，下一次瞄准
+            #    aim = target + (target - tcp_meas) = 2*target - tcp_meas
+            #    而不是再对同一 target 求 IK（那样指令几乎不变，实测也不会变）
+            refine_thresh_mm = float(body.get("refine_thresh_mm") or 1.5)
+            max_refine = int(body.get("refine_passes") or 2)
+            max_refine = max(0, min(max_refine, 3))
+            gain = float(body.get("refine_gain") or 1.0)
+            gain = max(0.2, min(gain, 1.5))
+            cur = first
+            while cur["measured_miss_mm"] > refine_thresh_mm and refine_passes < max_refine:
+                err = point_arr - cur["tcp_now"]
+                aim = point_arr + gain * err
+                q2, plan2 = solve_tcp_ik(model, cur["q_meas"], tcp, aim)
+                if plan2 > 5.0:
+                    break
+                if float(np.max(np.abs(q2 - cur["q_meas"]))) < 5e-4:
+                    break
+                cur = self._goto_settle_measure(loop, model, q2, tcp, point_arr, stop)
+                refine_passes += 1
+                # 若比修正前更差，停止（避免发散）
+                if cur["measured_miss_mm"] > measured_before_mm * 1.15 + 1.0:
+                    break
+
+            tcp_now = cur["tcp_now"]
+            measured_miss_mm = float(cur["measured_miss_mm"])
             out = self.points.status()
-            out["miss_mm"] = miss_mm
+            out["miss_mm"] = float(plan_miss_mm)
+            out["plan_miss_mm"] = float(plan_miss_mm)
+            out["measured_miss_mm"] = measured_miss_mm
+            out["measured_before_mm"] = measured_before_mm
+            out["refine_passes"] = refine_passes
+            out["refine_mode"] = "error_compensate"
+            out["measured_tcp_m"] = [float(v) for v in tcp_now.tolist()]
+            out["measured_tcp_mm"] = [float(v) * 1000.0 for v in tcp_now.tolist()]
+            out["settle_s"] = float(cur["settle_s"])
+            out["settle_timed_out"] = bool(cur["settle_timed_out"])
             out["goto_arm"] = loop.arm
             out["goto_tcp"] = tcp_name
             return out
-        except (ValueError, KeyError, FileNotFoundError, OSError) as exc:
+        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
+            out = self.points.status()
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
+        except RuntimeError as exc:
             out = self.points.status()
             out["ok"] = False
             out["error"] = str(exc)
