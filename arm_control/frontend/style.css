@@ -414,6 +414,49 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
 }
 .pt-goto-box .fields { align-items: end; }
 .pt-goto-box .field { min-width: 72px; width: 76px; }
+.tcp-jog-label { margin-top: 10px; font-weight: 650; color: var(--ink); }
+.tcp-jog-pad {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 6px 0 4px;
+  max-width: 248px;
+}
+.tcp-jog-pad .tcp-jog-btn {
+  height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1.1;
+  font-weight: 650;
+}
+.tcp-jog-pad .tcp-jog-btn span {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.tcp-jog-hub {
+  display: grid;
+  place-items: center;
+  min-height: 52px;
+  border-radius: 12px;
+  background: rgba(163, 59, 50, 0.14);
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+.tcp-jog-spacer { min-height: 1px; }
+.tcp-jog-fb { margin-top: 4px; }
+.tcp-jog-rot {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 6px 0 2px;
+}
+.tcp-jog-rot .tcp-jog-btn { height: 40px; font-weight: 650; }
 input[type="range"] {
   width: 100%;
   height: 28px;

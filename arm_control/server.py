@@ -62,8 +62,16 @@ from api import PayloadAPI
 from board_touch import BoardTouch
 from detect_localize import DetectLocalize
 from runtime_config import ConfigLockedError, RuntimeConfig
-from spatial_points import SpatialPoints, list_saved as list_spatial_saved, solve_tcp_ik
+from spatial_points import (
+    SpatialPoints,
+    axis_angle_R,
+    list_saved as list_spatial_saved,
+    solve_tcp_ik,
+    solve_tcp_pose_ik,
+    solve_tcp_pose_ik_robust,
+)
 from tcp_calib import TcpSession, list_saved as list_tcp_saved
+from work_pose import WorkPoseSession
 import session as he_session
 import results as he_results
 from service import HandEyeAPI
@@ -164,9 +172,12 @@ class App:
         self.payload = PayloadAPI(self)
         self.tcp = TcpSession()
         self.points = SpatialPoints()
+        self.work_pose = WorkPoseSession()
         self.board = BoardTouch(self)
         self.detect = DetectLocalize(self)
         self.runtime = RuntimeConfig(self)
+        # 工作姿态到位 / 已锁定下的碰点与棋盘：set_target 时不自动解锁
+        self._work_pose_motion = False
         try:
             self.tcp.restore_active()
             self.points.restore_active()
@@ -490,6 +501,7 @@ class App:
             "lift": lift,
             "tcp": self.tcp.status(),
             "spatial": self.points.status(),
+            "work_pose": self.work_pose.status(self.tcp.active_name or ""),
             "board": self.board.status(),
             "detect": self.detect.status(),
             "runtime": self.runtime.snapshot(),
@@ -505,10 +517,28 @@ class App:
             if path == "/api/runtime-config/gravity":
                 return self.runtime.apply_gravity(str(body.get("arm") or "right"), str(body.get("name") or ""))
             if path == "/api/runtime-config/tcp":
-                return self.runtime.apply_tcp(
+                out = self.runtime.apply_tcp(
                     str(body.get("name") or ""),
                     arm=body.get("arm"),
                 )
+                self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
+                return out
+            if path == "/api/runtime-config/work-pose":
+                # 不受配置锁定限制：确认后到位并锁定工作姿态
+                return self.work_pose_load(
+                    str(body.get("tcp_name") or self.tcp.active_name or ""),
+                    str(body.get("name") or ""),
+                )
+            if path == "/api/runtime-config/pose-ik-mode":
+                # 不受配置锁定：随时切换锁定姿态下的 IK 策略
+                out = self.work_pose.set_ik_mode(str(body.get("mode") or ""))
+                snap = self.runtime.snapshot()
+                snap["work_pose"] = out
+                snap["ok"] = True
+                snap["message"] = (
+                    "已切到多初值（新）" if out.get("ik_mode") == "robust" else "已切到单次局部 IK（旧）"
+                )
+                return snap
             if path == "/api/runtime-config":
                 return self.runtime.snapshot()
             return {"ok": False, "error": "没有这个配置接口"}
@@ -517,7 +547,7 @@ class App:
             out["ok"] = False
             out["error"] = str(exc)
             return out
-        except (ValueError, FileNotFoundError, OSError, KeyError, json.JSONDecodeError) as exc:
+        except (ValueError, FileNotFoundError, OSError, KeyError, json.JSONDecodeError, PermissionErrorMotion, RuntimeError) as exc:
             out = self.runtime.snapshot()
             out["ok"] = False
             out["error"] = str(exc)
@@ -542,16 +572,275 @@ class App:
                 status = self.tcp.save(str(body.get("name") or ""), str(body.get("note") or ""))
             elif path == "/api/tcp/load":
                 status = self.tcp.load(str(body.get("name") or ""))
+                self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
             elif path == "/api/tcp/delete":
                 status = self.tcp.delete(str(body.get("name") or ""))
+                self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
+            elif path == "/api/tcp/jog":
+                return self.tcp_jog(body)
             else:
                 return {"ok": False, "error": "没有这个 TCP 接口"}
             return status
-        except (ValueError, KeyError, FileNotFoundError, OSError) as exc:
+        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
             out = self.tcp.status()
             out["ok"] = False
             out["error"] = str(exc)
             return out
+        except RuntimeError as exc:
+            out = self.tcp.status()
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
+
+    def tcp_jog(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """TCP 点动：躯干系平移（保姿态）或绕 TCP 点旋转（轴沿躯干）。"""
+        loop = self.require_loop()
+        st = loop.status()
+        if st.get("float"):
+            raise PermissionErrorMotion("先点急停退出拖拽，再点动 TCP")
+        if not st.get("engaged"):
+            raise PermissionErrorMotion("先接管再点动 TCP")
+        tcp_name, tcp = self._tcp_for_arm(loop.arm)
+        model = self.kin.arms[loop.arm].model
+        mode = str(body.get("mode") or "").strip().lower()
+        axis = str(body.get("axis") or "").strip().lower()
+        if axis not in ("x", "y", "z"):
+            raise ValueError("轴只能是 x / y / z（躯干系）")
+        try:
+            sign = float(body.get("sign") if body.get("sign") is not None else 1.0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"方向无效：{exc}") from exc
+        sign = 1.0 if sign >= 0.0 else -1.0
+        ax_i = {"x": 0, "y": 1, "z": 2}[axis]
+        axis_vec = np.zeros(3, dtype=float)
+        axis_vec[ax_i] = 1.0
+
+        q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
+        t, R = model.fk(q0)
+        tcp = np.asarray(tcp, dtype=float).reshape(3)
+        c = np.asarray(t, dtype=float).reshape(3) + R @ tcp
+
+        self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
+
+        if mode == "translate":
+            try:
+                step_mm = float(body.get("step_mm") if body.get("step_mm") is not None else 5.0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"平移步长无效：{exc}") from exc
+            if not (0.2 <= step_mm <= 50.0):
+                raise ValueError("平移步长请在 0.2～50 mm")
+            delta = axis_vec * (sign * step_mm / 1000.0)
+            c_tgt = c + delta
+            if self.work_pose.locked and self.work_pose.R_lock is not None:
+                R_tgt = np.asarray(self.work_pose.R_lock, dtype=float).reshape(3, 3)
+            else:
+                R_tgt = R.copy()
+            keep_lock = bool(self.work_pose.locked)
+            self._work_pose_motion = True
+            try:
+                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, c_tgt, R_tgt)
+                if miss_mm > 3.0 or ori_deg > 3.0:
+                    raise ValueError(
+                        f"平移不到：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"
+                    )
+                loop.set_target(q)
+            finally:
+                self._work_pose_motion = False
+            label = {"x": ("前", "后"), "y": ("左", "右"), "z": ("上", "下")}[axis]
+            dir_name = label[0] if sign > 0 else label[1]
+            out = self.tcp.status()
+            out["ok"] = True
+            out["mode"] = "translate"
+            out["axis"] = axis
+            out["sign"] = sign
+            out["step_mm"] = step_mm
+            out["dir"] = dir_name
+            out["plan_miss_mm"] = float(miss_mm)
+            out["plan_ori_deg"] = float(ori_deg)
+            out["work_pose_locked"] = keep_lock
+            out["message"] = f"TCP {dir_name} {step_mm:g} mm（躯干 {axis.upper()}）"
+            return out
+
+        if mode == "rotate":
+            try:
+                step_deg = float(body.get("step_deg") if body.get("step_deg") is not None else 5.0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"旋转步长无效：{exc}") from exc
+            if not (0.2 <= step_deg <= 30.0):
+                raise ValueError("旋转步长请在 0.2～30°")
+            # 旋转会改姿态，解锁工作姿态
+            self.unlock_work_pose("tcp_jog_rotate")
+            R_delta = axis_angle_R(axis_vec, sign * step_deg)
+            R_tgt = R_delta @ R
+            c_tgt = c.copy()
+            q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, c_tgt, R_tgt)
+            if miss_mm > 3.0 or ori_deg > 3.0:
+                raise ValueError(
+                    f"旋转不到：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"
+                )
+            loop.set_target(q)
+            out = self.tcp.status()
+            out["ok"] = True
+            out["mode"] = "rotate"
+            out["axis"] = axis
+            out["sign"] = sign
+            out["step_deg"] = step_deg
+            out["plan_miss_mm"] = float(miss_mm)
+            out["plan_ori_deg"] = float(ori_deg)
+            out["work_pose_locked"] = False
+            out["message"] = (
+                f"TCP 绕躯干 {axis.upper()} {'+' if sign > 0 else '−'}{step_deg:g}°（红点不动）"
+            )
+            return out
+
+        raise ValueError("mode 只能是 translate 或 rotate")
+
+    def unlock_work_pose(self, reason: str = "") -> None:
+        if self.work_pose.locked:
+            self.work_pose.unlock()
+
+    def _solve_tcp_motion(self, model, q0, tcp, target, R_lock):
+        """有锁定姿态则按配置做单次/多初值 6D IK，否则纯位置。返回 (q, miss_mm, ori_miss_deg|None)。"""
+        if R_lock is not None:
+            if self.work_pose.ik_mode == "single":
+                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, target, R_lock)
+            else:
+                extra = []
+                if self.work_pose.q_seed is not None:
+                    extra.append(self.work_pose.q_seed)
+                q, miss_mm, ori_deg = solve_tcp_pose_ik_robust(
+                    model,
+                    q0,
+                    tcp,
+                    target,
+                    R_lock,
+                    extra_seeds=extra,
+                    n_random=16,
+                    n_ok_stop=5,
+                )
+            return q, miss_mm, ori_deg
+        q, miss_mm = solve_tcp_ik(model, q0, tcp, target)
+        return q, miss_mm, None
+
+    def work_pose_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            tcp_name = str(body.get("tcp_name") or self.tcp.active_name or "")
+            name = str(body.get("name") or "")
+            note = str(body.get("note") or "")
+            if path == "/api/work-pose/list":
+                out = self.work_pose.status(tcp_name)
+                return out
+            if path == "/api/work-pose/save":
+                if not self.tcp.active_name or self.tcp.result is None:
+                    raise ValueError("先调用一套 TCP，再记工作姿态")
+                arm = self.loop.arm if self.loop is not None else (self.tcp.arm or "right")
+                if self.tcp.arm and arm != self.tcp.arm:
+                    side = "左" if self.tcp.arm == "left" else "右"
+                    raise ValueError(f"当前 TCP 是{side}臂的，先把控制臂换成同一侧")
+                layout = get_arm(arm)
+                st = self.reader().read_arm(layout)
+                scene = self.kin.arm_scene(arm, st.q)
+                T = np.asarray(scene["wrist_T"], dtype=float)
+                return self.work_pose.save(
+                    name,
+                    self.tcp.active_name,
+                    arm,
+                    T[:3, :3],
+                    q=st.q,
+                    note=note,
+                )
+            if path == "/api/work-pose/delete":
+                return self.work_pose.delete(tcp_name, name)
+            if path == "/api/work-pose/clear":
+                return self.work_pose.unlock()
+            if path == "/api/work-pose/load":
+                return self.work_pose_load(tcp_name, name)
+            return {"ok": False, "error": "没有这个工作姿态接口"}
+        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
+            out = self.work_pose.status(str(body.get("tcp_name") or self.tcp.active_name or ""))
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
+        except RuntimeError as exc:
+            out = self.work_pose.status(str(body.get("tcp_name") or self.tcp.active_name or ""))
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
+
+    def work_pose_load(self, tcp_name: str, name: str) -> Dict[str, Any]:
+        """转到该工作姿态（保 TCP 位置）并锁定。"""
+        loop = self.require_loop()
+        st = loop.status()
+        if st.get("float"):
+            raise PermissionErrorMotion("先点急停退出拖拽，再调用工作姿态")
+        if not st.get("engaged"):
+            raise PermissionErrorMotion("先接管再调用工作姿态")
+        if not self.tcp.active_name or self.tcp.result is None or self.tcp.result.get("tcp_m") is None:
+            raise ValueError("先调用一套 TCP")
+        tcp_name = tcp_name or self.tcp.active_name
+        if tcp_name != self.tcp.active_name:
+            raise ValueError(f"该姿态属于 TCP「{tcp_name}」，请先调用该 TCP")
+        doc = self.work_pose.load_doc(tcp_name, name)
+        if doc.get("arm") and doc.get("arm") != loop.arm:
+            side = "左" if doc.get("arm") == "left" else "右"
+            raise ValueError(f"这个工作姿态是{side}臂的，先换控制臂")
+        tcp = np.asarray(self.tcp.result["tcp_m"], dtype=float).reshape(3)
+        R_target = np.asarray(doc["R"], dtype=float).reshape(3, 3)
+        model = self.kin.arms[loop.arm].model
+        q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
+        t, R0 = model.fk(q0)
+        hold = np.asarray(t, dtype=float).reshape(3) + R0 @ tcp
+        self._work_pose_motion = True
+        try:
+            if self.work_pose.ik_mode == "single":
+                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, hold, R_target)
+            else:
+                extra = []
+                if doc.get("q_rad") is not None:
+                    extra.append(doc["q_rad"])
+                q, miss_mm, ori_deg = solve_tcp_pose_ik_robust(
+                    model, q0, tcp, hold, R_target,
+                    extra_seeds=extra, n_random=12, n_ok_stop=5,
+                )
+            if miss_mm > 8.0 or ori_deg > 5.0:
+                raise ValueError(
+                    f"到不了该工作姿态：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"
+                )
+            stop = threading.Event()
+            settle = iden.wait_settle(
+                loop,
+                q,
+                stop,
+                {
+                    "still_dq_rad_s": 0.05,
+                    "still_drift_rad": 0.015,
+                    "still_window_s": 0.5,
+                    "settle_timeout_s": 12.0,
+                },
+            )
+            if not loop.status().get("engaged") or loop.status().get("float"):
+                raise PermissionErrorMotion("到位前已释放或进入拖拽")
+            # 用电机角复核
+            samp = loop.arm_sample(wait=True)
+            q_meas = np.asarray(samp["q_meas"], dtype=float)
+            t2, R2 = model.fk(q_meas)
+            tcp_now = t2 + R2 @ tcp
+            pos_miss = float(np.linalg.norm(tcp_now - hold) * 1000.0)
+            # rotvec err
+            from spatial_points import _rotvec_from_R
+            ori_miss = float(np.degrees(np.linalg.norm(_rotvec_from_R(R_target @ R2.T))))
+            self.work_pose.apply_lock(doc, q_now=q_meas)
+            out = self.work_pose.status(tcp_name)
+            out["plan_miss_mm"] = float(miss_mm)
+            out["plan_ori_deg"] = float(ori_deg)
+            out["measured_miss_mm"] = pos_miss
+            out["measured_ori_deg"] = ori_miss
+            out["settle_s"] = float(settle.get("settle_s") or 0.0)
+            out["settle_timed_out"] = bool(settle.get("timed_out"))
+            out["message"] = f"已锁定工作姿态「{doc.get('name')}」"
+            return out
+        finally:
+            self._work_pose_motion = False
 
     def _active_tcp(self) -> tuple:
         result = self.tcp.result or {}
@@ -632,17 +921,21 @@ class App:
         stop: threading.Event,
     ) -> Dict[str, Any]:
         """限速走到 q_cmd，停稳后用电机角算 TCP 与目标差。"""
-        settle = iden.wait_settle(
-            loop,
-            q_cmd,
-            stop,
-            {
-                "still_dq_rad_s": 0.05,
-                "still_drift_rad": 0.015,
-                "still_window_s": 0.5,
-                "settle_timeout_s": 12.0,
-            },
-        )
+        self._work_pose_motion = True
+        try:
+            settle = iden.wait_settle(
+                loop,
+                q_cmd,
+                stop,
+                {
+                    "still_dq_rad_s": 0.05,
+                    "still_drift_rad": 0.015,
+                    "still_window_s": 0.5,
+                    "settle_timeout_s": 12.0,
+                },
+            )
+        finally:
+            self._work_pose_motion = False
         st = loop.status()
         if not st.get("engaged") or st.get("float"):
             raise PermissionErrorMotion("到位前已释放或进入拖拽")
@@ -694,15 +987,23 @@ class App:
             if not np.all(np.isfinite(off_mm)):
                 raise ValueError("偏置含非有限数")
             point_arr = base_arr + off_mm / 1000.0
+            # 锁定工作姿态时钉腕部 R（躯干系）
+            self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
+            R_lock = self.work_pose.R_lock if self.work_pose.locked else None
             stop = threading.Event()
             q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
-            q, plan_miss_mm = solve_tcp_ik(model, q0, tcp, point_arr)
-            if plan_miss_mm > 3.0:
+            q, plan_miss_mm, plan_ori = self._solve_tcp_motion(model, q0, tcp, point_arr, R_lock)
+            ori_lim = 3.0 if R_lock is not None else 999.0
+            if plan_miss_mm > 3.0 or (plan_ori is not None and plan_ori > ori_lim):
+                msg = f"从这个姿态到不了该点，规划 TCP 还差 {plan_miss_mm:.1f} mm"
+                if plan_ori is not None:
+                    msg += f"，姿态还差 {plan_ori:.1f}°"
                 return {
                     "ok": False,
-                    "error": f"从这个姿态到不了该点，规划 TCP 还差 {plan_miss_mm:.1f} mm",
+                    "error": msg,
                     "miss_mm": plan_miss_mm,
                     "plan_miss_mm": plan_miss_mm,
+                    "plan_ori_deg": plan_ori,
                 }
 
             # 1) 开环：IK 到真实目标 → 停稳 → 电机角测 TCP
@@ -725,7 +1026,7 @@ class App:
             while cur["measured_miss_mm"] > refine_thresh_mm and refine_passes < max_refine:
                 err = point_arr - cur["tcp_now"]
                 aim = point_arr + gain * err
-                q2, plan2 = solve_tcp_ik(model, cur["q_meas"], tcp, aim)
+                q2, plan2, _ori2 = self._solve_tcp_motion(model, cur["q_meas"], tcp, aim, R_lock)
                 if plan2 > 5.0:
                     break
                 if float(np.max(np.abs(q2 - cur["q_meas"]))) < 5e-4:
@@ -741,11 +1042,14 @@ class App:
             out = self.points.status()
             out["miss_mm"] = float(plan_miss_mm)
             out["plan_miss_mm"] = float(plan_miss_mm)
+            out["plan_ori_deg"] = None if plan_ori is None else float(plan_ori)
             out["measured_miss_mm"] = measured_miss_mm
             out["measured_before_mm"] = measured_before_mm
             out["refine_passes"] = refine_passes
             out["refine"] = bool(refine_on)
             out["refine_mode"] = "error_compensate" if refine_on else "off"
+            out["work_pose_locked"] = bool(R_lock is not None)
+            out["work_pose_name"] = self.work_pose.active_name if R_lock is not None else ""
             out["measured_tcp_m"] = [float(v) for v in tcp_now.tolist()]
             out["measured_tcp_mm"] = [float(v) * 1000.0 for v in tcp_now.tolist()]
             out["settle_s"] = float(cur["settle_s"])
@@ -925,6 +1229,13 @@ class Handler(BaseHTTPRequestHandler):
                 out = APP.tcp_post(path, body)
                 if isinstance(out, dict):
                     out.setdefault("runtime", APP.runtime.snapshot())
+                    out.setdefault("work_pose", APP.work_pose.status(APP.tcp.active_name or ""))
+                _json(self, 200, out)
+                return
+            if path.startswith("/api/work-pose/"):
+                out = APP.work_pose_post(path, body)
+                if isinstance(out, dict):
+                    out.setdefault("runtime", APP.runtime.snapshot())
                 _json(self, 200, out)
                 return
             if path.startswith("/api/board/"):
@@ -985,6 +1296,7 @@ class Handler(BaseHTTPRequestHandler):
                 loop.estop_hold()
             elif path == "/api/teach":
                 if bool(body.get("enabled", True)):
+                    APP.unlock_work_pose("teach")
                     loop.enable_teach()
                 else:
                     loop.disable_teach()
@@ -994,6 +1306,8 @@ class Handler(BaseHTTPRequestHandler):
                 loop.set_max_speed(float(body["max_speed_rad_s"]))
                 APP.settings.max_speed_rad_s = loop.max_speed
             elif path == "/api/target":
+                if not APP._work_pose_motion:
+                    APP.unlock_work_pose("arm_control")
                 loop.set_target(body["q"])
             elif path == "/api/waist":
                 yaw = body.get("yaw_deg")
@@ -1021,10 +1335,15 @@ class Handler(BaseHTTPRequestHandler):
                 loop.set_arm(str(body["arm"]))
                 APP.payload.restore(loop)
                 APP.tcp.restore_for_arm(loop.arm)
+                APP.work_pose.unlock_if_tcp_mismatch(APP.tcp.active_name or "")
             else:
                 self.send_error(404)
                 return
-            _json(self, 200, {"ok": True, "ctrl": APP.ctrl_status()})
+            _json(self, 200, {
+                "ok": True,
+                "ctrl": APP.ctrl_status(),
+                "work_pose": APP.work_pose.status(APP.tcp.active_name or ""),
+            })
         except PermissionErrorMotion as e:
             _json(self, 403, {"ok": False, "error": str(e)})
         except Exception as e:

@@ -28,8 +28,9 @@ python server.py --allow-real-motion --max-speed 0.2   # 真机
 | **运行配置** | 手眼结果、重力补偿、TCP 成套调用；可锁定防误改 |
 | **姿态集 / 负载 / 到位对比** | 记点、辨识、摩擦带对比（数据在 `arm_payload_gravity/`） |
 | **手眼标定** | 按姿态集采集 → 内参 → 外参 → 命名保存/调用 |
-| **TCP / 空间点** | 爪尖偏置标定；躯干系定点，可规划「让 TCP 去碰」 |
-| **棋盘触摸** | 「看一眼」角点 → 限速逐点摸（验手眼+TCP） |
+| **TCP / 工作姿态** | 爪尖偏置标定；与 TCP 绑定的腕部方向，可锁定 |
+| **TCP 控制**（控制） | 躯干系平移（保姿态）/ 绕红点旋转；可设步长 |
+| **空间点 / 棋盘触摸**（控制） | 躯干系定点碰 TCP；「看一眼」角点后逐点摸（验手眼+TCP） |
 | **关节** | 当前臂 7 轴 + 腰 12/14 读数；立柱高度与「记为最低点」 |
 | **躯体控制** | 腰（滑条/步进/到目标/停止）+ 立柱行程（Agv HeightAdjust） |
 | **手臂控制 / 接管** | 滑条单关节限速；拖拽卸力、急停保持、释放 |
@@ -58,10 +59,10 @@ python server.py --allow-real-motion --max-speed 0.2   # 真机
 | `frontend/` | 唯一前端 |
 | `detect_localize.py` | 识别定位流水线 |
 | `board_touch.py` | 棋盘看一眼 + 触摸 |
-| `tcp_calib.py` / `spatial_points.py` | TCP 与空间点 |
+| `tcp_calib.py` / `spatial_points.py` / `work_pose.py` | TCP、空间点、工作姿态 |
 | `lift_*.py` | 立柱零位与闭环 |
 | `runtime_config.py` | 可锁定的成套配置 |
-| `config/` | `g1d.json`、URDF、TCP/空间点/立柱零位等 |
+| `config/` | `g1d.json`、URDF、TCP/工作姿态/空间点/立柱零位等 |
 
 ## 数据落在哪
 
@@ -70,4 +71,4 @@ python server.py --allow-real-motion --max-speed 0.2   # 真机
 | 姿态集、补偿文件 | `../arm_payload_gravity/config/` |
 | 负载测量、到位对比 | `../arm_payload_gravity/data/`（一般不进 git） |
 | 手眼会话与结果 | `../hand_eye/data/`、`../hand_eye/config/results/` |
-| TCP / 空间点 / 立柱零位 | `config/tcp_results/`、`config/spatial_points/`、`config/lift_zero.json` |
+| TCP / 工作姿态 / 空间点 / 立柱零位 | `config/tcp_results/`、`config/work_poses/`、`config/spatial_points/`、`config/lift_zero.json` |

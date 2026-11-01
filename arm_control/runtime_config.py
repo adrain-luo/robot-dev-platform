@@ -171,6 +171,7 @@ class RuntimeConfig:
                 "saved": tcp.get("saved") or [],
                 "has_result": bool(tcp.get("result")),
             },
+            "work_pose": self.app.work_pose.status(tcp.get("active_name") or ""),
         }
 
     @staticmethod

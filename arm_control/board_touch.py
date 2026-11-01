@@ -266,9 +266,13 @@ class BoardTouch:
             pts = self.points
             total = int(pts.shape[0])
             up = np.array([0.0, 0.0, 1.0])
+            wp = getattr(self.app, "work_pose", None)
+            pose_note = ""
+            if wp is not None and wp.locked:
+                pose_note = f"，工作姿态锁定「{wp.active_name}」"
             self._log(
                 f"开始触摸 {total} 点：上方 {above_m * 1000:.0f} mm，下降 {down_m * 1000:.0f} mm，"
-                f"再抬 {up_m * 1000:.0f} mm。TCP {self.app.tcp.active_name or loop.arm}"
+                f"再抬 {up_m * 1000:.0f} mm。TCP {self.app.tcp.active_name or loop.arm}{pose_note}"
             )
             q = np.asarray(loop.arm_sample(wait=False)["q_meas"], dtype=float)
             for i, p in enumerate(pts):
@@ -296,33 +300,60 @@ class BoardTouch:
 
     def _line(self, loop, model, tcp: np.ndarray, q: np.ndarray, dest: np.ndarray, label: str) -> np.ndarray:
         """沿直线走，大约每 1 cm 一个点，避免关节空间把爪尖甩出竖线。"""
-        from spatial_points import solve_tcp_ik
+        from spatial_points import solve_tcp_ik, solve_tcp_pose_ik, solve_tcp_pose_ik_robust
 
+        wp = getattr(self.app, "work_pose", None)
+        if wp is not None:
+            wp.unlock_if_tcp_mismatch(getattr(self.app.tcp, "active_name", "") or "")
+        R_lock = wp.R_lock if (wp is not None and wp.locked) else None
+        extra = []
+        if wp is not None and wp.q_seed is not None:
+            extra.append(wp.q_seed)
         t, R = model.fk(q)
         start = t + R @ tcp
         dist = float(np.linalg.norm(dest - start))
         steps = max(1, int(np.ceil(dist / 0.01)))
-        for s in range(1, steps + 1):
-            if self.stop.is_set():
-                loop.estop_hold()
-                raise RuntimeError("急停，停在当前姿态")
-            target = start + (dest - start) * (s / steps)
-            q_next, miss = solve_tcp_ik(model, q, tcp, target)
-            if miss > 5.0:
-                raise RuntimeError(f"{label}到不了，还差 {miss:.1f} mm")
-            jump = np.abs(q_next - q)
-            ji = int(np.argmax(jump))
-            if float(jump[ji]) > 0.5:
-                self._log(
-                    f"{label} 这一厘米要转 {loop.layout.joint_names[ji]} {np.degrees(float(jump[ji])):.0f}°"
-                )
-            q = q_next
-            loop.set_target(q)
-            if not self._wait(loop, q):
-                loop.estop_hold()
+        self.app._work_pose_motion = True
+        try:
+            for s in range(1, steps + 1):
                 if self.stop.is_set():
+                    loop.estop_hold()
                     raise RuntimeError("急停，停在当前姿态")
-                raise RuntimeError(f"{label}到位超时")
+                target = start + (dest - start) * (s / steps)
+                if R_lock is not None:
+                    mode = getattr(wp, "ik_mode", "robust") if wp is not None else "robust"
+                    if mode == "single":
+                        q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock)
+                    else:
+                        q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock)
+                        if miss > 5.0 or ori > 8.0:
+                            q_next, miss, ori = solve_tcp_pose_ik_robust(
+                                model, q, tcp, target, R_lock,
+                                extra_seeds=extra, n_random=8, n_ok_stop=5,
+                            )
+                    if miss > 5.0 or ori > 8.0:
+                        raise RuntimeError(
+                            f"{label}到不了，还差 {miss:.1f} mm / {ori:.1f}°（工作姿态锁定）"
+                        )
+                else:
+                    q_next, miss = solve_tcp_ik(model, q, tcp, target)
+                    if miss > 5.0:
+                        raise RuntimeError(f"{label}到不了，还差 {miss:.1f} mm")
+                jump = np.abs(q_next - q)
+                ji = int(np.argmax(jump))
+                if float(jump[ji]) > 0.5:
+                    self._log(
+                        f"{label} 这一厘米要转 {loop.layout.joint_names[ji]} {np.degrees(float(jump[ji])):.0f}°"
+                    )
+                q = q_next
+                loop.set_target(q)
+                if not self._wait(loop, q):
+                    loop.estop_hold()
+                    if self.stop.is_set():
+                        raise RuntimeError("急停，停在当前姿态")
+                    raise RuntimeError(f"{label}到位超时")
+        finally:
+            self.app._work_pose_motion = False
         return q
 
     def _wait(self, loop, q: np.ndarray) -> bool:

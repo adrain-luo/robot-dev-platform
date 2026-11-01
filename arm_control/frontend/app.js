@@ -297,6 +297,7 @@ async function post(path, body) {
 }
 
 let lastCtrl = null;
+let tcpJogBusy = false;
 let speedDirty = false;
 window.speedDirty = false;
 document.getElementById("speed").addEventListener("input", () => { window.speedDirty = true; });
@@ -325,6 +326,13 @@ function applyCtrl(ctrl) {
     : "只读（加 --allow-real-motion 后可接管）";
   document.querySelectorAll(".g-q, .g-slider").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
   $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;
+  document.querySelectorAll(".tcp-jog-btn").forEach((el) => {
+    el.disabled = !allow || !ctrl.engaged || !!ctrl.float || tcpJogBusy;
+  });
+  ["tcp-jog-step-mm", "tcp-jog-step-deg"].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = !allow;
+  });
   const waistNeed = !allow || !ctrl.engaged || !!ctrl.float;
   ["btn-waist-go", "btn-waist-fill", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p",
    "waist-yaw", "waist-pitch", "waist-step", "waist-yaw-slider", "waist-pitch-slider"].forEach((id) => {
@@ -395,6 +403,7 @@ async function poll() {
     renderLift(data.lift);
     renderTcp(data.tcp, { left: left && left.scene, right: right && right.scene });
     renderSpatial(data.spatial);
+    renderWorkPose(data.work_pose, data.tcp);
     renderBoard(data.board);
     renderDetect(data.detect);
     if (data.runtime) renderRuntimeConfig(data.runtime);
@@ -703,7 +712,10 @@ const CFG_MUTATORS = [
   "cfg-he", "cfg-grav-left", "cfg-grav-right", "cfg-tcp-left", "cfg-tcp-right",
   "btn-he-load", "btn-he-solve", "btn-payload-use", "btn-id-apply", "btn-tcp-load",
 ];
-const CFG_SELECT_IDS = ["cfg-he", "cfg-grav-left", "cfg-grav-right", "cfg-tcp-left", "cfg-tcp-right"];
+const CFG_SELECT_IDS = [
+  "cfg-he", "cfg-grav-left", "cfg-grav-right", "cfg-tcp-left", "cfg-tcp-right",
+  "cfg-wp-left", "cfg-wp-right", "cfg-pose-ik-mode",
+];
 const cfgDirty = Object.create(null);
 
 function markCfgDirty(id) {
@@ -760,10 +772,17 @@ function renderRuntimeConfig(rt) {
       `双目 yaml：${shortPath(st.intrinsics)}\n` +
       applied;
   }
+  const wp = rt.work_pose || {};
   const nowL = $("cfg-now-left");
-  if (nowL) nowL.textContent = `重力：${fmtGrav(g.left)}\nTCP：${tcp.left?.name || "—"}`;
+  if (nowL) {
+    const show = wp.locked && wp.arm === "left" ? (wp.active_name || "无") : "无";
+    nowL.textContent = `重力：${fmtGrav(g.left)}\nTCP：${tcp.left?.name || "—"}\n工作姿态锁定：${show}`;
+  }
   const nowR = $("cfg-now-right");
-  if (nowR) nowR.textContent = `重力：${fmtGrav(g.right)}\nTCP：${tcp.right?.name || "—"}`;
+  if (nowR) {
+    const show = wp.locked && wp.arm === "right" ? (wp.active_name || "无") : "无";
+    nowR.textContent = `重力：${fmtGrav(g.right)}\nTCP：${tcp.right?.name || "—"}\n工作姿态锁定：${show}`;
+  }
   const bound = $("cfg-stereo-bound");
   if (bound) {
     const pending = cfgDirty["cfg-he"] && $("cfg-he")?.value;
@@ -816,6 +835,27 @@ function renderRuntimeConfig(rt) {
       keep || ""
     );
   }
+  // 工作姿态：按该侧当前 TCP 列姿态；配置锁定时仍可改（不上锁）
+  for (const [selId, arm] of [["cfg-wp-left", "left"], ["cfg-wp-right", "right"]]) {
+    const sel = $(selId);
+    if (!sel || cfgSelectBusy(selId)) continue;
+    const tcpName = arm === "left"
+      ? ($("cfg-tcp-left")?.value || rt.tcp?.active_left || "")
+      : ($("cfg-tcp-right")?.value || rt.tcp?.active_right || "");
+    const all = wp.saved_all || window.lastWorkPoseAll || [];
+    const rows = all
+      .filter((s) => s.tcp_name === tcpName && (!s.arm || s.arm === arm))
+      .map((s) => ({ value: s.name, label: s.note ? `${s.name} · ${s.note}` : s.name }));
+    const keep = (wp.locked && wp.arm === arm && wp.tcp_name === tcpName) ? (wp.active_name || "") : "";
+    writeOptions(
+      sel,
+      tcpName
+        ? (rows.length ? `选择工作姿态（${tcpName}）…` : `「${tcpName}」还没有工作姿态`)
+        : "先选该侧 TCP",
+      rows,
+      keep
+    );
+  }
   const allowMotion = !!window.lastCtrl?.allow_real_motion;
   CFG_MUTATORS.forEach((id) => {
     const el = $(id);
@@ -836,6 +876,19 @@ function renderRuntimeConfig(rt) {
       el.disabled = !allowMotion;
     }
   });
+  // 工作姿态 / IK 策略：永远可改（不受配置锁定）
+  ["cfg-wp-left", "cfg-wp-right", "btn-cfg-wp-left", "btn-cfg-wp-right",
+    "cfg-pose-ik-mode", "btn-cfg-pose-ik-mode"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    if (id.startsWith("btn-cfg-wp")) el.disabled = !allowMotion;
+    else el.disabled = false;
+  });
+  const ikSel = $("cfg-pose-ik-mode");
+  if (ikSel && !cfgSelectBusy("cfg-pose-ik-mode")) {
+    const mode = wp.ik_mode === "single" ? "single" : "robust";
+    ikSel.value = mode;
+  }
   const lockBtn = $("btn-cfg-lock");
   const unlockBtn = $("btn-cfg-unlock");
   if (lockBtn) lockBtn.disabled = locked;
@@ -1230,9 +1283,65 @@ function tcpOnWrist(tcp, arms) {
   if (!offset || !T) return null;
   return [0, 1, 2].map((i) => T[i][3] + T[i][0] * offset[0] + T[i][1] * offset[1] + T[i][2] * offset[2]);
 }
+function renderWorkPose(wp, tcp) {
+  if (!wp) return;
+  window.lastWorkPose = wp;
+  if (wp.saved_all) window.lastWorkPoseAll = wp.saved_all;
+  const badge = $("wp-lock-badge");
+  if (badge) {
+    badge.textContent = wp.locked ? "已锁定" : "";
+    badge.classList.toggle("locked", !!wp.locked);
+  }
+  const now = $("wp-now");
+  if (now) {
+    now.textContent = wp.locked && wp.active_name
+      ? `锁定：${wp.active_name}${wp.note ? " · " + wp.note : ""}`
+      : "锁定：无";
+  }
+  const hint = $("wp-tcp-hint");
+  const tcpName = (tcp && tcp.active_name) || "";
+  if (hint) {
+    hint.textContent = tcpName
+      ? `TCP：${tcpName}${tcp.arm ? `（${tcp.arm === "left" ? "左" : "右"}）` : ""}`
+      : "TCP：—（先在 TCP 卡片调用一套）";
+  }
+  const sel = $("wp-select");
+  if (sel && document.activeElement !== sel) {
+    const rows = (wp.saved || []).map((s) => ({
+      value: s.name,
+      label: s.note ? `${s.name} · ${s.note}` : s.name,
+    }));
+    writeOptions(
+      sel,
+      tcpName
+        ? (rows.length ? "选择工作姿态…" : "这个 TCP 还没有工作姿态")
+        : "先调用 TCP",
+      rows,
+      (wp.locked && wp.active_name) || sel.value || ""
+    );
+  }
+}
+
+async function workPosePost(path, body) {
+  const d = await post(path, body || {});
+  renderWorkPose(d, { active_name: d.tcp_name || window.lastTcpName, arm: d.arm });
+  if (d.runtime) renderRuntimeConfig(d.runtime);
+  return d;
+}
+
 function renderTcp(tcp, arms) {
   const note = $("tcp-now");
   if (!note || !tcp) return;
+  window.lastTcpName = tcp.active_name || "";
+  const jogNow = $("tcp-jog-now");
+  if (jogNow) {
+    if (tcp.active_name) {
+      const side = tcp.arm === "left" ? "左臂" : tcp.arm === "right" ? "右臂" : "";
+      jogNow.textContent = `当前 TCP「${tcp.active_name}」${side ? ` · ${side}` : ""} · 躯干系点动`;
+    } else {
+      jogNow.textContent = "还没调用 TCP（先在标定册 TCP 卡片调用）";
+    }
+  }
   const sel = $("tcp-select");
   if (sel && tcp.saved && document.activeElement !== sel) {
     writeOptions(sel, tcp.saved.length ? "调用已保存的 TCP…" : "还没有保存的 TCP",
@@ -1266,7 +1375,70 @@ function renderTcp(tcp, arms) {
 async function tcpPost(path, body) {
   const d = await post(path, body || {});
   renderTcp(d);
+  if (d.work_pose) renderWorkPose(d.work_pose, d);
   return d;
+}
+
+if ($("btn-wp-save")) {
+  $("btn-wp-save").onclick = async () => {
+    const name = $("wp-name").value.trim() || $("wp-select").value;
+    if (!name) { flash("先给工作姿态起个名字", false); return; }
+    if (!window.lastTcpName) { flash("先调用一套 TCP", false); return; }
+    const exists = [...($("wp-select")?.options || [])].some((o) => o.value === name);
+    if (exists && !confirm(`覆盖工作姿态「${name}」？`)) return;
+    try {
+      await workPosePost("/api/work-pose/save", {
+        name,
+        note: $("wp-note")?.value.trim() || "",
+      });
+      if ($("wp-name")) $("wp-name").value = "";
+      flash(`已记下工作姿态「${name}」`, true);
+    } catch (e) { flash(String(e), false); }
+  };
+}
+if ($("btn-wp-load")) {
+  $("btn-wp-load").onclick = async () => {
+    const name = $("wp-select")?.value;
+    if (!name) { flash("先选一个工作姿态", false); return; }
+    if (!window.lastTcpName) { flash("先调用一套 TCP", false); return; }
+    if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
+    if (!confirm(`将转到「${name}」并锁定腕部方向（尽量保持当前 TCP 位置）。扶住、守急停。继续？`)) return;
+    const btn = $("btn-wp-load");
+    if (btn) btn.disabled = true;
+    flash("正在转到工作姿态…", true);
+    try {
+      const d = await workPosePost("/api/work-pose/load", {
+        name,
+        tcp_name: window.lastTcpName,
+      });
+      flash(
+        d.message
+          || `已锁定「${name}」· 位置 ${Number(d.measured_miss_mm || 0).toFixed(1)} mm · 姿态 ${Number(d.measured_ori_deg || 0).toFixed(1)}°`,
+        true,
+      );
+    } catch (e) { flash(String(e), false); }
+    finally { if (btn) btn.disabled = false; }
+  };
+}
+if ($("btn-wp-clear")) {
+  $("btn-wp-clear").onclick = async () => {
+    try {
+      await workPosePost("/api/work-pose/clear", {});
+      flash("已解锁工作姿态", true);
+    } catch (e) { flash(String(e), false); }
+  };
+}
+if ($("btn-wp-del")) {
+  $("btn-wp-del").onclick = async () => {
+    const name = $("wp-select")?.value;
+    if (!name) { flash("先选一个工作姿态", false); return; }
+    if (!window.lastTcpName) { flash("先调用一套 TCP", false); return; }
+    if (!confirm(`删除工作姿态「${name}」？`)) return;
+    try {
+      await workPosePost("/api/work-pose/delete", { name, tcp_name: window.lastTcpName });
+      flash("已删除", true);
+    } catch (e) { flash(String(e), false); }
+  };
 }
 $("btn-tcp-record").onclick = async () => {
   try {
@@ -1556,12 +1728,60 @@ $("btn-tcp-del").onclick = async () => {
   catch (e) { flash(String(e), false); }
 };
 
+async function tcpJogStep(mode, axis, sign) {
+  if (tcpJogBusy) return;
+  if (!window.lastTcpName) { flash("先调用一套 TCP", false); return; }
+  if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
+  if (window.lastCtrl && !window.lastCtrl.engaged) { flash("先接管再点动 TCP", false); return; }
+  const stepMm = Number($("tcp-jog-step-mm")?.value);
+  const stepDeg = Number($("tcp-jog-step-deg")?.value);
+  const body = { mode, axis, sign: Number(sign) };
+  if (mode === "translate") {
+    if (!Number.isFinite(stepMm) || stepMm <= 0) { flash("平移步长无效", false); return; }
+    body.step_mm = stepMm;
+  } else {
+    if (!Number.isFinite(stepDeg) || stepDeg <= 0) { flash("旋转步长无效", false); return; }
+    body.step_deg = stepDeg;
+  }
+  tcpJogBusy = true;
+  document.querySelectorAll(".tcp-jog-btn").forEach((b) => { b.disabled = true; });
+  try {
+    const d = await post("/api/tcp/jog", body);
+    if (d.work_pose) {
+      renderWorkPose(d.work_pose, { active_name: window.lastTcpName, arm: d.arm });
+    }
+    if (d.runtime) renderRuntimeConfig(d.runtime);
+    flash(d.message || "已发出 TCP 点动", true);
+  } catch (e) {
+    flash(String(e), false);
+  } finally {
+    tcpJogBusy = false;
+    const ctrl = window.lastCtrl;
+    const allow = !!(ctrl && ctrl.allow_real_motion);
+    document.querySelectorAll(".tcp-jog-btn").forEach((b) => {
+      b.disabled = !allow || !ctrl?.engaged || !!ctrl?.float;
+    });
+  }
+}
+document.querySelectorAll(".tcp-jog-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    tcpJogStep(btn.dataset.jog, btn.dataset.axis, btn.dataset.sign);
+  });
+});
+
 async function cfgPost(path, body, okMsg, dirtyIds) {
   const d = await post(path, body || {});
   (dirtyIds || []).forEach(clearCfgDirty);
   if (d.runtime) renderRuntimeConfig(d.runtime);
-  else if (d.locked != null) renderRuntimeConfig(d);
-  flash(okMsg, true);
+  else if (d.stereo || d.tcp || d.gravity) renderRuntimeConfig(d);
+  if (String(path).indexOf("work-pose") >= 0) {
+    renderWorkPose(d, { active_name: d.tcp_name || window.lastTcpName, arm: d.arm });
+    if (window.lastRuntime) {
+      window.lastRuntime.work_pose = d;
+      renderRuntimeConfig(window.lastRuntime);
+    }
+  }
+  flash(okMsg || d.message || "已应用", true);
   return d;
 }
 $("btn-cfg-stereo").onclick = async () => {
@@ -1600,6 +1820,47 @@ $("btn-cfg-tcp-right").onclick = async () => {
   try { await cfgPost("/api/runtime-config/tcp", { arm: "right", name }, `右臂 TCP 已设为「${name}」`, ["cfg-tcp-right"]); }
   catch (e) { flash(String(e), false); }
 };
+async function cfgApplyWorkPose(arm) {
+  const tcpSel = arm === "left" ? $("cfg-tcp-left") : $("cfg-tcp-right");
+  const wpSel = arm === "left" ? $("cfg-wp-left") : $("cfg-wp-right");
+  const tcpName = tcpSel?.value || "";
+  const name = wpSel?.value || "";
+  if (!tcpName) { flash("先选该侧 TCP", false); return; }
+  if (!name) { flash("先选工作姿态", false); return; }
+  if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
+  if (!confirm(`将转到工作姿态「${name}」（TCP「${tcpName}」）并锁定方向。扶住、守急停。继续？`)) return;
+  try {
+    await cfgPost(
+      "/api/runtime-config/work-pose",
+      { arm, tcp_name: tcpName, name },
+      `已锁定工作姿态「${name}」`,
+      [arm === "left" ? "cfg-wp-left" : "cfg-wp-right"],
+    );
+  } catch (e) { flash(String(e), false); }
+}
+if ($("btn-cfg-wp-left")) $("btn-cfg-wp-left").onclick = () => cfgApplyWorkPose("left");
+if ($("btn-cfg-wp-right")) $("btn-cfg-wp-right").onclick = () => cfgApplyWorkPose("right");
+if ($("btn-cfg-pose-ik-mode")) {
+  $("btn-cfg-pose-ik-mode").onclick = async () => {
+    const mode = $("cfg-pose-ik-mode")?.value || "robust";
+    try {
+      await cfgPost(
+        "/api/runtime-config/pose-ik-mode",
+        { mode },
+        mode === "single" ? "已切到旧·单次局部 IK" : "已切到新·多初值 IK",
+        ["cfg-pose-ik-mode"],
+      );
+    } catch (e) { flash(String(e), false); }
+  };
+}
+// TCP 下拉变更时刷新该侧工作姿态列表
+["cfg-tcp-left", "cfg-tcp-right"].forEach((id) => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener("change", () => {
+    if (window.lastRuntime) renderRuntimeConfig(window.lastRuntime);
+  });
+});
 $("btn-cfg-lock").onclick = async () => {
   try { await cfgPost("/api/runtime-config/lock", { locked: true }, "配置已锁定"); }
   catch (e) { flash(String(e), false); }

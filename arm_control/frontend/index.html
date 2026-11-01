@@ -162,13 +162,13 @@
       标定<span class="count">6</span>
     </button>
     <button type="button" class="bookmark" data-page="control" aria-pressed="false">
-      控制<span class="count">5</span>
+      控制<span class="count">7</span>
     </button>
   </nav>
   <div class="pages">
     <div class="page" data-page="calib">
       <div class="page-sheet">
-        <div class="page-head"><strong>标定</strong><span>6 张卡片</span></div>
+        <div class="page-head"><strong>标定</strong><span>6 张卡片</span></div><!-- 姿态集/负载/对比/手眼/TCP/工作姿态；棋盘触摸已迁控制 -->
         <div class="page-cards">
           <article class="float" id="panel-poses">
             <button type="button" class="float-toggle">姿态集 <span id="pose-cond" class="aside"></span></button>
@@ -351,31 +351,29 @@
             </div>
           </article>
 
-          <article class="float" id="panel-board">
-            <button type="button" class="float-toggle">棋盘触摸</button>
+          <article class="float" id="panel-work-pose">
+            <button type="button" class="float-toggle">工作姿态 <span id="wp-lock-badge" class="aside"></span></button>
             <div class="float-body">
-              <p class="note">先看一眼 9×6 内角点，角点会画在中央画面上，绿点是第一下。每个点先到上方 5 cm，垂直下降 4 cm，再垂直抬升 4 cm，然后下一个点。急停会中止。</p>
+              <p class="note">与<strong>当前已调用的 TCP</strong>绑定，只记腕部在躯干系下的方向（如向前/向下）。拖拽摆好后「记下」；「调用」会尽量保持 TCP 位置只转姿态，到位后锁定。锁定时空间点/棋盘触摸保持该方向；拖拽或手臂控制会解锁。</p>
+              <p class="note" id="wp-now">锁定：无</p>
+              <p class="note" id="wp-tcp-hint">TCP：—</p>
               <div class="fields">
-                <label class="field">内角
-                  <input id="board-size" value="9x6" maxlength="8">
+                <label class="field grow">已保存
+                  <select id="wp-select"></select>
                 </label>
-                <label class="field">上方 cm
-                  <input id="board-above" type="number" min="1" max="15" step="0.5" value="5">
+                <label class="field grow">命名
+                  <input id="wp-name" placeholder="例如 向下" maxlength="48">
                 </label>
-                <label class="field">下降 cm
-                  <input id="board-down" type="number" min="0.5" max="14" step="0.5" value="4">
-                </label>
-                <label class="field">抬升 cm
-                  <input id="board-up" type="number" min="0.5" max="14" step="0.5" value="4">
-                </label>
-                <label class="switch"><input id="board-ideal" type="checkbox"><span>理想对齐</span></label>
               </div>
+              <label class="field">备注
+                <input id="wp-note" placeholder="怎么摆的，可空" maxlength="80">
+              </label>
               <div class="cmds">
-                <button id="btn-board-look" type="button">看一眼</button>
-                <button id="btn-board-start" class="primary" type="button">开始触摸</button>
-                <button id="btn-board-stop" class="danger" type="button">停止</button>
+                <button id="btn-wp-save" type="button">记下当前姿态</button>
+                <button id="btn-wp-load" class="primary" type="button">调用并锁定</button>
+                <button id="btn-wp-clear" type="button">解锁</button>
+                <button id="btn-wp-del" type="button">删除</button>
               </div>
-              <div id="board-log" class="note"></div>
             </div>
           </article>
         </div>
@@ -384,7 +382,7 @@
 
     <div class="page" data-page="control">
       <div class="page-sheet">
-        <div class="page-head"><strong>控制</strong><span>5 张卡片</span></div>
+        <div class="page-head"><strong>控制</strong><span>7 张卡片</span></div>
         <div class="page-cards">
           <article class="float" id="panel-config">
             <button type="button" class="float-toggle">配置 <span id="cfg-lock-badge" class="aside"></span></button>
@@ -399,6 +397,16 @@
                   <button id="btn-cfg-stereo" type="button">应用手眼</button>
                 </div>
                 <p class="note" id="cfg-stereo-bound">双目 yaml：—</p>
+                <div class="fields">
+                  <label class="field grow">锁定姿态时的 IK（不上锁，随时可改）
+                    <select id="cfg-pose-ik-mode">
+                      <option value="robust">新·多初值（推荐）</option>
+                      <option value="single">旧·当前角单次局部 IK</option>
+                    </select>
+                  </label>
+                  <button id="btn-cfg-pose-ik-mode" type="button">应用 IK 策略</button>
+                </div>
+                <p class="note">只影响「工作姿态已锁定」时的碰点/棋盘/调用姿态；未锁定仍是纯位置 IK。</p>
               </div>
               <div class="cfg-arms">
                 <section class="cfg-arm" data-arm="left">
@@ -412,6 +420,10 @@
                     <select id="cfg-tcp-left"></select>
                   </label>
                   <button id="btn-cfg-tcp-left" type="button">应用 TCP</button>
+                  <label class="field grow">工作姿态（不上锁）
+                    <select id="cfg-wp-left"></select>
+                  </label>
+                  <button id="btn-cfg-wp-left" type="button">应用工作姿态</button>
                 </section>
                 <section class="cfg-arm" data-arm="right">
                   <header class="cfg-arm-head">右臂</header>
@@ -424,6 +436,10 @@
                     <select id="cfg-tcp-right"></select>
                   </label>
                   <button id="btn-cfg-tcp-right" type="button">应用 TCP</button>
+                  <label class="field grow">工作姿态（不上锁）
+                    <select id="cfg-wp-right"></select>
+                  </label>
+                  <button id="btn-cfg-wp-right" type="button">应用工作姿态</button>
                 </section>
               </div>
               <div class="cmds">
@@ -527,6 +543,75 @@
                 </label>
                 <button id="btn-still">设置</button>
               </div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-tcp-jog">
+            <button type="button" class="float-toggle">TCP 控制</button>
+            <div class="float-body">
+              <p class="note">点动<strong>当前控制臂已调用的 TCP</strong>（画布红点）。方向按<strong>躯干坐标</strong>：+X 前、+Y 左、+Z 上。平移时姿态不动；旋转时红点不动、绕躯干轴转。到不了会报错。</p>
+              <p class="note" id="tcp-jog-now">TCP —</p>
+              <div class="fields">
+                <label class="field">平移步长 mm
+                  <input id="tcp-jog-step-mm" type="number" min="0.5" max="50" step="0.5" value="5">
+                </label>
+                <label class="field">旋转步长 °
+                  <input id="tcp-jog-step-deg" type="number" min="0.5" max="30" step="0.5" value="5">
+                </label>
+              </div>
+              <p class="note tcp-jog-label">平移 · 红点平移、姿态不变</p>
+              <div class="tcp-jog-pad" aria-label="TCP 平移">
+                <span class="tcp-jog-spacer"></span>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="z" data-sign="1">上<span>+Z</span></button>
+                <span class="tcp-jog-spacer"></span>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="y" data-sign="1">左<span>+Y</span></button>
+                <span class="tcp-jog-hub" title="TCP 红点">红点</span>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="y" data-sign="-1">右<span>−Y</span></button>
+                <span class="tcp-jog-spacer"></span>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="z" data-sign="-1">下<span>−Z</span></button>
+                <span class="tcp-jog-spacer"></span>
+              </div>
+              <div class="cmds tcp-jog-fb">
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="x" data-sign="1">前 +X</button>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="x" data-sign="-1">后 −X</button>
+              </div>
+              <p class="note tcp-jog-label">旋转 · 轴过红点、沿躯干 XYZ</p>
+              <div class="tcp-jog-rot" aria-label="TCP 旋转">
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="x" data-sign="-1">绕 X −</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="x" data-sign="1">绕 X +</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="y" data-sign="-1">绕 Y −</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="y" data-sign="1">绕 Y +</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="z" data-sign="-1">绕 Z −</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="z" data-sign="1">绕 Z +</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-board">
+            <button type="button" class="float-toggle">棋盘触摸</button>
+            <div class="float-body">
+              <p class="note">先看一眼 9×6 内角点，角点会画在中央画面上，绿点是第一下。每个点先到上方 5 cm，垂直下降 4 cm，再垂直抬升 4 cm，然后下一个点。若已锁定工作姿态，全程保持该方向。急停会中止。</p>
+              <div class="fields">
+                <label class="field">内角
+                  <input id="board-size" value="9x6" maxlength="8">
+                </label>
+                <label class="field">上方 cm
+                  <input id="board-above" type="number" min="1" max="15" step="0.5" value="5">
+                </label>
+                <label class="field">下降 cm
+                  <input id="board-down" type="number" min="0.5" max="14" step="0.5" value="4">
+                </label>
+                <label class="field">抬升 cm
+                  <input id="board-up" type="number" min="0.5" max="14" step="0.5" value="4">
+                </label>
+                <label class="switch"><input id="board-ideal" type="checkbox"><span>理想对齐</span></label>
+              </div>
+              <div class="cmds">
+                <button id="btn-board-look" type="button">看一眼</button>
+                <button id="btn-board-start" class="primary" type="button">开始触摸</button>
+                <button id="btn-board-stop" class="danger" type="button">停止</button>
+              </div>
+              <div id="board-log" class="note"></div>
             </div>
           </article>
 
