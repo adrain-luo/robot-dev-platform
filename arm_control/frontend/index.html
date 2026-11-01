@@ -164,6 +164,9 @@
     <button type="button" class="bookmark" data-page="control" aria-pressed="false">
       控制<span class="count">7</span>
     </button>
+    <button type="button" class="bookmark" data-page="workflow" aria-pressed="false">
+      工作流<span class="count">1</span>
+    </button>
   </nav>
   <div class="pages">
     <div class="page" data-page="calib">
@@ -728,6 +731,48 @@
                   <button id="btn-pt-goto" class="primary" type="button">让 TCP 碰这个点</button>
                 </div>
               </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" data-page="workflow">
+      <div class="page-sheet">
+        <div class="page-head"><strong>工作流</strong><span>1 张卡片</span></div>
+        <div class="page-cards">
+          <article class="float" id="panel-wf-detect-goto">
+            <button type="button" class="float-toggle">识别-末端到位 <span id="wf-dg-phase" class="aside">待开始</span></button>
+            <div class="float-body">
+              <p class="note">① 点位获取→校准→中心（浅蓝临时点，不落盘）→ ② 偏置+提升 碰点 → ③ 仅偏置 碰点。逐步用阶段按钮；也可一次跑完。</p>
+              <label class="field grow">识别参数（可选）
+                <input id="wf-dg-params" type="text" spellcheck="false" placeholder="例如 label=43010159" maxlength="512">
+              </label>
+              <p class="note"><strong>偏置</strong>（第三步；第二步 = 偏置 + 提升）· 躯干系 mm</p>
+              <div class="fields">
+                <label class="field">ΔX
+                  <input id="wf-dg-ox" type="number" step="1" value="0">
+                </label>
+                <label class="field">ΔY
+                  <input id="wf-dg-oy" type="number" step="1" value="0">
+                </label>
+                <label class="field">ΔZ
+                  <input id="wf-dg-oz" type="number" step="1" value="0">
+                </label>
+                <label class="field">提升 ΔZ
+                  <input id="wf-dg-hz" type="number" step="1" value="20">
+                </label>
+              </div>
+              <label class="switch">
+                <input id="wf-dg-refine" type="checkbox" checked>
+                <span>启用误差补偿（第二、三步共用）</span>
+              </label>
+              <p class="note" id="wf-dg-aim-note">第二步瞄准 = 中心 + 偏置 + 提升；第三步 = 中心 + 偏置</p>
+              <div class="cmds">
+                <button id="btn-wf-dg-step" class="primary" type="button">开始</button>
+                <button id="btn-wf-dg-all" type="button">完整执行</button>
+              </div>
+              <p class="note" id="wf-dg-note">还没跑过</p>
             </div>
           </article>
         </div>

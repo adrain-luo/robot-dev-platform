@@ -20,7 +20,7 @@ python server.py --allow-real-motion --max-speed 0.2
 
 | 目录 | 职责 |
 |------|------|
-| `arm_control/` | **唯一发令处**：DDS、限速循环、URDF、前端、腰/立柱、TCP、空间点、棋盘触摸、识别定位 |
+| `arm_control/` | **唯一发令处**：DDS、限速循环、URDF、前端、腰/立柱、TCP、空间点、棋盘触摸、识别定位、工作流 |
 | `arm_payload_gravity/` | 姿态集、末端负载辨识、摩擦带、到位对比（接口挂在臂控网页上） |
 | `hand_eye/` | 头相机取流、棋盘检测、内参、手眼外参、SGBM 点云 |
 | `tcp_calib/` | 早期占位；现行 TCP 在 `arm_control/tcp_calib.py` |

@@ -579,6 +579,28 @@ const View = {
     this.render();
     return true;
   },
+  /** 工作流临时点（浅蓝色）；不落盘。传 null 清除。 */
+  setWorkflowPoint(xyz) {
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso) return false;
+    if (this.workflowPoint) {
+      torso.remove(this.workflowPoint);
+      this.workflowPoint.geometry.dispose();
+      this.workflowPoint.material.dispose();
+      this.workflowPoint = null;
+    }
+    if (!xyz || xyz.length < 3) {
+      this.render();
+      return true;
+    }
+    const geo = new THREE.SphereGeometry(0.015, 18, 14);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x7dd3fc, depthTest: true });
+    this.workflowPoint = new THREE.Mesh(geo, mat);
+    this.workflowPoint.position.set(xyz[0], xyz[1], xyz[2]);
+    torso.add(this.workflowPoint);
+    this.render();
+    return true;
+  },
   /** 识别定位：左红 / 右蓝 / 中心绿。传入 flat xyz 数组或 null 清除。 */
   setDetectPoints(leftXyz, rightXyz, centerXyz) {
     const torso = this.links.get("torso_link");
