@@ -309,7 +309,7 @@ function applyCtrl(ctrl) {
   const allow = !!ctrl.allow_real_motion;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-payload-use", "btn-he-run"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-he-run"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
   const mirror = $("btn-poseset-mirror");
@@ -460,6 +460,14 @@ function bindBook(book) {
   marks.forEach((m) => m.addEventListener("click", () => openPage(m.dataset.page)));
 }
 document.querySelectorAll(".book").forEach(bindBook);
+
+document.querySelectorAll(".subfold-toggle").forEach((btn) => {
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const fold = btn.closest(".subfold");
+    if (fold) fold.classList.toggle("open");
+  });
+});
 
 document.querySelectorAll(".float").forEach((card) => {
   const btn = card.querySelector(".float-toggle");
@@ -659,7 +667,7 @@ function applyIdentify(id) {
   if (stop) stop.disabled = !id.running;
   if (valStart) valStart.disabled = !allow || !!id.running;
   renderVal(id);
-  renderPayloadSelect(id.profiles || [], id.applied_name);
+  renderPayloadTable(id);
   renderSessionSelect(id.sessions || [], id.session);
   const st = id.still;
   if (st && !stillDirty) {
@@ -677,7 +685,7 @@ let poseList = [];
 function refillSelects() {
   renderPoseList(poseList);
   if (lastIdentify) {
-    renderPayloadSelect(lastIdentify.profiles || [], lastIdentify.applied_name);
+    renderPayloadTable(lastIdentify);
     renderSessionSelect(lastIdentify.sessions || [], lastIdentify.session);
   }
   // 打开卡片时若还没拉过列表，不要用空 valList 冲掉服务端注入的选项
@@ -710,7 +718,7 @@ const CFG_MUTATORS = [
   "btn-cfg-stereo", "btn-cfg-grav-left", "btn-cfg-grav-right",
   "btn-cfg-tcp-left", "btn-cfg-tcp-right",
   "cfg-he", "cfg-grav-left", "cfg-grav-right", "cfg-tcp-left", "cfg-tcp-right",
-  "btn-he-solve", "btn-payload-use", "btn-id-apply",
+  "btn-he-solve", "btn-id-apply",
 ];
 const CFG_SELECT_IDS = [
   "cfg-he", "cfg-grav-left", "cfg-grav-right", "cfg-tcp-left", "cfg-tcp-right",
@@ -872,7 +880,7 @@ function renderRuntimeConfig(rt) {
       el.disabled = false;
       return;
     }
-    if (id === "btn-id-apply" || id === "btn-payload-use") {
+    if (id === "btn-id-apply") {
       el.disabled = !allowMotion;
     }
   });
@@ -2015,60 +2023,115 @@ function renderSessionSelect(list, current) {
   }), current || sel.value);
 }
 
-function renderPayloadSelect(list, applied) {
-  const sel = $("payload-select");
-  if (!sel || document.activeElement === sel) return;
-  const rows = (list || []).map((p) => {
-    const side = p.arm === "left" ? "左" : (p.arm === "right" ? "右" : "?");
-    const m = p.mass_kg != null ? `${Number(p.mass_kg).toFixed(2)}kg` : "";
-    return { value: p.name, label: `${p.name} · ${side} ${m}` };
+function renderPayloadTable(id) {
+  const body = $("payload-table-body");
+  const empty = $("payload-table-empty");
+  if (!body) return;
+  const saved = (id && id.profiles) || [];
+  window.lastPayloadSaved = saved;
+  const activeL = (id && id.applied_left) || "";
+  const activeR = (id && id.applied_right) || "";
+  body.innerHTML = "";
+  if (empty) empty.classList.toggle("show", saved.length === 0);
+  saved.forEach((p) => {
+    const name = p.name || "";
+    const arm = p.arm === "left" || p.arm === "right" ? p.arm : "";
+    const side = arm === "left" ? "左" : arm === "right" ? "右" : "—";
+    const mass = p.mass_kg != null && Number.isFinite(Number(p.mass_kg))
+      ? `${Number(p.mass_kg).toFixed(2)} kg`
+      : "—";
+    const on = (arm === "left" && name === activeL) || (arm === "right" && name === activeR);
+    const tr = document.createElement("tr");
+    tr.dataset.name = name;
+    tr.innerHTML = `
+      <td class="pay-name"></td>
+      <td>${side}</td>
+      <td class="pay-meta"></td>
+      <td class="pay-meta pay-note"></td>
+      <td><button type="button" class="pay-act pay-apply${on ? " on" : ""}" data-act="apply" title="${on ? "该手当前补偿" : "设为该手补偿"}">${on ? "✓" : "○"}</button></td>
+      <td><button type="button" class="pay-act pay-del" data-act="delete">删除</button></td>
+    `;
+    tr.querySelector(".pay-name").textContent = name;
+    tr.querySelector(".pay-meta").textContent = mass;
+    tr.querySelector(".pay-note").textContent = p.note || "—";
+    body.appendChild(tr);
   });
-  writeOptions(sel, rows.length ? "选择补偿文件…" : "还没有补偿文件", rows, applied || sel.value);
+}
+
+async function payloadApplySaved(name) {
+  if (!name) return;
+  try {
+    const d = await post("/api/identify/payload/apply", { name });
+    applyIdentify(d.identify);
+    if (d.runtime) renderRuntimeConfig(d.runtime);
+    window.lastPayloadPick = name;
+    flash(d.message || `已应用「${name}」`, true);
+  } catch (e) { flash(String(e), false); }
+}
+
+async function payloadDeleteSaved(name) {
+  if (!name) return;
+  if (!confirm(`删除补偿「${name}」？若正在应用将去掉负载项。`)) return;
+  try {
+    const d = await post("/api/identify/payload/delete", { name });
+    applyIdentify(d.identify);
+    if (d.runtime) renderRuntimeConfig(d.runtime);
+    if (window.lastPayloadPick === name) window.lastPayloadPick = "";
+    flash(d.message || "已删除", true);
+  } catch (e) { flash(String(e), false); }
+}
+
+if ($("payload-table-body")) {
+  $("payload-table-body").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn) return;
+    const tr = btn.closest("tr");
+    const name = tr?.dataset?.name || "";
+    if (!name) return;
+    if (btn.dataset.act === "apply") payloadApplySaved(name);
+    else if (btn.dataset.act === "delete") payloadDeleteSaved(name);
+  });
 }
 
 $("btn-id-apply").onclick = async () => {
   try {
-    const name = ($("payload-new").value.trim() || $("payload-select").value || (window.currentSet && window.currentSet.name) || "").trim();
+    const name = (
+      $("payload-new")?.value.trim()
+      || (window.currentSet && window.currentSet.name)
+      || ""
+    ).trim();
+    if (!name) { flash("填一个名字再存并应用", false); return; }
+    const exists = (window.lastPayloadSaved || []).some((p) => p.name === name);
+    if (exists && !confirm(`覆盖已保存的「${name}」？`)) return;
     const d = await post("/api/identify/apply", { name });
     applyIdentify(d.identify);
     if (d.runtime) renderRuntimeConfig(d.runtime);
+    window.lastPayloadPick = d.payload?.name || name;
+    if ($("payload-new")) $("payload-new").value = "";
     flash(`已存并应用「${d.payload.name}」`, true);
   } catch (e) { flash(String(e), false); }
 };
 $("btn-id-clear").onclick = async () => {
   try {
-    await post("/api/identify/clear", {});
+    const d = await post("/api/identify/clear", {});
+    if (d.identify) applyIdentify(d.identify);
     flash("已去掉负载项，只剩 URDF 臂自重", true);
   } catch (e) { flash(String(e), false); }
 };
-$("btn-payload-use").onclick = async () => {
-  const name = $("payload-select").value;
-  if (!name) { flash("先选补偿文件", false); return; }
-  try {
-    const d = await post("/api/identify/payload/apply", { name });
-    applyIdentify(d.identify);
-    if (d.runtime) renderRuntimeConfig(d.runtime);
-    flash(`已调用「${name}」进前馈`, true);
-  } catch (e) { flash(String(e), false); }
-};
 $("btn-payload-save").onclick = async () => {
-  const name = ($("payload-new").value.trim() || $("payload-select").value || (window.currentSet && window.currentSet.name) || "").trim();
+  const name = (
+    $("payload-new")?.value.trim()
+    || (window.currentSet && window.currentSet.name)
+    || ""
+  ).trim();
   if (!name) { flash("填一个另存名字", false); return; }
+  const exists = (window.lastPayloadSaved || []).some((p) => p.name === name);
+  if (exists && !confirm(`覆盖已保存的「${name}」？`)) return;
   try {
     const d = await post("/api/identify/payload/save", { name });
     applyIdentify(d.identify);
-    $("payload-select").value = name;
+    if ($("payload-new")) $("payload-new").value = "";
     flash(`已保存「${name}」（未改当前前馈）`, true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-payload-del").onclick = async () => {
-  const name = $("payload-select").value;
-  if (!name) return;
-  if (!confirm(`删除补偿文件「${name}」？`)) return;
-  try {
-    const d = await post("/api/identify/payload/delete", { name });
-    applyIdentify(d.identify);
-    flash("已删补偿文件", true);
   } catch (e) { flash(String(e), false); }
 };
 $("btn-val-start").onclick = async () => {
@@ -2078,15 +2141,18 @@ $("btn-val-start").onclick = async () => {
   if ($("val-pay").checked) modes.push("payload");
   if ($("val-corr").checked) modes.push("payload_correct");
   if (!modes.length) { flash("至少勾一种方案", false); return; }
-  if ((modes.includes("payload") || modes.includes("payload_correct")) && !$("payload-select").value) {
-    flash("补偿方案请先选补偿文件", false); return;
+  const payloadName = (lastIdentify && lastIdentify.applied_name)
+    || window.lastPayloadPick
+    || "";
+  if ((modes.includes("payload") || modes.includes("payload_correct")) && !payloadName) {
+    flash("补偿方案需要先在末端负载管理里应用一套补偿", false); return;
   }
   if (!confirm("将按所选方案走完整姿态集（同一限速）。扶住、守急停。继续？")) return;
   try {
     await post("/api/validate/start", {
       name: posesetName(),
       modes,
-      payload: $("payload-select").value,
+      payload: payloadName,
       correction_iters: parseInt($("val-iters").value, 10) || 2,
     });
     flash("开始对比", true);

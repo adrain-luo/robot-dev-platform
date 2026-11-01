@@ -61,6 +61,19 @@ def load_payload(arm: str) -> Optional[Dict]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def clear_payload(arm: str) -> None:
+    """清掉该臂「最后应用」快照（不影响命名补偿文件）。"""
+    arm = "left" if arm == "left" else "right"
+    p = PAYLOAD_DIR / f"_last_{arm}.json"
+    if p.is_file():
+        p.unlink()
+
+
+def applied_name_for_arm(arm: str) -> str:
+    d = load_payload(arm) or {}
+    return str(d.get("name") or "")
+
+
 def _check_profile_name(name: str) -> str:
     name = (name or "").strip()
     if name.startswith("_last_"):

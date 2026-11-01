@@ -33,16 +33,20 @@ class PayloadAPI:
             loop.set_payload_theta(d["theta"], d.get("name"))
 
     def apply_payload_dict(self, d: Dict[str, Any], *, name: Optional[str] = None) -> Dict[str, Any]:
+        """写入该臂的「最后应用」快照；若正是当前控制臂则同时进前馈。
+
+        与 TCP 左右各记一份相同：可先给对侧登记，换臂后 restore 自动带上。
+        """
         loop = self.app.require_loop()
-        if d.get("arm") and loop.arm != d["arm"]:
-            raise PermissionErrorMotion(f"文件是{d.get('arm')}臂，当前控制臂是{loop.arm}")
+        arm = str(d.get("arm") or loop.arm)
+        if arm not in ("left", "right"):
+            arm = loop.arm
         theta = d.get("theta")
         if not theta:
             theta = iden.payload_to_theta(d["mass_kg"], d.get("com_m") or [0, 0, 0])
         name = name or d.get("name")
-        loop.set_payload_theta(theta, name)
         saved = {
-            "arm": loop.arm, "alpha": 1.0, "theta": list(theta),
+            "arm": arm, "alpha": 1.0, "theta": list(theta),
             "mass_kg": d.get("mass_kg"), "com_m": d.get("com_m"),
             "session": d.get("session"), "poseset": d.get("poseset"),
             "name": name, "note": d.get("note", ""),
@@ -50,7 +54,11 @@ class PayloadAPI:
         }
         if saved["mass_kg"] is None:
             saved["mass_kg"], saved["com_m"] = iden.theta_to_payload(theta)
-        iden.save_payload(loop.arm, saved)
+        iden.save_payload(arm, saved)
+        live = bool(loop.arm == arm)
+        if live:
+            loop.set_payload_theta(theta, name)
+        saved["live"] = live
         return saved
 
     def identify_status(self) -> Dict[str, Any]:
@@ -81,9 +89,16 @@ class PayloadAPI:
             st["payload_file"] = None
         st["profiles"] = iden.list_profiles()
         st["sessions"] = iden.list_sessions()
+        st["applied_left"] = iden.applied_name_for_arm("left")
+        st["applied_right"] = iden.applied_name_for_arm("right")
         st["applied_name"] = None
         if self.app.loop is not None:
             st["applied_name"] = self.app.loop.status().get("payload_name")
+            # 与 _last 对齐：当前臂若无实时前馈，仍用磁盘登记名做勾选
+            if not st["applied_name"]:
+                st["applied_name"] = (
+                    st["applied_left"] if self.app.loop.arm == "left" else st["applied_right"]
+                ) or None
         st["kind"] = self._id.get("kind")
         st["rows"] = list(self._id.get("rows") or [])
         st["summary"] = dict(self._id.get("summary") or {})
@@ -242,11 +257,22 @@ class PayloadAPI:
         if path == "/api/identify/clear":
             loop = self.app.require_loop()
             loop.set_payload_theta(None)
-            return {"ok": True, "ctrl": self.app.ctrl_status()}
+            iden.clear_payload(loop.arm)
+            return {"ok": True, "identify": self.identify_status(), "ctrl": self.app.ctrl_status()}
         if path == "/api/identify/payload/apply":
             d = iden.load_profile(str(body["name"]))
             saved = self.apply_payload_dict(d, name=d["name"])
-            return {"ok": True, "payload": saved, "identify": self.identify_status(), "ctrl": self.app.ctrl_status()}
+            side = "左" if saved.get("arm") == "left" else "右"
+            msg = f"已应用「{saved.get('name')}」为{side}臂补偿"
+            if not saved.get("live"):
+                msg += "（当前控制臂不是这一侧，换臂后自动带上）"
+            return {
+                "ok": True,
+                "payload": saved,
+                "identify": self.identify_status(),
+                "ctrl": self.app.ctrl_status(),
+                "message": msg,
+            }
         if path == "/api/identify/payload/save":
             with self._id_lock:
                 cur = self._id.get("solution")
@@ -259,8 +285,20 @@ class PayloadAPI:
             }, note=str(body.get("note") or ""))
             return {"ok": True, "payload": saved, "identify": self.identify_status()}
         if path == "/api/identify/payload/delete":
-            iden.delete_profile(str(body["name"]))
-            return {"ok": True, "identify": self.identify_status()}
+            name = str(body["name"])
+            loop = self.app.loop
+            for arm in ("left", "right"):
+                if iden.applied_name_for_arm(arm) == name:
+                    iden.clear_payload(arm)
+                    if loop is not None and loop.arm == arm:
+                        loop.set_payload_theta(None)
+            iden.delete_profile(name)
+            return {
+                "ok": True,
+                "identify": self.identify_status(),
+                "ctrl": self.app.ctrl_status() if loop is not None else None,
+                "message": f"已删除「{name}」",
+            }
         raise FileNotFoundError(path)
 
     def _validate_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:

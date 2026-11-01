@@ -201,42 +201,66 @@
           <article class="float" id="panel-id">
             <button type="button" class="float-toggle">末端负载 <span id="id-progress" class="aside"></span></button>
             <div class="float-body">
-              <p class="note">按当前姿态集双向走点。α 固定为 1，只解质量与质心。</p>
-              <div class="cmds">
-                <button id="btn-id-measure" class="primary">测量当前集</button>
-                <button id="btn-id-stop" class="danger">停止</button>
-              </div>
-              <div class="fields">
-                <label class="field grow">测量会话
-                  <select id="id-session" title="已保存的测量会话，求解用这一份样本，不用再走点"></select>
-                </label>
-                <label class="field">力矩
-                  <select id="id-source">
-                    <option value="pd">PD 重构</option>
-                    <option value="est">tau_est</option>
-                  </select>
-                </label>
-              </div>
-              <div class="cmds">
-                <button id="btn-id-solve">求解</button>
-                <button id="btn-id-apply">存并应用到前馈</button>
-                <button id="btn-id-clear">去掉负载</button>
-              </div>
-              <div class="fields">
-                <label class="field grow">补偿文件
-                  <select id="payload-select"></select>
-                </label>
-                <label class="field">另存
-                  <input id="payload-new" placeholder="名字" maxlength="48">
-                </label>
-              </div>
-              <div class="cmds">
-                <button id="btn-payload-use">调用</button>
-                <button id="btn-payload-save">只存不应用</button>
-                <button id="btn-payload-del">删文件</button>
-              </div>
-              <div id="id-result"></div>
-              <pre id="id-log"></pre>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">管理</button>
+                <div class="subfold-body">
+                  <p class="note">已保存的补偿文件。点「应用」列勾选设为<strong>该文件所属手臂</strong>的补偿（左右可各勾一个，与 TCP 相同）；正控该臂时立即进前馈，对侧换臂后自动带上。删除若正在应用会清掉该侧登记。</p>
+                  <div class="asset-table-wrap">
+                    <table id="payload-table" class="asset-table">
+                      <thead>
+                        <tr>
+                          <th>名称</th>
+                          <th>臂</th>
+                          <th>质量</th>
+                          <th>备注</th>
+                          <th>应用</th>
+                          <th>删除</th>
+                        </tr>
+                      </thead>
+                      <tbody id="payload-table-body"></tbody>
+                    </table>
+                  </div>
+                  <p class="note" id="payload-table-empty">还没有补偿文件</p>
+                  <div class="cmds">
+                    <button id="btn-id-clear" type="button">去掉负载</button>
+                  </div>
+                </div>
+              </section>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">录入</button>
+                <div class="subfold-body">
+                  <p class="note">按当前姿态集双向走点。α 固定为 1，只解质量与质心。求解后可命名保存；「存并应用」会写入前馈。</p>
+                  <div class="cmds">
+                    <button id="btn-id-measure" class="primary">测量当前集</button>
+                    <button id="btn-id-stop" class="danger">停止</button>
+                  </div>
+                  <div class="fields">
+                    <label class="field grow">测量会话
+                      <select id="id-session" title="已保存的测量会话，求解用这一份样本，不用再走点"></select>
+                    </label>
+                    <label class="field">力矩
+                      <select id="id-source">
+                        <option value="pd">PD 重构</option>
+                        <option value="est">tau_est</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-id-solve">求解</button>
+                  </div>
+                  <div class="fields">
+                    <label class="field grow">命名
+                      <input id="payload-new" placeholder="例如 左手向后气泵" maxlength="48">
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-id-apply">存并应用到前馈</button>
+                    <button id="btn-payload-save">只存不应用</button>
+                  </div>
+                  <div id="id-result"></div>
+                  <pre id="id-log"></pre>
+                </div>
+              </section>
             </div>
           </article>
 
@@ -271,27 +295,30 @@
           <article class="float" id="panel-he">
             <button type="button" class="float-toggle">手眼标定 <span id="he-count" class="aside"></span></button>
             <div class="float-body">
-              <section class="tcp-section">
-                <h3 class="tcp-section-title">管理</h3>
-                <p class="note">已保存的手眼结果（含配套双目 yaml）。点「应用」列勾选设为当前配置；同配置只留一个勾。删除若正在应用会一并取消。</p>
-                <div class="table-scroll tcp-table-wrap">
-                  <table id="he-table" class="asset-table">
-                    <thead>
-                      <tr>
-                        <th>名称</th>
-                        <th>臂</th>
-                        <th>基线</th>
-                        <th>应用</th>
-                        <th>删除</th>
-                      </tr>
-                    </thead>
-                    <tbody id="he-table-body"></tbody>
-                  </table>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">管理</button>
+                <div class="subfold-body">
+                  <p class="note">已保存的手眼结果（含配套双目 yaml）。点「应用」列勾选设为当前配置；同配置只留一个勾。删除若正在应用会一并取消。</p>
+                  <div class="asset-table-wrap">
+                    <table id="he-table" class="asset-table">
+                      <thead>
+                        <tr>
+                          <th>名称</th>
+                          <th>臂</th>
+                          <th>基线</th>
+                          <th>应用</th>
+                          <th>删除</th>
+                        </tr>
+                      </thead>
+                      <tbody id="he-table-body"></tbody>
+                    </table>
+                  </div>
+                  <p class="note" id="he-table-empty">还没有保存的手眼结果</p>
                 </div>
-                <p class="note" id="he-table-empty">还没有保存的手眼结果</p>
               </section>
-              <section class="tcp-section tcp-section-record">
-                <h3 class="tcp-section-title">录入</h3>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">录入</button>
+                <div class="subfold-body">
                 <p class="note">用姿态集里已经记好的点。采集按限速走完每点停稳存图；求解先估内参再算相机到躯干外参。左右对称用姿态集「镜像到对侧」。画面在左侧「双目」。</p>
                 <div id="he-msg" class="note"></div>
                 <div class="fields">
@@ -334,6 +361,7 @@
                   <button id="btn-he-save">保存</button>
                 </div>
                 <div id="he-result"></div>
+                </div>
               </section>
             </div>
           </article>
@@ -341,46 +369,50 @@
           <article class="float" id="panel-tcp">
             <button type="button" class="float-toggle">TCP</button>
             <div class="float-body">
-              <section class="tcp-section">
-                <h3 class="tcp-section-title">管理</h3>
-                <p class="note">已保存的 TCP。点「应用」列勾选设为该手当前配置（同手只保留一个勾）；镜像生成「原名_左/右」，不带工作姿态。</p>
-                <div class="table-scroll tcp-table-wrap">
-                  <table id="tcp-table">
-                    <thead>
-                      <tr>
-                        <th>名称</th>
-                        <th>手</th>
-                        <th>备注</th>
-                        <th>应用</th>
-                        <th>镜像</th>
-                        <th>删除</th>
-                      </tr>
-                    </thead>
-                    <tbody id="tcp-table-body"></tbody>
-                  </table>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">管理</button>
+                <div class="subfold-body">
+                  <p class="note">已保存的 TCP。点「应用」列勾选设为该手当前配置（同手只保留一个勾）；镜像生成「原名_左/右」，不带工作姿态。</p>
+                  <div class="asset-table-wrap">
+                    <table id="tcp-table" class="asset-table">
+                      <thead>
+                        <tr>
+                          <th>名称</th>
+                          <th>手</th>
+                          <th>备注</th>
+                          <th>应用</th>
+                          <th>镜像</th>
+                          <th>删除</th>
+                        </tr>
+                      </thead>
+                      <tbody id="tcp-table-body"></tbody>
+                    </table>
+                  </div>
+                  <p class="note" id="tcp-table-empty">还没有保存的 TCP</p>
                 </div>
-                <p class="note" id="tcp-table-empty">还没有保存的 TCP</p>
               </section>
-              <section class="tcp-section tcp-section-record">
-                <h3 class="tcp-section-title">录入</h3>
-                <p class="note">拖拽时把末端工作点对准空间里的同一个点，转开腕部，每个姿态记一次，再计算。红点是当前爪尖。算出后命名保存；固定点可另存进空间点（黄点）。</p>
-                <p class="note" id="tcp-now">还没有姿态</p>
-                <div class="cmds">
-                  <button id="btn-tcp-record" type="button">记录姿态</button>
-                  <button id="btn-tcp-undo" type="button">去掉最后</button>
-                  <button id="btn-tcp-clear" type="button">清空</button>
-                  <button id="btn-tcp-solve" class="primary" type="button">计算</button>
-                </div>
-                <div class="fields">
-                  <label class="field grow">命名
-                    <input id="tcp-name" placeholder="例如 左手尖对货架" maxlength="48">
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">录入</button>
+                <div class="subfold-body">
+                  <p class="note">拖拽时把末端工作点对准空间里的同一个点，转开腕部，每个姿态记一次，再计算。红点是当前爪尖。算出后命名保存；固定点可另存进空间点（黄点）。</p>
+                  <p class="note" id="tcp-now">还没有姿态</p>
+                  <div class="cmds">
+                    <button id="btn-tcp-record" type="button">记录姿态</button>
+                    <button id="btn-tcp-undo" type="button">去掉最后</button>
+                    <button id="btn-tcp-clear" type="button">清空</button>
+                    <button id="btn-tcp-solve" class="primary" type="button">计算</button>
+                  </div>
+                  <div class="fields">
+                    <label class="field grow">命名
+                      <input id="tcp-name" placeholder="例如 左手尖对货架" maxlength="48">
+                    </label>
+                  </div>
+                  <label class="field">备注
+                    <input id="tcp-note" placeholder="怎么标的，可空" maxlength="80">
                   </label>
-                </div>
-                <label class="field">备注
-                  <input id="tcp-note" placeholder="怎么标的，可空" maxlength="80">
-                </label>
-                <div class="cmds">
-                  <button id="btn-tcp-save" type="button">保存</button>
+                  <div class="cmds">
+                    <button id="btn-tcp-save" type="button">保存</button>
+                  </div>
                 </div>
               </section>
             </div>

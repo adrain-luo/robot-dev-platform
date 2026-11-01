@@ -104,14 +104,6 @@ def _page_html() -> str:
             bi = "双向" if item.get("bidirectional") else "单向"
             sess_opts.append(_opt(item["name"], f"{item['name']} · {side} {item.get('poseset') or ''} {item.get('n')}样 {bi}"))
         html = _inject_options(html, "id-session", sess_opts)
-        profiles = iden.list_profiles()
-        pay_opts = [_opt("", "选择补偿文件…" if profiles else "还没有补偿文件")]
-        for item in profiles:
-            side = "左" if item.get("arm") == "left" else "右"
-            mass = item.get("mass_kg")
-            m = f" {float(mass):.2f}kg" if mass is not None else ""
-            pay_opts.append(_opt(item["name"], f"{item['name']} · {side}{m}"))
-        html = _inject_options(html, "payload-select", pay_opts)
         vals = vali.list_results()
         val_opts = [_opt("", "打开已保存的对比…" if vals else "还没有对比记录")]
         for item in vals:
