@@ -73,7 +73,6 @@ from spatial_points import (
 from tcp_calib import TcpSession
 from work_pose import WorkPoseSession, delete_all_for_tcp as delete_work_poses_for_tcp
 import session as he_session
-import results as he_results
 from service import HandEyeAPI
 
 def _opt(value: str, label: str) -> str:
@@ -128,12 +127,6 @@ def _page_html() -> str:
             ps = f" · {item['poseset']}" if item.get("poseset") else ""
             he_opts.append(_opt(item["name"], f"{item['name']} · {side} {item.get('n', 0)}张{ps}"))
         html = _inject_options(html, "he-session", he_opts)
-        saved = he_results.list_saved()
-        cal_opts = [_opt("", "调用已保存的标定…" if saved else "还没有保存的标定")]
-        for item in saved:
-            base = f"{item['baseline_mm']:.1f} mm" if item.get("baseline_mm") is not None else ""
-            cal_opts.append(_opt(item["name"], f"{item['name']} · {base}".rstrip(" ·")))
-        html = _inject_options(html, "he-calib", cal_opts)
         pts = list_spatial_saved()
         pt_opts = [_opt("", "选择空间点…" if pts else "还没有空间点")]
         for item in pts:

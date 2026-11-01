@@ -710,7 +710,7 @@ const CFG_MUTATORS = [
   "btn-cfg-stereo", "btn-cfg-grav-left", "btn-cfg-grav-right",
   "btn-cfg-tcp-left", "btn-cfg-tcp-right",
   "cfg-he", "cfg-grav-left", "cfg-grav-right", "cfg-tcp-left", "cfg-tcp-right",
-  "btn-he-load", "btn-he-solve", "btn-payload-use", "btn-id-apply",
+  "btn-he-solve", "btn-payload-use", "btn-id-apply",
 ];
 const CFG_SELECT_IDS = [
   "cfg-he", "cfg-grav-left", "cfg-grav-right", "cfg-tcp-left", "cfg-tcp-right",
@@ -868,7 +868,7 @@ function renderRuntimeConfig(rt) {
       el.disabled = false;
       return;
     }
-    if (id === "btn-he-load" || id === "btn-he-solve") {
+    if (id === "btn-he-solve") {
       el.disabled = false;
       return;
     }
@@ -2108,8 +2108,40 @@ function heForm() {
     camera_host: $("he-host").value.trim(),
   };
 }
+function renderHeTable(st) {
+  const body = $("he-table-body");
+  const empty = $("he-table-empty");
+  if (!body) return;
+  const saved = (st && st.saved) || [];
+  window.lastHeSaved = saved;
+  const active = (st && st.active_result) || "";
+  body.innerHTML = "";
+  if (empty) empty.classList.toggle("show", saved.length === 0);
+  saved.forEach((s) => {
+    const name = s.name || "";
+    const side = s.arm === "left" ? "左" : s.arm === "right" ? "右" : "—";
+    const base = s.baseline_mm != null && Number.isFinite(Number(s.baseline_mm))
+      ? `${Number(s.baseline_mm).toFixed(1)} mm`
+      : "—";
+    const on = !!name && name === active;
+    const tr = document.createElement("tr");
+    tr.dataset.name = name;
+    tr.innerHTML = `
+      <td class="he-name"></td>
+      <td>${side}</td>
+      <td class="he-meta"></td>
+      <td><button type="button" class="he-act he-apply${on ? " on" : ""}" data-act="apply" title="${on ? "当前应用" : "设为当前手眼"}">${on ? "✓" : "○"}</button></td>
+      <td><button type="button" class="he-act he-del" data-act="delete">删除</button></td>
+    `;
+    tr.querySelector(".he-name").textContent = name;
+    tr.querySelector(".he-meta").textContent = base;
+    body.appendChild(tr);
+  });
+}
+
 function renderHe(st) {
   if (!st) return;
+  renderHeTable(st);
   const sel = $("he-session");
   if (sel && document.activeElement !== sel) {
     writeOptions(sel, (st.sessions || []).length ? "选择采集会话…" : "还没有采集会话",
@@ -2119,15 +2151,6 @@ function renderHe(st) {
         return { value: s.name, label: `${s.name} · ${side} ${s.n}张${ps}` };
       }),
       st.session || sel.value);
-  }
-  const cal = $("he-calib");
-  if (cal && st.saved && document.activeElement !== cal) {
-    writeOptions(cal, st.saved.length ? "调用已保存的标定…" : "还没有保存的标定",
-      st.saved.map((s) => {
-        const base = s.baseline_mm != null ? ` · ${Number(s.baseline_mm).toFixed(1)} mm` : "";
-        return { value: s.name, label: `${s.name}${base}` };
-      }),
-      st.active_result || cal.value);
   }
   if ($("he-count") && !st.running) $("he-count").textContent = st.session ? `${st.count || 0}张` : "";
   const msg = $("he-msg");
@@ -2142,7 +2165,9 @@ function renderHe(st) {
   const box = $("he-result");
   if (!box) return;
   const res = st.result;
-  if (!res) return;
+  if (!res) {
+    if (!st.intrinsics_fit) return;
+  }
   const lines = [];
   const fit = st.intrinsics_fit;
   if (fit && fit.left_fx != null) {
@@ -2152,17 +2177,54 @@ function renderHe(st) {
     const n = fit.num_pairs != null ? ` · ${fit.num_pairs} 对` : "";
     lines.push(`<div class="stat"><em>本次内参${n}</em><strong>左 fx ${Number(fit.left_fx).toFixed(1)} · 右 fx ${Number(fit.right_fx).toFixed(1)}</strong>${rms}</div>`);
   }
-  for (const eye of ["left", "right"]) {
-    const r = res[eye];
-    if (!r) continue;
-    const t = r.t_cam2base_m || [];
-    const tr = r.residual_translation_mm || {};
-    lines.push(`<div class="stat"><em>${eye === "left" ? "左目" : "右目"} → ${r.base_link || "torso_link"}</em><strong>${t.map((x) => Number(x).toFixed(4)).join(", ")} m</strong><span class="note">平移残差 均 ${Number(tr.mean).toFixed(2)} / 最大 ${Number(tr.max).toFixed(2)} mm · 内点 ${r.num_inliers}/${r.num_samples}</span></div>`);
+  if (res) {
+    for (const eye of ["left", "right"]) {
+      const r = res[eye];
+      if (!r) continue;
+      const t = r.t_cam2base_m || [];
+      const tr = r.residual_translation_mm || {};
+      lines.push(`<div class="stat"><em>${eye === "left" ? "左目" : "右目"} → ${r.base_link || "torso_link"}</em><strong>${t.map((x) => Number(x).toFixed(4)).join(", ")} m</strong><span class="note">平移残差 均 ${Number(tr.mean).toFixed(2)} / 最大 ${Number(tr.max).toFixed(2)} mm · 内点 ${r.num_inliers}/${r.num_samples}</span></div>`);
+    }
+    if (res.stereo_baseline_mm != null) {
+      lines.push(`<div class="stat"><em>右目相对左目</em><strong>${Number(res.stereo_baseline_mm).toFixed(2)} mm</strong></div>`);
+    }
   }
-  if (res.stereo_baseline_mm != null) {
-    lines.push(`<div class="stat"><em>右目相对左目</em><strong>${Number(res.stereo_baseline_mm).toFixed(2)} mm</strong></div>`);
-  }
-  box.innerHTML = lines.join("");
+  if (lines.length) box.innerHTML = lines.join("");
+}
+
+async function heApplySaved(name) {
+  if (!name) return;
+  try {
+    const d = await post("/api/handeye/load", { name });
+    renderHe(d);
+    if (d.runtime) renderRuntimeConfig(d.runtime);
+    flash(`已应用手眼「${name}」`, true);
+  } catch (e) { flash(String(e), false); }
+}
+
+async function heDeleteSaved(name) {
+  if (!name) return;
+  if (!confirm(`删除手眼「${name}」？若正在应用将取消，并删掉配套 yaml。`)) return;
+  try {
+    const d = await post("/api/handeye/delete", { name });
+    renderHe(d);
+    if (d.runtime) renderRuntimeConfig(d.runtime);
+    const box = $("he-result");
+    if (box) box.innerHTML = "";
+    flash("已删除", true);
+  } catch (e) { flash(String(e), false); }
+}
+
+if ($("he-table-body")) {
+  $("he-table-body").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn) return;
+    const tr = btn.closest("tr");
+    const name = tr?.dataset?.name || "";
+    if (!name) return;
+    if (btn.dataset.act === "apply") heApplySaved(name);
+    else if (btn.dataset.act === "delete") heDeleteSaved(name);
+  });
 }
 async function refreshHandeye() {
   const res = await fetch("/api/handeye", { cache: "no-store" });
@@ -2489,36 +2551,16 @@ $("btn-he-solve").onclick = async () => {
   } catch (e) { flash(String(e), false); }
 };
 $("btn-he-save").onclick = async () => {
-  const name = $("he-calib-name").value.trim() || $("he-calib").value;
+  const name = $("he-calib-name").value.trim();
   if (!name) { flash("填一个名字", false); return; }
-  const exists = [...$("he-calib").options].some((o) => o.value === name);
+  const exists = (window.lastHeSaved || []).some((s) => s.name === name);
   if (exists && !confirm(`覆盖已保存的「${name}」？`)) return;
   try {
     const d = await post("/api/handeye/save", { name, session: $("he-session").value });
     $("he-calib-name").value = "";
     renderHe(d);
-    flash(`已保存「${name}」`, true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-he-load").onclick = async () => {
-  const name = $("he-calib").value;
-  if (!name) { flash("先选一条已保存的标定", false); return; }
-  try {
-    const d = await post("/api/handeye/load", { name });
-    renderHe(d);
     if (d.runtime) renderRuntimeConfig(d.runtime);
-    flash(`已调用「${name}」`, true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-he-del").onclick = async () => {
-  const name = $("he-calib").value;
-  if (!name) return;
-  if (!confirm(`删除标定「${name}」？`)) return;
-  try {
-    const d = await post("/api/handeye/delete", { name });
-    renderHe(d);
-    $("he-result").innerHTML = "";
-    flash("已删除", true);
+    flash(`已保存并应用「${name}」`, true);
   } catch (e) { flash(String(e), false); }
 };
 } catch (e) {

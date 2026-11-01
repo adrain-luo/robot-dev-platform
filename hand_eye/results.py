@@ -42,6 +42,7 @@ def list_saved() -> List[Dict[str, Any]]:
             "name": d.get("name") or p.stem,
             "session": d.get("session") or "",
             "arm": d.get("arm") or "",
+            "poseset": d.get("poseset") or "",
             "baseline_mm": fit.get("baseline_mm"),
             "saved_at": d.get("saved_at") or "",
         })

@@ -271,53 +271,70 @@
           <article class="float" id="panel-he">
             <button type="button" class="float-toggle">手眼标定 <span id="he-count" class="aside"></span></button>
             <div class="float-body">
-              <p class="note">用姿态集里已经记好的点。点采集后按限速自己走完，每点停稳存图。求解先用本次左右图估计内参，再算相机到躯干的外参。左右对称用姿态集的「镜像到对侧」。画面在左侧「双目」卡片。</p>
-              <div id="he-msg" class="note"></div>
-              <div class="fields">
-                <label class="field grow">采集会话
-                  <select id="he-session"></select>
-                </label>
-                <label class="field">格子 mm
-                  <input id="he-square" type="number" step="0.1" min="1" placeholder="边长">
-                </label>
-              </div>
-              <div class="fields">
-                <label class="field">求解眼
-                  <select id="he-eye">
-                    <option value="both">左右</option>
-                    <option value="left">左目</option>
-                    <option value="right">右目</option>
-                  </select>
-                </label>
-              </div>
-              <div class="fields">
-                <label class="field">棋盘
-                  <input id="he-board" value="11x8" maxlength="8">
-                </label>
-                <label class="field grow">相机主机
-                  <input id="he-host" value="192.168.123.164" spellcheck="false">
-                </label>
-              </div>
-              <div class="cmds">
-                <button id="btn-he-run" class="primary">采集当前集</button>
-                <button id="btn-he-stop" class="danger">停止</button>
-                <button id="btn-he-capture">补一帧</button>
-                <button id="btn-he-solve">求解</button>
-              </div>
-              <div class="fields">
-                <label class="field grow">已保存
-                  <select id="he-calib"></select>
-                </label>
-                <label class="field grow">命名
-                  <input id="he-calib-name" placeholder="名字" maxlength="48">
-                </label>
-              </div>
-              <div class="cmds">
-                <button id="btn-he-save">保存</button>
-                <button id="btn-he-load">调用</button>
-                <button id="btn-he-del">删除</button>
-              </div>
-              <div id="he-result"></div>
+              <section class="tcp-section">
+                <h3 class="tcp-section-title">管理</h3>
+                <p class="note">已保存的手眼结果（含配套双目 yaml）。点「应用」列勾选设为当前配置；同配置只留一个勾。删除若正在应用会一并取消。</p>
+                <div class="table-scroll tcp-table-wrap">
+                  <table id="he-table" class="asset-table">
+                    <thead>
+                      <tr>
+                        <th>名称</th>
+                        <th>臂</th>
+                        <th>基线</th>
+                        <th>应用</th>
+                        <th>删除</th>
+                      </tr>
+                    </thead>
+                    <tbody id="he-table-body"></tbody>
+                  </table>
+                </div>
+                <p class="note" id="he-table-empty">还没有保存的手眼结果</p>
+              </section>
+              <section class="tcp-section tcp-section-record">
+                <h3 class="tcp-section-title">录入</h3>
+                <p class="note">用姿态集里已经记好的点。采集按限速走完每点停稳存图；求解先估内参再算相机到躯干外参。左右对称用姿态集「镜像到对侧」。画面在左侧「双目」。</p>
+                <div id="he-msg" class="note"></div>
+                <div class="fields">
+                  <label class="field grow">采集会话
+                    <select id="he-session"></select>
+                  </label>
+                  <label class="field">格子 mm
+                    <input id="he-square" type="number" step="0.1" min="1" placeholder="边长">
+                  </label>
+                </div>
+                <div class="fields">
+                  <label class="field">求解眼
+                    <select id="he-eye">
+                      <option value="both">左右</option>
+                      <option value="left">左目</option>
+                      <option value="right">右目</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="fields">
+                  <label class="field">棋盘
+                    <input id="he-board" value="11x8" maxlength="8">
+                  </label>
+                  <label class="field grow">相机主机
+                    <input id="he-host" value="192.168.123.164" spellcheck="false">
+                  </label>
+                </div>
+                <div class="cmds">
+                  <button id="btn-he-run" class="primary">采集当前集</button>
+                  <button id="btn-he-stop" class="danger">停止</button>
+                  <button id="btn-he-capture">补一帧</button>
+                  <button id="btn-he-solve">求解</button>
+                </div>
+                <div class="fields">
+                  <label class="field grow">命名保存
+                    <input id="he-calib-name" placeholder="例如 货架左目外参" maxlength="48">
+                  </label>
+                </div>
+                <div class="cmds">
+                  <button id="btn-he-save">保存</button>
+                </div>
+                <div id="he-result"></div>
+              </section>
             </div>
           </article>
 
