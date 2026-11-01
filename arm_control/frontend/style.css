@@ -414,6 +414,61 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
 }
 .pt-goto-box .fields { align-items: end; }
 .pt-goto-box .field { min-width: 72px; width: 76px; }
+.tcp-section { margin: 0 0 4px; }
+.tcp-section-record {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(120, 130, 150, 0.25);
+}
+.tcp-section-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.tcp-table-wrap { max-height: 220px; margin: 6px 0; }
+#tcp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+#tcp-table th, #tcp-table td {
+  padding: 6px 6px;
+  text-align: left;
+  border-bottom: 1px solid rgba(28, 25, 21, 0.08);
+  vertical-align: middle;
+}
+#tcp-table th {
+  color: var(--muted);
+  font-weight: 650;
+  font-size: 11px;
+  white-space: nowrap;
+}
+#tcp-table td.tcp-name { font-weight: 650; max-width: 88px; word-break: break-all; }
+#tcp-table td.tcp-note { color: var(--muted); max-width: 72px; word-break: break-all; }
+#tcp-table .tcp-act {
+  height: 32px;
+  min-width: 32px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-weight: 650;
+}
+#tcp-table .tcp-apply {
+  width: 32px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted);
+  background: rgba(255,255,255,.7);
+}
+#tcp-table .tcp-apply.on {
+  color: var(--ok);
+  background: rgba(31, 122, 77, 0.12);
+  border-color: rgba(31, 122, 77, 0.35);
+}
+#tcp-table .tcp-del { color: var(--danger); }
+#tcp-table-empty { display: none; }
+#tcp-table-empty.show { display: block; }
 .tcp-jog-label { margin-top: 10px; font-weight: 650; color: var(--ink); }
 .tcp-jog-pad {
   display: grid;

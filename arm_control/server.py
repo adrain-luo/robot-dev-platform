@@ -70,8 +70,8 @@ from spatial_points import (
     solve_tcp_pose_ik,
     solve_tcp_pose_ik_robust,
 )
-from tcp_calib import TcpSession, list_saved as list_tcp_saved
-from work_pose import WorkPoseSession
+from tcp_calib import TcpSession
+from work_pose import WorkPoseSession, delete_all_for_tcp as delete_work_poses_for_tcp
 import session as he_session
 import results as he_results
 from service import HandEyeAPI
@@ -134,16 +134,6 @@ def _page_html() -> str:
             base = f"{item['baseline_mm']:.1f} mm" if item.get("baseline_mm") is not None else ""
             cal_opts.append(_opt(item["name"], f"{item['name']} · {base}".rstrip(" ·")))
         html = _inject_options(html, "he-calib", cal_opts)
-        tcp_saved = list_tcp_saved()
-        tcp_opts = [_opt("", "调用已保存的 TCP…" if tcp_saved else "还没有保存的 TCP")]
-        for item in tcp_saved:
-            side = "左" if item.get("arm") == "left" else "右" if item.get("arm") == "right" else ""
-            res = item.get("residual_max_mm")
-            tail = f" · {side} {item.get('n') or 0}姿态" if side else ""
-            if res is not None:
-                tail += f" · 残差 {float(res):.1f} mm"
-            tcp_opts.append(_opt(item["name"], f"{item['name']}{tail}"))
-        html = _inject_options(html, "tcp-select", tcp_opts)
         pts = list_spatial_saved()
         pt_opts = [_opt("", "选择空间点…" if pts else "还没有空间点")]
         for item in pts:
@@ -573,14 +563,33 @@ class App:
             elif path == "/api/tcp/load":
                 status = self.tcp.load(str(body.get("name") or ""))
                 self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
+            elif path == "/api/tcp/mirror":
+                status = self.tcp.mirror(
+                    str(body.get("name") or ""),
+                    force=bool(body.get("force")),
+                )
             elif path == "/api/tcp/delete":
-                status = self.tcp.delete(str(body.get("name") or ""))
-                self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
+                name = str(body.get("name") or "")
+                n_wp = delete_work_poses_for_tcp(name)
+                if self.work_pose.locked and self.work_pose.tcp_name == name:
+                    self.work_pose.unlock()
+                status = self.tcp.delete(name)
+                status["deleted_work_poses"] = int(n_wp)
+                status["message"] = (
+                    f"已删除「{name}」"
+                    + (f"及 {n_wp} 个工作姿态" if n_wp else "")
+                )
             elif path == "/api/tcp/jog":
                 return self.tcp_jog(body)
             else:
                 return {"ok": False, "error": "没有这个 TCP 接口"}
             return status
+        except FileExistsError as exc:
+            out = self.tcp.status()
+            out["ok"] = False
+            out["error"] = str(exc)
+            out["exists"] = True
+            return out
         except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
             out = self.tcp.status()
             out["ok"] = False

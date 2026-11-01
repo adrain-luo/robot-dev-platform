@@ -95,6 +95,30 @@ def list_all() -> List[Dict[str, Any]]:
     return out
 
 
+def delete_all_for_tcp(tcp_name: str) -> int:
+    """删除某 TCP 目录下全部工作姿态，返回删除的文件数。"""
+    if not tcp_name:
+        return 0
+    try:
+        d = _dir(tcp_name)
+    except ValueError:
+        return 0
+    if not d.is_dir():
+        return 0
+    n = 0
+    for path in list(d.glob("*.json")):
+        try:
+            path.unlink()
+            n += 1
+        except OSError:
+            continue
+    try:
+        d.rmdir()
+    except OSError:
+        pass
+    return n
+
+
 class WorkPoseSession:
     def __init__(self) -> None:
         self.locked = False

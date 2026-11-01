@@ -324,30 +324,48 @@
           <article class="float" id="panel-tcp">
             <button type="button" class="float-toggle">TCP</button>
             <div class="float-body">
-              <p class="note">拖拽时把末端工作点对准空间里的同一个点，转开腕部，每个姿态记一次，再计算。红点是当前爪尖，跟着腕走。标定得到的固定点要存进空间点，显示为黄点。</p>
-              <p class="note" id="tcp-now">还没有姿态</p>
-              <div class="cmds">
-                <button id="btn-tcp-record" type="button">记录姿态</button>
-                <button id="btn-tcp-undo" type="button">去掉最后</button>
-                <button id="btn-tcp-clear" type="button">清空</button>
-                <button id="btn-tcp-solve" class="primary" type="button">计算</button>
-              </div>
-              <div class="fields">
-                <label class="field grow">已保存
-                  <select id="tcp-select"></select>
+              <section class="tcp-section">
+                <h3 class="tcp-section-title">管理</h3>
+                <p class="note">已保存的 TCP。点「应用」列勾选设为该手当前配置（同手只保留一个勾）；镜像生成「原名_左/右」，不带工作姿态。</p>
+                <div class="table-scroll tcp-table-wrap">
+                  <table id="tcp-table">
+                    <thead>
+                      <tr>
+                        <th>名称</th>
+                        <th>手</th>
+                        <th>备注</th>
+                        <th>应用</th>
+                        <th>镜像</th>
+                        <th>删除</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tcp-table-body"></tbody>
+                  </table>
+                </div>
+                <p class="note" id="tcp-table-empty">还没有保存的 TCP</p>
+              </section>
+              <section class="tcp-section tcp-section-record">
+                <h3 class="tcp-section-title">录入</h3>
+                <p class="note">拖拽时把末端工作点对准空间里的同一个点，转开腕部，每个姿态记一次，再计算。红点是当前爪尖。算出后命名保存；固定点可另存进空间点（黄点）。</p>
+                <p class="note" id="tcp-now">还没有姿态</p>
+                <div class="cmds">
+                  <button id="btn-tcp-record" type="button">记录姿态</button>
+                  <button id="btn-tcp-undo" type="button">去掉最后</button>
+                  <button id="btn-tcp-clear" type="button">清空</button>
+                  <button id="btn-tcp-solve" class="primary" type="button">计算</button>
+                </div>
+                <div class="fields">
+                  <label class="field grow">命名
+                    <input id="tcp-name" placeholder="例如 左手尖对货架" maxlength="48">
+                  </label>
+                </div>
+                <label class="field">备注
+                  <input id="tcp-note" placeholder="怎么标的，可空" maxlength="80">
                 </label>
-                <label class="field grow">命名
-                  <input id="tcp-name" placeholder="例如 左手尖对货架" maxlength="48">
-                </label>
-              </div>
-              <label class="field">备注
-                <input id="tcp-note" placeholder="怎么标的，可空" maxlength="80">
-              </label>
-              <div class="cmds">
-                <button id="btn-tcp-save" type="button">保存</button>
-                <button id="btn-tcp-load" type="button">调用</button>
-                <button id="btn-tcp-del" type="button">删除</button>
-              </div>
+                <div class="cmds">
+                  <button id="btn-tcp-save" type="button">保存</button>
+                </div>
+              </section>
             </div>
           </article>
 

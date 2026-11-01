@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parent
 RESULTS_DIR = ROOT / "config" / "tcp_results"
 _ACTIVE_PATH = RESULTS_DIR / "_active.json"
 _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
+# 躯干 y=0 镜像：位置/固定点反射；腕系偏置 y 取反；关节同姿态集符号
+_MIRROR_S = np.diag([1.0, -1.0, 1.0])
+_MIRROR_Q_SIGN = np.array([1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0])
 
 
 def _check_name(name: str) -> str:
@@ -27,6 +30,28 @@ def _check_name(name: str) -> str:
 
 def _result_path(name: str) -> Path:
     return RESULTS_DIR / f"{_check_name(name)}.json"
+
+
+def _mirror_dst_name(src_name: str, dst_arm: str) -> str:
+    suffix = "左" if dst_arm == "left" else "右"
+    return _check_name(f"{src_name}_{suffix}")
+
+
+def _mirror_vec3(v) -> List[float]:
+    a = np.asarray(v, dtype=float).reshape(3)
+    return (_MIRROR_S @ a).tolist()
+
+
+def _mirror_R(R) -> List[List[float]]:
+    Rm = _MIRROR_S @ np.asarray(R, dtype=float).reshape(3, 3) @ _MIRROR_S
+    return Rm.tolist()
+
+
+def _mirror_q(q) -> List[float]:
+    qa = np.asarray(q, dtype=float).reshape(-1)
+    if qa.size != 7:
+        raise ValueError("镜像需要 7 轴关节角样本")
+    return (qa * _MIRROR_Q_SIGN).tolist()
 
 
 def list_saved() -> List[Dict[str, Any]]:
@@ -250,6 +275,63 @@ class TcpSession:
             self.active_name = ""
             self.note = ""
         return self.status()
+
+    def mirror(self, name: str, force: bool = False) -> Dict[str, Any]:
+        """关于躯干 y=0 镜像到另一只手，生成新名「原名_左/右」。不改当前应用。"""
+        src_name = _check_name(name)
+        path = _result_path(src_name)
+        if not path.is_file():
+            raise FileNotFoundError(f"没有 TCP 结果 {src_name}")
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        src_arm = str(doc.get("arm") or "")
+        if src_arm not in ("left", "right"):
+            raise ValueError(f"「{src_name}」没有左右臂标记，不能镜像")
+        if not doc.get("result") or doc["result"].get("tcp_m") is None:
+            raise ValueError(f"「{src_name}」没有可用的 TCP 结果")
+        dst_arm = "left" if src_arm == "right" else "right"
+        dst_name = _mirror_dst_name(src_name, dst_arm)
+        dst_path = _result_path(dst_name)
+        if dst_path.is_file() and not force:
+            raise FileExistsError(f"TCP「{dst_name}」已存在")
+        tip = f"{dst_arm}_wrist_yaw_link"
+        samples_out: List[Dict[str, Any]] = []
+        for sample in doc.get("samples") or []:
+            samples_out.append({
+                "q_rad": _mirror_q(sample.get("q_rad")),
+                "R": _mirror_R(sample.get("R")),
+                "t_m": _mirror_vec3(sample.get("t_m")),
+            })
+        res = dict(doc["result"])
+        res["tcp_m"] = _mirror_vec3(res.get("tcp_m"))
+        res["tcp_mm"] = [float(v) * 1000.0 for v in res["tcp_m"]]
+        if res.get("fixed_point_m") is not None:
+            res["fixed_point_m"] = _mirror_vec3(res.get("fixed_point_m"))
+            res["fixed_mm"] = [float(v) * 1000.0 for v in res["fixed_point_m"]]
+        src_side = "左" if src_arm == "left" else "右"
+        dst_side = "左" if dst_arm == "left" else "右"
+        note_src = str(doc.get("note") or "").strip()
+        note = f"由{src_side}臂「{src_name}」关于 y=0 镜像。"
+        if note_src:
+            note = f"{note} 原备注：{note_src}"
+        out_doc = {
+            "name": dst_name,
+            "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "arm": dst_arm,
+            "tip_link": tip,
+            "base_link": "torso_link",
+            "note": note[:80],
+            "n": len(samples_out),
+            "samples": samples_out,
+            "result": res,
+            "mirrored_from": {"name": src_name, "arm": src_arm},
+        }
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        dst_path.write_text(json.dumps(out_doc, indent=2, ensure_ascii=False), encoding="utf-8")
+        status = self.status()
+        status["mirrored_name"] = dst_name
+        status["mirrored_arm"] = dst_arm
+        status["message"] = f"已镜像为「{dst_name}」（{dst_side}臂）"
+        return status
 
     def _apply_doc(self, doc: Dict[str, Any]) -> None:
         self.arm = str(doc.get("arm") or "")

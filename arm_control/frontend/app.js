@@ -710,7 +710,7 @@ const CFG_MUTATORS = [
   "btn-cfg-stereo", "btn-cfg-grav-left", "btn-cfg-grav-right",
   "btn-cfg-tcp-left", "btn-cfg-tcp-right",
   "cfg-he", "cfg-grav-left", "cfg-grav-right", "cfg-tcp-left", "cfg-tcp-right",
-  "btn-he-load", "btn-he-solve", "btn-payload-use", "btn-id-apply", "btn-tcp-load",
+  "btn-he-load", "btn-he-solve", "btn-payload-use", "btn-id-apply",
 ];
 const CFG_SELECT_IDS = [
   "cfg-he", "cfg-grav-left", "cfg-grav-right", "cfg-tcp-left", "cfg-tcp-right",
@@ -868,7 +868,7 @@ function renderRuntimeConfig(rt) {
       el.disabled = false;
       return;
     }
-    if (id === "btn-he-load" || id === "btn-he-solve" || id === "btn-tcp-load") {
+    if (id === "btn-he-load" || id === "btn-he-solve") {
       el.disabled = false;
       return;
     }
@@ -1329,10 +1329,43 @@ async function workPosePost(path, body) {
   return d;
 }
 
+function renderTcpTable(tcp) {
+  const body = $("tcp-table-body");
+  const empty = $("tcp-table-empty");
+  if (!body) return;
+  const saved = (tcp && tcp.saved) || [];
+  window.lastTcpSaved = saved;
+  const activeL = (tcp && tcp.active_left) || "";
+  const activeR = (tcp && tcp.active_right) || "";
+  body.innerHTML = "";
+  if (empty) empty.classList.toggle("show", saved.length === 0);
+  saved.forEach((s) => {
+    const name = s.name || "";
+    const arm = s.arm === "left" || s.arm === "right" ? s.arm : "";
+    const side = arm === "left" ? "左" : arm === "right" ? "右" : "—";
+    const on = (arm === "left" && name === activeL) || (arm === "right" && name === activeR);
+    const tr = document.createElement("tr");
+    tr.dataset.name = name;
+    tr.dataset.arm = arm;
+    tr.innerHTML = `
+      <td class="tcp-name"></td>
+      <td>${side}</td>
+      <td class="tcp-note"></td>
+      <td><button type="button" class="tcp-act tcp-apply${on ? " on" : ""}" data-act="apply" title="${on ? "当前应用" : "设为该手当前 TCP"}">${on ? "✓" : "○"}</button></td>
+      <td><button type="button" class="tcp-act tcp-mirror" data-act="mirror" ${arm ? "" : "disabled"}>镜像</button></td>
+      <td><button type="button" class="tcp-act tcp-del" data-act="delete">删除</button></td>
+    `;
+    tr.querySelector(".tcp-name").textContent = name;
+    tr.querySelector(".tcp-note").textContent = s.note || "—";
+    body.appendChild(tr);
+  });
+}
+
 function renderTcp(tcp, arms) {
   const note = $("tcp-now");
   if (!note || !tcp) return;
   window.lastTcpName = tcp.active_name || "";
+  renderTcpTable(tcp);
   const jogNow = $("tcp-jog-now");
   if (jogNow) {
     if (tcp.active_name) {
@@ -1342,18 +1375,8 @@ function renderTcp(tcp, arms) {
       jogNow.textContent = "还没调用 TCP（先在标定册 TCP 卡片调用）";
     }
   }
-  const sel = $("tcp-select");
-  if (sel && tcp.saved && document.activeElement !== sel) {
-    writeOptions(sel, tcp.saved.length ? "调用已保存的 TCP…" : "还没有保存的 TCP",
-      tcp.saved.map((s) => {
-        const side = s.arm === "left" ? "左" : s.arm === "right" ? "右" : "";
-        const res = s.residual_max_mm != null ? ` · 残差 ${Number(s.residual_max_mm).toFixed(1)} mm` : "";
-        return { value: s.name, label: `${s.name} · ${side} ${s.n || 0}姿态${res}` };
-      }),
-      tcp.active_name || sel.value);
-  }
   const side = tcp.arm === "left" ? "左臂" : tcp.arm === "right" ? "右臂" : "";
-  let text = tcp.active_name ? `已调用「${tcp.active_name}」。` : "";
+  let text = tcp.active_name ? `会话已加载「${tcp.active_name}」。` : "";
   text += side ? `${side}已记 ${tcp.n} 个姿态` : "还没有姿态";
   if (tcp.note) text += `。${tcp.note}`;
   const r = tcp.result;
@@ -1376,7 +1399,56 @@ async function tcpPost(path, body) {
   const d = await post(path, body || {});
   renderTcp(d);
   if (d.work_pose) renderWorkPose(d.work_pose, d);
+  if (d.runtime) renderRuntimeConfig(d.runtime);
   return d;
+}
+
+async function tcpApplySaved(name) {
+  if (!name) return;
+  try {
+    const d = await tcpPost("/api/tcp/load", { name });
+    flash(`已应用「${name}」为${d.arm === "left" ? "左" : "右"}臂当前 TCP`, true);
+  } catch (e) { flash(String(e), false); }
+}
+
+async function tcpMirrorSaved(name) {
+  if (!name) return;
+  const row = (window.lastTcpSaved || []).find((s) => s.name === name);
+  const dst = row && row.arm === "left" ? "右" : "左";
+  if (!confirm(`把「${name}」关于躯干 y=0 镜像成${dst}臂？新名为「${name}_${dst}」，不含工作姿态。`)) return;
+  try {
+    const d = await tcpPost("/api/tcp/mirror", { name });
+    flash(d.message || `已镜像为「${d.mirrored_name}」`, true);
+  } catch (e) {
+    if (String(e).includes("已存在") && confirm(`对侧「${name}_${dst}」已存在，覆盖？`)) {
+      try {
+        const d = await tcpPost("/api/tcp/mirror", { name, force: true });
+        flash(d.message || `已覆盖镜像「${d.mirrored_name}」`, true);
+      } catch (e2) { flash(String(e2), false); }
+    } else flash(String(e), false);
+  }
+}
+
+async function tcpDeleteSaved(name) {
+  if (!name) return;
+  if (!confirm(`删除 TCP「${name}」？将取消该手应用，并删除其下全部工作姿态。`)) return;
+  try {
+    const d = await tcpPost("/api/tcp/delete", { name });
+    flash(d.message || "已删除", true);
+  } catch (e) { flash(String(e), false); }
+}
+
+if ($("tcp-table-body")) {
+  $("tcp-table-body").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn) return;
+    const tr = btn.closest("tr");
+    const name = tr?.dataset?.name || "";
+    if (!name) return;
+    if (btn.dataset.act === "apply") tcpApplySaved(name);
+    else if (btn.dataset.act === "mirror") tcpMirrorSaved(name);
+    else if (btn.dataset.act === "delete") tcpDeleteSaved(name);
+  });
 }
 
 if ($("btn-wp-save")) {
@@ -1462,24 +1534,14 @@ $("btn-tcp-solve").onclick = async () => {
   } catch (e) { flash(String(e), false); }
 };
 $("btn-tcp-save").onclick = async () => {
-  const name = $("tcp-name").value.trim() || $("tcp-select").value;
+  const name = $("tcp-name").value.trim();
   if (!name) { flash("填一个名字", false); return; }
-  const exists = [...$("tcp-select").options].some((o) => o.value === name);
+  const exists = (window.lastTcpSaved || []).some((s) => s.name === name);
   if (exists && !confirm(`覆盖已保存的「${name}」？`)) return;
   try {
     await tcpPost("/api/tcp/save", { name, note: $("tcp-note").value.trim() });
     $("tcp-name").value = "";
     flash(`已保存「${name}」`, true);
-  } catch (e) { flash(String(e), false); }
-};
-$("btn-tcp-load").onclick = async () => {
-  const name = $("tcp-select").value;
-  if (!name) { flash("先选一条已保存的 TCP", false); return; }
-  try {
-    const d = await tcpPost("/api/tcp/load", { name });
-    if ($("tcp-note") && document.activeElement !== $("tcp-note")) $("tcp-note").value = d.note || "";
-    if (d.runtime) renderRuntimeConfig(d.runtime);
-    flash(`已调用「${name}」`, true);
   } catch (e) { flash(String(e), false); }
 };
 function renderSpatial(pt) {
@@ -1720,14 +1782,6 @@ $("btn-pt-goto").onclick = async () => {
   } catch (e) { flash(String(e), false); }
   finally { if (btn) btn.disabled = false; }
 };
-$("btn-tcp-del").onclick = async () => {
-  const name = $("tcp-select").value;
-  if (!name) { flash("先选一条已保存的 TCP", false); return; }
-  if (!confirm(`删除 TCP「${name}」？`)) return;
-  try { await tcpPost("/api/tcp/delete", { name }); flash("已删除", true); }
-  catch (e) { flash(String(e), false); }
-};
-
 async function tcpJogStep(mode, axis, sign) {
   if (tcpJogBusy) return;
   if (!window.lastTcpName) { flash("先调用一套 TCP", false); return; }
