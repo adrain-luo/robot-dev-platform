@@ -153,6 +153,8 @@ class App:
         self.runtime = RuntimeConfig(self)
         # 工作姿态到位 / 已锁定下的碰点与棋盘：set_target 时不自动解锁
         self._work_pose_motion = False
+        # 限速到位共用：急停 / 工作流「停止」置位，打断 wait_settle
+        self.motion_stop = threading.Event()
         try:
             self.tcp.restore_active()
             self.points.restore_active()
@@ -800,11 +802,11 @@ class App:
                 raise ValueError(
                     f"到不了该工作姿态：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"
                 )
-            stop = threading.Event()
+            self.motion_stop.clear()
             settle = iden.wait_settle(
                 loop,
                 q,
-                stop,
+                self.motion_stop,
                 {
                     "still_dq_rad_s": 0.05,
                     "still_drift_rad": 0.015,
@@ -812,6 +814,8 @@ class App:
                     "settle_timeout_s": 12.0,
                 },
             )
+            if self.motion_stop.is_set():
+                raise RuntimeError("已停止")
             if not loop.status().get("engaged") or loop.status().get("float"):
                 raise PermissionErrorMotion("到位前已释放或进入拖拽")
             # 用电机角复核
@@ -987,7 +991,8 @@ class App:
         point_arr = base_arr + off_mm / 1000.0
         self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
         R_lock = self.work_pose.R_lock if self.work_pose.locked else None
-        stop = threading.Event()
+        self.motion_stop.clear()
+        stop = self.motion_stop
         q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
         q, plan_miss_mm, plan_ori = self._solve_tcp_motion(model, q0, tcp, point_arr, R_lock)
         ori_lim = 3.0 if R_lock is not None else 999.0
@@ -1012,6 +1017,8 @@ class App:
         thresh = float(refine_thresh_mm)
         cur = first
         while cur["measured_miss_mm"] > thresh and refine_passes_n < max_refine:
+            if stop.is_set():
+                raise RuntimeError("已停止")
             err = point_arr - cur["tcp_now"]
             aim = point_arr + gain * err
             q2, plan2, _ori2 = self._solve_tcp_motion(model, cur["q_meas"], tcp, aim, R_lock)
@@ -1332,6 +1339,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/release":
                 loop.release()
             elif path == "/api/hold":
+                APP.motion_stop.set()
                 APP.board.request_stop()
                 try:
                     APP.lift_post("/api/lift/stop", {})

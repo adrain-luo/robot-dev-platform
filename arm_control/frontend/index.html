@@ -744,11 +744,14 @@
           <article class="float" id="panel-wf-detect-goto">
             <button type="button" class="float-toggle">识别-末端到位 <span id="wf-dg-phase" class="aside">待开始</span></button>
             <div class="float-body">
-              <p class="note">① 点位获取→校准→中心（浅蓝临时点，不落盘）→ ② 偏置+提升 碰点 → ③ 仅偏置 碰点。逐步用阶段按钮；也可一次跑完。</p>
+              <p class="note">① 调用并锁定工作姿态 → ② 点位获取→校准→中心（浅蓝临时点）→ ③ 偏置+提升 碰点 → ④ 仅偏置 碰点。阶段钮：开始 / 下一步 / 完成后点「完成」复位；「自动继续」从当前进度接着跑；「停止」在进行中急停并复位，或在已跑过步骤、不想继续时直接复位。</p>
+              <label class="field grow">工作姿态（必选）
+                <select id="wf-dg-wp"></select>
+              </label>
               <label class="field grow">识别参数（可选）
                 <input id="wf-dg-params" type="text" spellcheck="false" placeholder="例如 label=43010159" maxlength="512">
               </label>
-              <p class="note"><strong>偏置</strong>（第三步；第二步 = 偏置 + 提升）· 躯干系 mm</p>
+              <p class="note"><strong>偏置</strong>（第四步；第三步 = 偏置 + 提升）· 躯干系 mm</p>
               <div class="fields">
                 <label class="field">ΔX
                   <input id="wf-dg-ox" type="number" step="1" value="0">
@@ -765,12 +768,13 @@
               </div>
               <label class="switch">
                 <input id="wf-dg-refine" type="checkbox" checked>
-                <span>启用误差补偿（第二、三步共用）</span>
+                <span>启用误差补偿（第三、四步共用）</span>
               </label>
-              <p class="note" id="wf-dg-aim-note">第二步瞄准 = 中心 + 偏置 + 提升；第三步 = 中心 + 偏置</p>
+              <p class="note" id="wf-dg-aim-note">第三步瞄准 = 中心 + 偏置 + 提升；第四步 = 中心 + 偏置</p>
               <div class="cmds">
                 <button id="btn-wf-dg-step" class="primary" type="button">开始</button>
-                <button id="btn-wf-dg-all" type="button">完整执行</button>
+                <button id="btn-wf-dg-all" type="button">自动继续</button>
+                <button id="btn-wf-dg-stop" class="danger" type="button" disabled>停止</button>
               </div>
               <p class="note" id="wf-dg-note">还没跑过</p>
             </div>

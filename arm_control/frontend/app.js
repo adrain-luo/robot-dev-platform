@@ -1313,20 +1313,21 @@ function renderWorkPose(wp, tcp) {
       ? `TCP：${tcpName}${tcp.arm ? `（${tcp.arm === "left" ? "左" : "右"}）` : ""}`
       : "TCP：—（先在 TCP 卡片调用一套）";
   }
+  const rows = (wp.saved || []).map((s) => ({
+    value: s.name,
+    label: s.note ? `${s.name} · ${s.note}` : s.name,
+  }));
+  const placeholder = tcpName
+    ? (rows.length ? "选择工作姿态…" : "这个 TCP 还没有工作姿态")
+    : "先调用 TCP";
+  const preferred = (wp.locked && wp.active_name) || "";
   const sel = $("wp-select");
   if (sel && document.activeElement !== sel) {
-    const rows = (wp.saved || []).map((s) => ({
-      value: s.name,
-      label: s.note ? `${s.name} · ${s.note}` : s.name,
-    }));
-    writeOptions(
-      sel,
-      tcpName
-        ? (rows.length ? "选择工作姿态…" : "这个 TCP 还没有工作姿态")
-        : "先调用 TCP",
-      rows,
-      (wp.locked && wp.active_name) || sel.value || ""
-    );
+    writeOptions(sel, placeholder, rows, preferred || sel.value || "");
+  }
+  const wfSel = $("wf-dg-wp");
+  if (wfSel && document.activeElement !== wfSel) {
+    writeOptions(wfSel, placeholder, rows, preferred || wfSel.value || "");
   }
 }
 
@@ -2577,8 +2578,21 @@ if ($("btn-detect-center")) {
   $("btn-detect-center").onclick = () =>
     detectLocalize("/api/detect/center", {}, "提取中心点…");
 }
-/* —— 工作流：识别-末端到位 —— */
-window.wfDetectGoto = { step: 0, center_m: null, busy: false };
+/* —— 工作流：识别-末端到位 ——
+ * next: 下一步要跑的索引 0..3；跑完后 finished=true，按钮变「完成」。
+ * 「完成」只复位；「停止」仅在 busy 时可用，急停本卡进行中动作后复位。
+ * 「自动继续」从当前 next 接着跑到结束。
+ */
+window.wfDetectGoto = {
+  next: 0,
+  finished: false,
+  center_m: null,
+  busy: false,
+  abort: false,
+};
+const WF_DG_STEP_COUNT = 4;
+const WF_DG_PHASES = ["待开始", "① 姿态已锁", "② 已识别", "③ 已抬到位", "已完成"];
+const WF_DG_STEP_NAMES = ["① 工作姿态", "② 识别中心", "③ 偏置+提升", "④ 仅偏置"];
 
 function wfDgReadOffset() {
   const n = (id, fallback = 0) => {
@@ -2598,10 +2612,9 @@ function wfDgSyncAimNote() {
   if (!el) return;
   const { ox, oy, oz, hz } = wfDgReadOffset();
   el.textContent =
-    `第二步 Δ[${ox}, ${oy}, ${oz + hz}] = 偏置+提升 · 第三步 Δ[${ox}, ${oy}, ${oz}] = 仅偏置`;
+    `第三步 Δ[${ox}, ${oy}, ${oz + hz}] = 偏置+提升 · 第四步 Δ[${ox}, ${oy}, ${oz}] = 仅偏置`;
   const c = window.wfDetectGoto.center_m;
   if (c && window.RobotView?.setSpatialAim) {
-    // 预览第三步瞄准（青色）；浅蓝临时点仍是中心
     window.RobotView.setSpatialAim([
       c[0] + ox / 1000,
       c[1] + oy / 1000,
@@ -2610,19 +2623,51 @@ function wfDgSyncAimNote() {
   }
 }
 
-function wfDgSetPhase(step) {
-  window.wfDetectGoto.step = step;
-  const btn = $("btn-wf-dg-step");
-  const badge = $("wf-dg-phase");
-  const labels = ["开始", "下一步", "完成"];
-  const phases = ["待开始", "① 已识别", "② 已抬到位", "已完成"];
-  if (btn) btn.textContent = labels[Math.min(step, 2)];
-  if (badge) badge.textContent = phases[Math.min(step, 3)];
-}
-
 function wfDgSetNote(text) {
   const el = $("wf-dg-note");
   if (el) el.textContent = text;
+}
+
+function wfDgSyncUi() {
+  const st = window.wfDetectGoto;
+  const btn = $("btn-wf-dg-step");
+  const btnAll = $("btn-wf-dg-all");
+  const btnStop = $("btn-wf-dg-stop");
+  const badge = $("wf-dg-phase");
+  if (btn) {
+    if (st.finished) btn.textContent = "完成";
+    else if (st.next === 0) btn.textContent = "开始";
+    else btn.textContent = "下一步";
+    btn.disabled = !!st.busy;
+  }
+  if (btnAll) btnAll.disabled = !!st.busy || !!st.finished;
+  // 进行中可急停；已跑过至少一步（含已完成）也可点停止复位，不必硬点「下一步」
+  if (btnStop) btnStop.disabled = !(st.busy || st.next > 0 || st.finished);
+  if (badge) {
+    if (st.finished) badge.textContent = WF_DG_PHASES[4];
+    else badge.textContent = WF_DG_PHASES[Math.min(st.next, 3)];
+  }
+}
+
+function wfDgResetToStart(noteText) {
+  const st = window.wfDetectGoto;
+  st.next = 0;
+  st.finished = false;
+  st.abort = false;
+  st.center_m = null;
+  if (window.RobotView?.setWorkflowPoint) window.RobotView.setWorkflowPoint(null);
+  if (window.RobotView?.setSpatialAim) window.RobotView.setSpatialAim(null);
+  wfDgSyncAimNote();
+  wfDgSyncUi();
+  if (noteText) wfDgSetNote(noteText);
+}
+
+function wfDgCheckAbort() {
+  if (window.wfDetectGoto.abort) {
+    const err = new Error("__wf_abort__");
+    err.wfAbort = true;
+    throw err;
+  }
 }
 
 function wfDgCenterFromDetect(d) {
@@ -2656,22 +2701,44 @@ function wfDgFormatGoto(d, tag) {
   return text;
 }
 
+async function wfDgStepPose() {
+  const name = ($("wf-dg-wp")?.value || "").trim();
+  if (!name) throw new Error("先选择工作姿态");
+  if (!window.lastTcpName) throw new Error("先调用一套 TCP");
+  if (window.lastCtrl && window.lastCtrl.float) throw new Error("先点急停退出拖拽");
+  if (window.lastCtrl && !window.lastCtrl.engaged) throw new Error("先接管再调用工作姿态");
+  wfDgCheckAbort();
+  wfDgSetNote("① 调用并锁定工作姿态…");
+  const d = await workPosePost("/api/work-pose/load", {
+    name,
+    tcp_name: window.lastTcpName,
+  });
+  wfDgCheckAbort();
+  if (!d.ok) throw new Error(d.error || "工作姿态失败");
+  const text =
+    d.message
+    || `① 已锁定「${name}」· 位置 ${Number(d.measured_miss_mm || 0).toFixed(1)} mm · 姿态 ${Number(d.measured_ori_deg || 0).toFixed(1)}°`;
+  wfDgSetNote(text);
+  flash(text, true);
+  return d;
+}
+
 async function wfDgStepDetect() {
   const params = ($("wf-dg-params")?.value || "").trim();
   const body = {};
   if (params) body.query = params;
-  wfDgSetNote("① 点位获取…");
-  const p = await detectLocalize(
-    "/api/detect/points",
-    body,
-    "工作流：点位获取中…",
-  );
+  wfDgCheckAbort();
+  wfDgSetNote("② 点位获取…");
+  const p = await detectLocalize("/api/detect/points", body, "工作流：点位获取中…");
+  wfDgCheckAbort();
   if (!p || !p.ok) throw new Error(p?.error || "点位获取失败");
-  wfDgSetNote("① 校准…");
+  wfDgSetNote("② 校准…");
   const c = await detectLocalize("/api/detect/calibrate", {}, "工作流：校准中…");
+  wfDgCheckAbort();
   if (!c || !c.ok) throw new Error(c?.error || "校准失败");
-  wfDgSetNote("① 中心点提取…");
+  wfDgSetNote("② 中心点提取…");
   const ctr = await detectLocalize("/api/detect/center", {}, "工作流：提取中心…");
+  wfDgCheckAbort();
   if (!ctr || !ctr.ok) throw new Error(ctr?.error || "中心点提取失败");
   const center = wfDgCenterFromDetect(ctr);
   if (!center || center.some((v) => !Number.isFinite(v))) {
@@ -2681,26 +2748,28 @@ async function wfDgStepDetect() {
   if (window.RobotView?.setWorkflowPoint) window.RobotView.setWorkflowPoint(center);
   wfDgSyncAimNote();
   const mm = center.map((v) => (v * 1000).toFixed(1));
-  wfDgSetNote(`① 完成 · 浅蓝临时点 [${mm.join(", ")}] mm`);
+  const text = `② 完成 · 浅蓝临时点 [${mm.join(", ")}] mm`;
+  wfDgSetNote(text);
+  flash(text, true);
   return center;
 }
 
 async function wfDgStepGoto(kind) {
   const center = window.wfDetectGoto.center_m;
-  if (!center) throw new Error("还没有识别中心，先跑第一步");
+  if (!center) throw new Error("还没有识别中心，先跑识别步骤");
   if (window.lastCtrl && window.lastCtrl.float) throw new Error("先点急停退出拖拽");
   const { ox, oy, oz, hz } = wfDgReadOffset();
-  const offset_mm = kind === "lift"
-    ? [ox, oy, oz + hz]
-    : [ox, oy, oz];
+  const offset_mm = kind === "lift" ? [ox, oy, oz + hz] : [ox, oy, oz];
   const refine = !($("wf-dg-refine") && !$("wf-dg-refine").checked);
-  const tag = kind === "lift" ? "② 偏置+提升" : "③ 仅偏置";
+  const tag = kind === "lift" ? "③ 偏置+提升" : "④ 仅偏置";
+  wfDgCheckAbort();
   wfDgSetNote(`${tag} 走点中…`);
   const d = await post("/api/points/goto-xyz", {
     point_m: center,
     offset_mm,
     refine,
   });
+  wfDgCheckAbort();
   if (!d.ok) throw new Error(d.error || `${tag} 失败`);
   const text = wfDgFormatGoto(d, tag);
   wfDgSetNote(text);
@@ -2708,88 +2777,136 @@ async function wfDgStepGoto(kind) {
   return d;
 }
 
-async function wfDgRunStep() {
+async function wfDgRunOne(index) {
+  if (index === 0) return wfDgStepPose();
+  if (index === 1) return wfDgStepDetect();
+  if (index === 2) return wfDgStepGoto("lift");
+  if (index === 3) return wfDgStepGoto("final");
+  throw new Error("没有这一步");
+}
+
+function wfDgMarkAdvance() {
+  const st = window.wfDetectGoto;
+  st.next += 1;
+  if (st.next >= WF_DG_STEP_COUNT) {
+    st.next = WF_DG_STEP_COUNT;
+    st.finished = true;
+  }
+  wfDgSyncUi();
+}
+
+function wfDgIsAbortError(e) {
+  if (window.wfDetectGoto.abort) return true;
+  if (!e) return false;
+  if (e.wfAbort || e.message === "__wf_abort__") return true;
+  const msg = String(e.message || e);
+  return msg.includes("已停止") || msg.includes("到位前已释放");
+}
+
+async function wfDgWithBusy(runner) {
   if (window.wfDetectGoto.busy) return;
-  const step = window.wfDetectGoto.step;
-  const btnStep = $("btn-wf-dg-step");
-  const btnAll = $("btn-wf-dg-all");
   window.wfDetectGoto.busy = true;
-  if (btnStep) btnStep.disabled = true;
-  if (btnAll) btnAll.disabled = true;
+  window.wfDetectGoto.abort = false;
+  wfDgSyncUi();
   try {
-    if (step === 0) {
-      await wfDgStepDetect();
-      wfDgSetPhase(1);
-      flash("① 识别完成，可点「下一步」", true);
-    } else if (step === 1) {
-      const { ox, oy, oz, hz } = wfDgReadOffset();
-      if (!confirm(
-        `第二步：TCP 走到中心 + 偏置+提升 Δ[${ox}, ${oy}, ${oz + hz}] mm。扶住、守急停。继续？`,
-      )) return;
-      await wfDgStepGoto("lift");
-      wfDgSetPhase(2);
-    } else if (step === 2) {
-      const { ox, oy, oz } = wfDgReadOffset();
-      if (!confirm(
-        `第三步：TCP 走到中心 + 偏置 Δ[${ox}, ${oy}, ${oz}] mm。扶住、守急停。继续？`,
-      )) return;
-      await wfDgStepGoto("final");
-      wfDgSetPhase(0);
-      const badge = $("wf-dg-phase");
-      if (badge) badge.textContent = "已完成";
-      flash("工作流完成", true);
-    }
+    await runner();
   } catch (e) {
+    if (wfDgIsAbortError(e)) {
+      wfDgResetToStart("已停止并复位");
+      flash("工作流已停止", true);
+      return;
+    }
     flash(String(e.message || e), false);
     wfDgSetNote(String(e.message || e));
   } finally {
     window.wfDetectGoto.busy = false;
-    if (btnStep) btnStep.disabled = false;
-    if (btnAll) btnAll.disabled = false;
+    wfDgSyncUi();
   }
 }
 
-async function wfDgRunAll() {
-  if (window.wfDetectGoto.busy) return;
-  const { ox, oy, oz, hz } = wfDgReadOffset();
-  if (!confirm(
-    `完整执行：识别 → 偏置+提升 Δ[${ox}, ${oy}, ${oz + hz}] → 偏置 Δ[${ox}, ${oy}, ${oz}]。扶住、守急停。继续？`,
-  )) return;
-  const btnStep = $("btn-wf-dg-step");
-  const btnAll = $("btn-wf-dg-all");
-  window.wfDetectGoto.busy = true;
-  if (btnStep) btnStep.disabled = true;
-  if (btnAll) btnAll.disabled = true;
-  try {
-    wfDgSetPhase(0);
-    await wfDgStepDetect();
-    wfDgSetPhase(1);
-    await wfDgStepGoto("lift");
-    wfDgSetPhase(2);
-    await wfDgStepGoto("final");
-    wfDgSetPhase(0);
-    const badge = $("wf-dg-phase");
-    if (badge) badge.textContent = "已完成";
-    wfDgSetNote(($("wf-dg-note")?.textContent || "") + " · 完整执行结束");
-    flash("完整执行完成", true);
-  } catch (e) {
-    flash(String(e.message || e), false);
-    wfDgSetNote(String(e.message || e));
-  } finally {
-    window.wfDetectGoto.busy = false;
-    if (btnStep) btnStep.disabled = false;
-    if (btnAll) btnAll.disabled = false;
+async function wfDgRunStep() {
+  const st = window.wfDetectGoto;
+  if (st.busy) return;
+  if (st.finished) {
+    wfDgResetToStart("已复位，可重新开始");
+    flash("已复位", true);
+    return;
   }
+  const index = st.next;
+  if (index === 0) {
+    const name = ($("wf-dg-wp")?.value || "").trim();
+    if (!name) { flash("先选择工作姿态", false); return; }
+    if (!confirm(`第一步：调用并锁定「${name}」。扶住、守急停。继续？`)) return;
+  } else if (index === 2) {
+    const { ox, oy, oz, hz } = wfDgReadOffset();
+    if (!confirm(`第三步：TCP → 中心 + 偏置+提升 Δ[${ox}, ${oy}, ${oz + hz}] mm。继续？`)) return;
+  } else if (index === 3) {
+    const { ox, oy, oz } = wfDgReadOffset();
+    if (!confirm(`第四步：TCP → 中心 + 偏置 Δ[${ox}, ${oy}, ${oz}] mm。继续？`)) return;
+  }
+  await wfDgWithBusy(async () => {
+    await wfDgRunOne(index);
+    wfDgCheckAbort();
+    wfDgMarkAdvance();
+    if (window.wfDetectGoto.finished) {
+      flash("工作流完成，点「完成」可复位", true);
+    }
+  });
+}
+
+async function wfDgRunAuto() {
+  const st = window.wfDetectGoto;
+  if (st.busy || st.finished) return;
+  const from = st.next;
+  if (from >= WF_DG_STEP_COUNT) return;
+  if (from === 0) {
+    const name = ($("wf-dg-wp")?.value || "").trim();
+    if (!name) { flash("先选择工作姿态", false); return; }
+  }
+  const remain = WF_DG_STEP_NAMES.slice(from).join(" → ");
+  if (!confirm(`自动继续（从当前进度）：${remain}。扶住、守急停。继续？`)) return;
+  await wfDgWithBusy(async () => {
+    while (window.wfDetectGoto.next < WF_DG_STEP_COUNT && !window.wfDetectGoto.finished) {
+      wfDgCheckAbort();
+      const i = window.wfDetectGoto.next;
+      await wfDgRunOne(i);
+      wfDgCheckAbort();
+      wfDgMarkAdvance();
+    }
+    if (window.wfDetectGoto.finished) {
+      wfDgSetNote(($("wf-dg-note")?.textContent || "") + " · 自动继续结束");
+      flash("自动继续完成，点「完成」可复位", true);
+    }
+  });
+}
+
+async function wfDgStop() {
+  const st = window.wfDetectGoto;
+  if (!(st.busy || st.next > 0 || st.finished)) return;
+  if (st.busy) {
+    st.abort = true;
+    wfDgSetNote("正在停止…");
+    try {
+      await post("/api/hold", {});
+    } catch (e) {
+      /* 急停请求失败也继续走前端复位；busy 结束时会按 abort 复位 */
+    }
+    return;
+  }
+  // 已停在某步之间 / 已完成：直接复位，等同「完成」
+  wfDgResetToStart("已停止并复位");
+  flash("工作流已停止", true);
 }
 
 if ($("btn-wf-dg-step")) {
-  wfDgSetPhase(0);
+  wfDgSyncUi();
   wfDgSyncAimNote();
   ["wf-dg-ox", "wf-dg-oy", "wf-dg-oz", "wf-dg-hz"].forEach((id) => {
     if ($(id)) $(id).addEventListener("input", wfDgSyncAimNote);
   });
   $("btn-wf-dg-step").onclick = () => wfDgRunStep();
-  if ($("btn-wf-dg-all")) $("btn-wf-dg-all").onclick = () => wfDgRunAll();
+  if ($("btn-wf-dg-all")) $("btn-wf-dg-all").onclick = () => wfDgRunAuto();
+  if ($("btn-wf-dg-stop")) $("btn-wf-dg-stop").onclick = () => wfDgStop();
 }
 
 $("btn-he-run").onclick = async () => {
