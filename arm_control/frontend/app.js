@@ -348,6 +348,8 @@ function applyCtrl(ctrl) {
   lastCtrl = ctrl;
   window.lastCtrl = ctrl;
   const allow = !!ctrl.allow_real_motion;
+  // 接管过渡中（arm_sdk）：不能走点 / 拖拽 / 点动。须在下面第一次用到之前定义
+  const settling = !!(ctrl.engaged && ctrl.ready === false);
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
   ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-he-run"].forEach((id) => {
@@ -358,7 +360,6 @@ function applyCtrl(ctrl) {
   if ($("btn-teach")) $("btn-teach").disabled = !allow || !ctrl.engaged || settling;
   $("btn-teach").textContent = ctrl.float ? "结束拖拽" : "拖拽";
   $("grav-on").checked = ctrl.gravity_ff !== false;
-  const settling = !!(ctrl.engaged && ctrl.ready === false);
   $("engage-state").textContent = allow
     ? (ctrl.transition ? `过渡中 · ${ctrl.transition}` : ctrl.engaged
         ? `${ctrl.float ? "拖拽中" : "已接管"} · ${ctrl.arm}${ctrl.waist_locked ? " · 腰保持" : ""}${
@@ -1065,11 +1066,18 @@ $("btn-fill").onclick = () => {
   }).catch((e) => flash(String(e), false));
 };
 $("btn-engage").onclick = async () => {
-  if (!confirm("将发布 rt/lowcmd 接管（可能释放高层运动模式）。请扶住机器人。继续？")) return;
+  const sdk = window.ROBOT?.transitions;
+  const ask = sdk
+    ? "将经 rt/arm_sdk 接管腰与手臂（运控保持站立），约 12 秒过渡后才能走点。请有人看护、守急停。继续？"
+    : "将发布 rt/lowcmd 接管（会退出高层运动模式）。请扶住机器人。继续？";
+  if (!confirm(ask)) return;
   try { await post("/api/engage", {}); flash("已接管：保持当前姿态", true); } catch (e) { flash(String(e), false); }
 };
 $("btn-release").onclick = async () => {
-  if (!confirm("释放后停止发令，手臂可能下垂，请扶住。继续？")) return;
+  const ask = window.ROBOT?.transitions
+    ? "释放：约 5 秒内把手臂交还运控，之后停止发令。继续？"
+    : "释放后停止发令，手臂可能下垂，请扶住。继续？";
+  if (!confirm(ask)) return;
   try { await post("/api/release", {}); flash("已释放", true); } catch (e) { flash(String(e), false); }
 };
 $("btn-hold").onclick = async () => {
