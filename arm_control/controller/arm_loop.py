@@ -1,4 +1,4 @@
-"""50–100 Hz hold + rate-limited set_target. Publishes rt/lowcmd only while engaged."""
+"""50–100 Hz hold + rate-limited set_target. 接管后经后端 Commander 周期发指令。"""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from dds.lowstate import LowStateReader
-from dds.sdk import init_channel
+from backends.base import Commander, StateSource
 from model.arm_gravity import ArmGravity
 from model.fk_scene import RobotKinematics
 from model.layout import ArmLayout, get_arm
@@ -35,27 +34,17 @@ class ArmLoop:
     def __init__(
         self,
         *,
-        reader: LowStateReader,
+        reader: StateSource,
+        commander: Commander,
         kin: RobotKinematics,
         arm: str = "right",
-        command_topic: str = "rt/lowcmd",
         max_speed_rad_s: float = 0.2,
         rate_hz: float = 100.0,
-        sdk_path: Optional[Path] = None,
-        dds_domain: int = 0,
-        network_interface: str = "enp86s0",
         urdf_path: Optional[Path] = None,
         base_link: str = "torso_link",
     ) -> None:
-        if command_topic != "rt/lowcmd":
-            raise ValueError(f"Only rt/lowcmd is implemented, got {command_topic}")
-        init_channel(dds_domain, network_interface, sdk_path)
-        from unitree_sdk2py.core.channel import ChannelPublisher
-        from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
-        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
-        from unitree_sdk2py.utils.crc import CRC
-
         self.reader = reader
+        self._commander = commander
         self.kin = kin
         self.profile = active_profile()
         self.layout: ArmLayout = get_arm(arm)
@@ -73,11 +62,6 @@ class ArmLoop:
         self._waist_cmd: Optional[dict] = None
         self._waist_target: Optional[dict] = None
 
-        self._crc = CRC()
-        self._cmd = unitree_hg_msg_dds__LowCmd_()
-        self._pub = ChannelPublisher(command_topic, LowCmd_)
-        self._pub.Init()
-
         n = self.layout.n
         q0 = np.asarray(reader.read_arm(self.layout).q, dtype=float)
         self._lock = threading.Lock()
@@ -86,7 +70,6 @@ class ArmLoop:
         self._engaged = False
         self._stop = threading.Event()
         self._last_err: Optional[str] = None
-        self._released_mode = False
         self._payload_theta: Optional[np.ndarray] = None
         self._payload_name: Optional[str] = None
         self._last_tau_ff = np.zeros(n)
@@ -122,36 +105,9 @@ class ArmLoop:
     def _measured(self) -> np.ndarray:
         return np.asarray(self.reader.read_arm(self.layout).q, dtype=float)
 
-    def _release_motion_mode(self) -> None:
-        if self._released_mode:
-            return
-        if not self.profile.control.release_motion_mode:
-            self._released_mode = True
-            return
-        try:
-            from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (
-                MotionSwitcherClient,
-            )
-        except ImportError:
-            print("[arm_loop] MotionSwitcherClient missing; skip ReleaseMode")
-            self._released_mode = True
-            return
-        switcher = MotionSwitcherClient()
-        switcher.SetTimeout(5.0)
-        switcher.Init()
-        _, result = switcher.CheckMode()
-        while isinstance(result, dict) and result.get("name"):
-            print(f"[arm_loop] releasing motion mode: {result}")
-            switcher.ReleaseMode()
-            time.sleep(1.0)
-            _, result = switcher.CheckMode()
-        self._released_mode = True
-
     def _read_waist(self) -> dict:
-        msg, _ = self.reader.latest_msg()
-        if msg is None:
-            raise RuntimeError("no lowstate")
-        return {idx: float(msg.motor_state[idx].q) for idx in self._waist_motors}
+        q = self.reader.snapshot().q
+        return {idx: float(q[idx]) for idx in self._waist_motors}
 
     def _slew_waist(self) -> None:
         if not self._waist_cmd or not self._waist_target:
@@ -167,7 +123,7 @@ class ArmLoop:
                 self._waist_cmd[idx] = cur + (step if d > 0 else -step)
 
     def engage(self) -> None:
-        self._release_motion_mode()
+        self._commander.prepare()
         q = self._clamp(self._measured())
         waist_now = self._read_waist()
         with self._lock:
@@ -320,9 +276,7 @@ class ArmLoop:
         self._cmd_q = self._clamp(self._cmd_q + delta)
 
     def _publish(self) -> None:
-        msg, _ = self.reader.latest_msg()
-        if msg is None:
-            raise RuntimeError("no lowstate")
+        snap = self.reader.snapshot()
         st = self.reader.read_arm(self.layout)
         q_meas = np.asarray(st.q, dtype=float)
         with self._lock:
@@ -341,42 +295,26 @@ class ArmLoop:
             tau_arm = np.clip(tau_arm, -TAU_FF_LIMIT, TAU_FF_LIMIT)
         self._last_tau_ff = np.asarray(tau_arm, float)
 
-        self._cmd.mode_pr = 0
-        self._cmd.mode_machine = int(getattr(msg, "mode_machine", 0))
-        n_state = len(msg.motor_state)
-        n_cmd = len(self._cmd.motor_cmd)
-        n = min(self.profile.num_motors, n_state, n_cmd)
-        for i in range(n):
-            slot = self._cmd.motor_cmd[i]
-            ms = msg.motor_state[i]
-            slot.mode = 1
-            slot.q = float(ms.q)
-            slot.dq = 0.0
-            slot.kp = float(self.kp_body[i])
-            slot.kd = float(self.kd_body[i])
-            slot.tau = 0.0
+        # 未接管的电机：保持实测角 + 默认 PD；腰按保持角锁住；当前臂按指令角
+        n = min(self.profile.num_motors, len(snap.q))
+        q = list(snap.q[:n])
+        kp = list(self.kp_body[:n])
+        kd = list(self.kd_body[:n])
+        tau = [0.0] * n
         if waist_hold:
             for idx, q_w in waist_hold.items():
-                slot = self._cmd.motor_cmd[int(idx)]
-                slot.q = float(q_w)
-                slot.dq = 0.0
-                slot.kp = float(self._waist.lock_kp)
-                slot.kd = float(self._waist.lock_kd)
-                slot.tau = 0.0
-        for name, qv, tau in zip(self.layout.joint_names, q_arm, tau_arm):
-            idx = self.layout.motor_index(name)
-            slot = self._cmd.motor_cmd[idx]
-            slot.q = float(qv)
-            slot.dq = 0.0
-            slot.tau = float(tau)
+                i = int(idx)
+                q[i] = float(q_w)
+                kp[i] = float(self._waist.lock_kp)
+                kd[i] = float(self._waist.lock_kd)
+        for name, qv, t in zip(self.layout.joint_names, q_arm, tau_arm):
+            i = self.layout.motor_index(name)
+            q[i] = float(qv)
+            tau[i] = float(t)
             if floating:
-                slot.kp = 0.0
-                slot.kd = TEACH_KD
-            else:
-                slot.kp = float(self.kp_body[idx])
-                slot.kd = float(self.kd_body[idx])
-        self._cmd.crc = self._crc.Crc(self._cmd)
-        self._pub.Write(self._cmd)
+                kp[i] = 0.0
+                kd[i] = TEACH_KD
+        self._commander.write(q, kp, kd, tau, mode_machine=snap.mode_machine)
 
     def _loop(self) -> None:
         next_t = time.perf_counter()

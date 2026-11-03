@@ -22,6 +22,7 @@ DEFAULT_CONFIG = HERE / "config" / "g1d.json"
 class Settings:
     robot: str
     profile: RobotProfile
+    backend: str
     network_interface: str
     unitree_sdk_path: Optional[Path]
     command_topic: str
@@ -47,7 +48,9 @@ def _as_path(value: Any, relative_to: Optional[Path] = None) -> Optional[Path]:
     return p
 
 
-def load_settings(path: Optional[Path] = None, robot: Optional[str] = None) -> Settings:
+def load_settings(
+    path: Optional[Path] = None, robot: Optional[str] = None, backend: Optional[str] = None
+) -> Settings:
     cfg_path = Path(path) if path else DEFAULT_CONFIG
     raw: Dict[str, Any] = {}
     if cfg_path.exists():
@@ -62,6 +65,7 @@ def load_settings(path: Optional[Path] = None, robot: Optional[str] = None) -> S
     return Settings(
         robot=profile.name,
         profile=profile,
+        backend=str(backend or os.environ.get("ARM_BACKEND") or profile.control.backend),
         network_interface=str(iface),
         unitree_sdk_path=_as_path(sdk),
         command_topic=profile.control.command_topic,

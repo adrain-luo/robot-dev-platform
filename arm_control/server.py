@@ -32,11 +32,10 @@ if str(PAYLOAD_ROOT) not in sys.path:
 if str(HAND_EYE_ROOT) not in sys.path:
     sys.path.insert(0, str(HAND_EYE_ROOT))
 
+from backends import BACKENDS, create_backend
+from backends.base import Backend, LiftDriver, LiftReader, StateSource
 from config_loader import load_settings
 from controller.arm_loop import ArmLoop, PermissionErrorMotion
-from dds.agv_client import AgvClient
-from dds.hispeed import HispeedStateReader
-from dds.lowstate import LowStateReader
 import lift_calib
 from lift_control import LiftController
 from model.fk_scene import RobotKinematics
@@ -121,14 +120,15 @@ FRONTEND = HERE / "frontend"
 
 
 class App:
-    def __init__(self, settings, kin: RobotKinematics, allow_real_motion: bool):
+    def __init__(self, settings, kin: RobotKinematics, allow_real_motion: bool, backend: Backend):
         self.settings = settings
         self.profile = settings.profile
         self.kin = kin
         self.allow_real_motion = bool(allow_real_motion)
-        self._reader: Optional[LowStateReader] = None
-        self._hispeed: Optional[HispeedStateReader] = None
-        self._agv: Optional[AgvClient] = None
+        self.backend = backend
+        self._reader: Optional[StateSource] = None
+        self._hispeed: Optional[LiftReader] = None
+        self._agv: Optional[LiftDriver] = None
         self._lift_ctrl: Optional[LiftController] = None
         self.loop: Optional[ArmLoop] = None
         self._lock = threading.Lock()
@@ -150,26 +150,17 @@ class App:
             traceback.print_exc()
         self.handeye = HandEyeAPI(self)
 
-    def reader(self) -> LowStateReader:
+    def reader(self) -> StateSource:
         with self._lock:
             if self._reader is None:
-                self._reader = LowStateReader(
-                    network_interface=self.settings.network_interface,
-                    state_topic=self.settings.state_topic,
-                    dds_domain=self.settings.dds_domain,
-                    timeout_s=self.settings.lowstate_timeout_s,
-                    sdk_path=self.settings.unitree_sdk_path,
-                )
+                self._reader = self.backend.state()
                 if self.allow_real_motion:
                     self.loop = ArmLoop(
                         reader=self._reader,
+                        commander=self.backend.commander(),
                         kin=self.kin,
                         arm="right",
-                        command_topic=self.settings.command_topic,
                         max_speed_rad_s=self.settings.max_speed_rad_s,
-                        sdk_path=self.settings.unitree_sdk_path,
-                        dds_domain=self.settings.dds_domain,
-                        network_interface=self.settings.network_interface,
                         urdf_path=self.settings.urdf,
                         base_link=self.settings.base_link,
                     )
@@ -181,33 +172,21 @@ class App:
             raise PermissionErrorMotion(f"{self.profile.name} 没有立柱")
         return self.profile.lift
 
-    def hispeed(self) -> HispeedStateReader:
-        lift = self._require_lift()
-        # 先起 lowstate（ChannelFactory）；勿在 _lock 里调 reader，锁不可重入
+    def hispeed(self) -> LiftReader:
+        self._require_lift()
+        # 先起状态订阅；勿在 _lock 里调 reader，锁不可重入
         self.reader()
         with self._lock:
             if self._hispeed is None:
-                self._hispeed = HispeedStateReader(
-                    network_interface=self.settings.network_interface,
-                    state_topic=lift.state_topic,
-                    dds_domain=self.settings.dds_domain,
-                    timeout_s=self.settings.lowstate_timeout_s,
-                    sdk_path=self.settings.unitree_sdk_path,
-                    wait=False,
-                )
+                self._hispeed = self.backend.lift_reader()
             return self._hispeed
 
-    def agv(self) -> AgvClient:
+    def agv(self) -> LiftDriver:
         self._require_lift()
         self.reader()
         with self._lock:
             if self._agv is None:
-                self._agv = AgvClient(
-                    network_interface=self.settings.network_interface,
-                    dds_domain=self.settings.dds_domain,
-                    sdk_path=self.settings.unitree_sdk_path,
-                    timeout_s=3.0,
-                )
+                self._agv = self.backend.lift_driver()
             return self._agv
 
     def lift_ctrl(self) -> LiftController:
@@ -351,6 +330,7 @@ class App:
             "ok": True,
             "mode": "real" if self.allow_real_motion else "readonly",
             "robot": self.settings.robot,
+            "backend": self.backend.name,
             "arm": arm,
             "iface": self.settings.network_interface,
             "topic": self.settings.state_topic,
@@ -462,6 +442,7 @@ class App:
             "error": err,
             "mode": "real" if self.allow_real_motion else "readonly",
             "robot": self.settings.robot,
+            "backend": self.backend.name,
             "iface": self.settings.network_interface,
             "topic": self.settings.state_topic,
             "command_topic": self.settings.command_topic,
@@ -1407,12 +1388,13 @@ def main() -> int:
     p.add_argument("--port", type=int, default=10184)
     p.add_argument("--config", type=Path, default=None)
     p.add_argument("--robot", default=None, help="机型名（robots/<名字>/robot.json），默认取 config 里的 robot")
+    p.add_argument("--backend", default=None, choices=BACKENDS, help="硬件后端，默认取机型 robot.json；mock 为仿真")
     p.add_argument("--iface", default=None)
     p.add_argument("--allow-real-motion", action="store_true")
     p.add_argument("--max-speed", type=float, default=None, help="rad/s, default 0.2, clamp 0.02–1.0")
     args = p.parse_args()
 
-    settings = load_settings(args.config, robot=args.robot)
+    settings = load_settings(args.config, robot=args.robot, backend=args.backend)
     activate_profile(settings.profile)
     if args.iface:
         settings.network_interface = args.iface
@@ -1422,9 +1404,14 @@ def main() -> int:
         raise SystemExit(f"URDF not found: {settings.urdf}")
 
     kin = RobotKinematics(settings.urdf, settings.base_link, list(settings.profile.arms))
-    APP = App(settings, kin, allow_real_motion=args.allow_real_motion)
+    backend = create_backend(settings.backend, settings)
+    # 仿真后端不接硬件，运动按钮默认可用
+    allow_motion = args.allow_real_motion or backend.name == "mock"
+    APP = App(settings, kin, allow_real_motion=allow_motion, backend=backend)
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     mode = "REAL MOTION" if args.allow_real_motion else "readonly"
+    if backend.name == "mock":
+        mode = "MOCK"
     print(
         f"[arm_control] {settings.robot} {mode}  http://{args.host}:{args.port}/  "
         f"iface={settings.network_interface}  max_speed={settings.max_speed_rad_s}",
@@ -1439,6 +1426,7 @@ def main() -> int:
             APP.handeye.close()
         if APP.loop:
             APP.loop.shutdown()
+        backend.close()
     return 0
 
 

@@ -4,24 +4,15 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Sequence, Union
 
+from backends.base import ArmState, MotorSnapshot, StateSource
 from model.layout import ArmLayout, get_arm
 from dds.sdk import init_channel
 
 
-@dataclass(frozen=True)
-class ArmState:
-    timestamp_monotonic: float
-    mode_machine: Optional[int]
-    q: tuple  # rad, length = arm.n
-    dq: tuple
-    tau_est: tuple  # may contain None
-
-
-class LowStateReader:
+class LowStateReader(StateSource):
     """Subscribe to rt/lowstate only (safe alongside publishers from other processes)."""
 
     def __init__(
@@ -109,6 +100,14 @@ class LowStateReader:
         if msg is None:
             raise RuntimeError("lowstate message missing after wait")
         return {int(i): float(msg.motor_state[int(i)].q) for i in motor_indices}
+
+    def snapshot(self) -> MotorSnapshot:
+        with self._lock:
+            msg = self._msg
+        if msg is None:
+            raise RuntimeError("no lowstate")
+        mode = getattr(msg, "mode_machine", 0)
+        return MotorSnapshot(q=tuple(float(ms.q) for ms in msg.motor_state), mode_machine=int(mode))
 
     def read_motor_states(self, motor_indices: Sequence[int]) -> Dict[int, Dict[str, float]]:
         """返回 {idx: {q, dq, tau_est}}；tau_est 缺失时为 nan。"""

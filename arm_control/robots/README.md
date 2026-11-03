@@ -14,7 +14,7 @@
 | `urdf` | URDF 文件名，相对本目录；网格放在同目录 `meshes/` |
 | `base_link` | 正运动学与手眼的基准连杆 |
 | `num_motors` | LowCmd/LowState 里使用的电机数 |
-| `control.backend` | 控制方式，目前只有 `unitree_lowcmd`（退出高层运动后由本程序发全身 `rt/lowcmd`） |
+| `control.backend` | 默认硬件后端，见 [`backends/README.md`](../backends/README.md)；G1D 为 `unitree_lowcmd` |
 | `control.state_topic` / `command_topic` | 状态与指令话题 |
 | `control.release_motion_mode` | 接管前是否 `ReleaseMode` 退出高层运动 |
 | `gains.kp` / `gains.kd` | 每个电机的默认 PD，长度等于 `num_motors` |

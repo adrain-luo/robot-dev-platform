@@ -8,22 +8,14 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from backends.base import LiftReader, LiftState
 from dds.sdk import init_channel
 
 
-@dataclass(frozen=True)
-class LiftState:
-    timestamp_monotonic: float
-    x: float
-    height_m: float
-    velocity_mps: float
-
-
-class HispeedStateReader:
+class HispeedStateReader(LiftReader):
     """Subscribe to rt/hispeed_state only. Does not publish commands."""
 
     def __init__(

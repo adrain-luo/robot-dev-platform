@@ -13,7 +13,9 @@ python server.py --allow-real-motion --max-speed 0.2   # 真机
 # 打开 http://<本机IP>:10184/
 ```
 
-常用参数：`--host` / `--port`（默认 `0.0.0.0:10184`）、`--iface`、`--max-speed`（0.02–1.0 rad/s）。
+常用参数：`--host` / `--port`（默认 `0.0.0.0:10184`）、`--iface`、`--max-speed`（0.02–1.0 rad/s）、`--robot`、`--backend`。
+
+不接机器人时可用仿真：`python server.py --backend mock`（见 [`backends/README.md`](backends/README.md)）。
 
 真机前：停掉占用 `rt/lowcmd` 的其它任务；有人扶臂、守急停。
 
@@ -53,8 +55,9 @@ python server.py --allow-real-motion --max-speed 0.2   # 真机
 | 路径 | 作用 |
 |------|------|
 | `server.py` | HTTP + 汇总各模块 API |
-| `controller/` | `ArmLoop` 限速、接管、腰保持 |
-| `dds/` | `lowstate`、立柱 `hispeed`、Agv |
+| `controller/` | `ArmLoop` 限速、接管、腰保持、拼指令帧 |
+| `backends/` | 硬件后端：`unitree_lowcmd`（G1D）、`mock`（仿真） |
+| `dds/` | Unitree DDS：`lowstate`、立柱 `hispeed`、Agv |
 | `model/` | 机型加载（`robot_profile.py`）、关节布局、URDF FK、重力 |
 | `robots/<机型>/` | `robot.json` + URDF + 网格；字段说明见 [`robots/README.md`](robots/README.md) |
 | `config/g1d.json` | 本机运行参数：机型名 `robot`、网卡、DDS 域、默认限速 |

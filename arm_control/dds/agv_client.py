@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+from backends.base import LiftDriver
 from dds.sdk import init_channel
 
 AGV_SERVICE_NAME = "agv"
@@ -22,7 +23,7 @@ ROBOT_API_ID_AGV_HEIGHT_ADJUST = 1002
 LIFT_MAX_SPEED_MPS = 0.0765
 
 
-class AgvClient:
+class AgvClient(LiftDriver):
     def __init__(
         self,
         *,

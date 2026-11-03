@@ -1,4 +1,4 @@
-"""立柱高度闭环：读 hispeed.y，发 AgvClient.HeightAdjust(vz)。
+"""立柱高度闭环：读后端立柱高度（G1D 为 hispeed.y），发 HeightAdjust(vz)。
 
 PD 参数对齐官方 g1d_height_control.cpp。
 """
@@ -9,8 +9,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from dds.agv_client import AgvClient
-from dds.hispeed import HispeedStateReader
+from backends.base import LiftDriver, LiftReader
 import lift_calib
 
 _KP = 20.0
@@ -26,8 +25,8 @@ class LiftController:
     def __init__(
         self,
         *,
-        hispeed: HispeedStateReader,
-        agv: AgvClient,
+        hispeed: LiftReader,
+        agv: LiftDriver,
         stroke_max_m: float,
     ) -> None:
         self._hispeed = hispeed
