@@ -101,6 +101,21 @@ class Commander(ABC):
     ) -> None:
         """发一帧：下标即电机号，长度为本帧要写的电机数；dq 目标恒为 0。"""
 
+    def release(self) -> None:
+        """释放。需要平滑交还控制权的后端在这里开始过渡，过渡期间 busy() 为真、ArmLoop 继续发帧。"""
+
+    def busy(self) -> bool:
+        """接管或释放过渡中，需要继续发帧。"""
+        return False
+
+    def ready(self) -> bool:
+        """过渡完成，可以接受运动目标。"""
+        return True
+
+    def phase(self) -> str:
+        """给页面看的过渡阶段（空串表示无过渡）。"""
+        return ""
+
 
 class LiftReader(ABC):
     @abstractmethod

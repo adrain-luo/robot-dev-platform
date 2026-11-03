@@ -1,0 +1,79 @@
+{
+  "name": "g1",
+  "display_name": "Unitree G1（29 自由度 rev 1.0，站立双足）",
+  "urdf": "g1_29dof_rev_1_0.urdf",
+  "base_link": "torso_link",
+  "num_motors": 29,
+  "control": {
+    "backend": "unitree_arm_sdk",
+    "state_topic": "rt/lowstate",
+    "command_topic": "rt/arm_sdk",
+    "release_motion_mode": false,
+    "weight_motor": 29,
+    "command_motors": [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
+    "acquire_s": 8.0,
+    "gain_ramp_s": 4.0,
+    "release_gain_s": 2.0,
+    "release_s": 3.0,
+    "native_kp": [200, 200, 200, 90, 60, 20, 60, 4, 4, 4, 90, 60, 20, 60, 4, 4, 4],
+    "native_kd": [5, 5, 5, 2, 1, 0.4, 1, 0.2, 0.2, 0.2, 2, 1, 0.4, 1, 0.2, 0.2, 0.2]
+  },
+  "gains": {
+    "kp": [
+      0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0,
+      200, 200, 200,
+      80, 80, 80, 80, 40, 40, 40,
+      80, 80, 80, 80, 40, 40, 40
+    ],
+    "kd": [
+      0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0,
+      5, 5, 5,
+      3, 3, 3, 3, 1.5, 1.5, 1.5,
+      3, 3, 3, 3, 1.5, 1.5, 1.5
+    ]
+  },
+  "arms": {
+    "right": {
+      "tip_link": "right_wrist_yaw_link",
+      "joint_names": [
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint"
+      ],
+      "motor_indices": [22, 23, 24, 25, 26, 27, 28],
+      "home_q": [0.3, -0.2, 0.0, 0.98, 0.0, 0.0, 0.0]
+    },
+    "left": {
+      "tip_link": "left_wrist_yaw_link",
+      "joint_names": [
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_pitch_joint",
+        "left_wrist_yaw_joint"
+      ],
+      "motor_indices": [15, 16, 17, 18, 19, 20, 21],
+      "home_q": [0.3, 0.2, 0.0, 0.98, 0.0, 0.0, 0.0]
+    }
+  },
+  "mirror_q_sign": [1, -1, -1, 1, -1, 1, -1],
+  "waist": {
+    "joints": [
+      {"role": "yaw", "urdf_joint": "waist_yaw_joint", "motor": 12, "limit_rad": [-2.618, 2.618]},
+      {"role": "roll", "urdf_joint": "waist_roll_joint", "motor": 13, "limit_rad": [-0.52, 0.52]},
+      {"role": "pitch", "urdf_joint": "waist_pitch_joint", "motor": 14, "limit_rad": [-0.52, 0.52]}
+    ],
+    "hold_motors": [12, 13, 14],
+    "lock_kp": 200.0,
+    "lock_kd": 5.0,
+    "movable": false
+  }
+}

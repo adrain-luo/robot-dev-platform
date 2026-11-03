@@ -120,6 +120,8 @@ class ArmLoop:
                 self._waist_cmd[idx] = cur + (step if d > 0 else -step)
 
     def engage(self) -> None:
+        if self._commander.busy() and not self._engaged:
+            raise PermissionErrorMotion("上次释放还在过渡，稍等再接管")
         self._commander.prepare()
         q = self._clamp(self._measured())
         waist_now = self._read_waist()
@@ -132,11 +134,27 @@ class ArmLoop:
             self._engaged = True
 
     def release(self) -> None:
+        # 拖拽中释放：先把指令角对齐实测，过渡期间按它保持，避免跳回拖拽前的旧指令
+        q = self._clamp(self._measured()) if self._float else None
         with self._lock:
+            if q is not None:
+                self._cmd_q = q.copy()
+                self._desired_q = q.copy()
             self._float = False
+            self._engaged = False
+        self._commander.release()
+        # 需要过渡的后端（arm_sdk）在过渡期间继续按最后的腰 / 臂角保持，结束后再清
+        if not self._commander.busy():
+            self._clear_waist()
+
+    def _clear_waist(self) -> None:
+        with self._lock:
             self._waist_cmd = None
             self._waist_target = None
-            self._engaged = False
+
+    def _require_ready(self, what: str) -> None:
+        if not self._commander.ready():
+            raise PermissionErrorMotion(f"接管过渡中（{self._commander.phase()}），等完成再{what}")
 
     def estop_hold(self) -> None:
         q = self._clamp(self._measured())
@@ -152,6 +170,9 @@ class ArmLoop:
     def set_waist(self, yaw_rad: Optional[float] = None, pitch_rad: Optional[float] = None) -> None:
         if self._waist is None:
             raise PermissionErrorMotion(f"{self.profile.name} 没有可控的腰")
+        if not self._waist.movable:
+            raise PermissionErrorMotion(f"{self.profile.name} 的腰只保持不转（站立时转腰会影响平衡）")
+        self._require_ready("动腰")
         with self._lock:
             if not self._engaged or self._waist_target is None:
                 raise PermissionErrorMotion("先接管再动腰")
@@ -173,6 +194,7 @@ class ArmLoop:
             self._waist_target = dict(waist_now)
 
     def enable_teach(self) -> None:
+        self._require_ready("拖拽")
         with self._lock:
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再拖拽")
@@ -227,6 +249,8 @@ class ArmLoop:
         arr = np.asarray(q, dtype=float).reshape(-1)
         if arr.size != self.layout.n or not np.all(np.isfinite(arr)):
             raise ValueError(f"需要 {self.layout.n} 个有限关节角")
+        if self._engaged:
+            self._require_ready("走点")
         with self._lock:
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再设目标")
@@ -262,6 +286,9 @@ class ArmLoop:
             "desired_rad": desired,
             "last_error": self._last_err,
             "joint_names": list(self.layout.joint_names),
+            # 接管 / 释放过渡（arm_sdk 后端有，其它为空）
+            "ready": engaged and self._commander.ready(),
+            "transition": self._commander.phase(),
         }
 
     def _slew(self) -> None:
@@ -317,13 +344,18 @@ class ArmLoop:
         next_t = time.perf_counter()
         while not self._stop.is_set():
             try:
-                if self._engaged:
-                    with self._lock:
-                        if not self._float:
-                            self._slew()
-                        self._slew_waist()
+                engaged = self._engaged
+                # 释放过渡中（arm_sdk）仍要发帧，按最后的指令角保持
+                if engaged or self._commander.busy():
+                    if engaged:
+                        with self._lock:
+                            if not self._float:
+                                self._slew()
+                            self._slew_waist()
                     self._publish()
                     self._last_err = None
+                elif self._waist_cmd is not None:
+                    self._clear_waist()
             except Exception as e:
                 self._last_err = f"{type(e).__name__}: {e}"
             next_t += self._dt
@@ -333,6 +365,10 @@ class ArmLoop:
             else:
                 next_t = time.perf_counter()
 
-    def shutdown(self) -> None:
+    def shutdown(self, timeout_s: float = 30.0) -> None:
+        """释放并等过渡结束再停线程（arm_sdk 要先把权重降到 0）。"""
         self.release()
+        deadline = time.monotonic() + timeout_s
+        while self._commander.busy() and time.monotonic() < deadline:
+            time.sleep(0.05)
         self._stop.set()

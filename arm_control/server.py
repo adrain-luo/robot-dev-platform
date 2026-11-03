@@ -1407,7 +1407,6 @@ def main() -> int:
         # 仿真默认不碰任何真实机器的标定数据
         inst = instances.temporary_instance(args.robot or "g1d")
         atexit.register(instances.cleanup, inst)
-        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     else:
         inst = instances.resolve(args.instance)
     instances.activate(inst)
@@ -1435,6 +1434,12 @@ def main() -> int:
         flush=True,
     )
     threading.Thread(target=lambda: APP.reader(), name="dds-warmup", daemon=True).start()
+
+    def _on_term(*_):
+        raise KeyboardInterrupt
+
+    # kill / systemctl stop 也走下面的收尾：先释放（arm_sdk 降权重），再退出
+    signal.signal(signal.SIGTERM, _on_term)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

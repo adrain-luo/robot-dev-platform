@@ -1,0 +1,11 @@
+{
+  "robot": "g1",
+  "network_interface": "eth0",
+  "unitree_sdk_path": null,
+  "dds_domain": 0,
+  "lowstate_timeout_s": 5.0,
+  "defaults": {
+    "max_speed_rad_s": 0.2,
+    "allow_real_motion": false
+  }
+}

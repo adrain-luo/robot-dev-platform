@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -56,6 +56,8 @@ class WaistSpec:
     hold_motors: Tuple[int, ...]
     lock_kp: float
     lock_kd: float
+    # False：接管时只保持当前角，不接受腰部目标（如站立的 G1，转腰会影响平衡）
+    movable: bool = True
 
     def joint(self, role: str) -> WaistJoint:
         for j in self.joints:
@@ -96,6 +98,8 @@ class ControlSpec:
     release_motion_mode: bool
     # 退出运控前必须空闲的电机；读到在工作就拒绝接管
     idle_motors: Tuple[int, ...] = ()
+    # 后端专用参数（如 arm_sdk 的权重过渡时长、运控原增益），由对应后端解释
+    options: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -123,6 +127,9 @@ class RobotProfile:
         if key not in self.arms:
             raise KeyError(f"Unknown arm {name!r}; expected one of {sorted(self.arms)}")
         return self.arms[key]
+
+
+_CONTROL_KEYS = {"backend", "state_topic", "command_topic", "release_motion_mode", "idle_motors"}
 
 
 def _pair(v: Any) -> Tuple[float, float]:
@@ -173,6 +180,7 @@ def _parse(raw: Dict[str, Any], root: Path) -> RobotProfile:
             hold_motors=tuple(int(i) for i in w.get("hold_motors") or (j["motor"] for j in w["joints"])),
             lock_kp=float(w["lock_kp"]),
             lock_kd=float(w["lock_kd"]),
+            movable=bool(w.get("movable", True)),
         )
 
     lift = None
@@ -201,6 +209,7 @@ def _parse(raw: Dict[str, Any], root: Path) -> RobotProfile:
             command_topic=str(c.get("command_topic") or "rt/lowcmd"),
             release_motion_mode=bool(c.get("release_motion_mode", True)),
             idle_motors=tuple(int(i) for i in c.get("idle_motors") or ()),
+            options={k: v for k, v in c.items() if k not in _CONTROL_KEYS},
         ),
         kp=kp,
         kd=kd,
