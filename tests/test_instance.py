@@ -58,6 +58,9 @@ def test_migration_script(tmp_path):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("{}\n" if doc is None else json.dumps(doc, ensure_ascii=False), encoding="utf-8")
     (legacy / "hand_eye/config/results/r.yaml").write_text("yaml", encoding="utf-8")
+    import os
+    old_mtime = 1_700_000_000
+    os.utime(legacy / "hand_eye/config/results/r.json", (old_mtime, old_mtime))
 
     name = "pytest_migrate_tmp"
     dest = instances.INSTANCES_DIR / name
@@ -71,6 +74,10 @@ def test_migration_script(tmp_path):
         assert (inst.path("handeye_results") / "r.yaml").read_text(encoding="utf-8") == "yaml"
         cfg = json.loads(inst.path("handeye_config").read_text(encoding="utf-8"))
         assert cfg == {"intrinsics": "calib/handeye/r.yaml", "camera_host": "1.2.3.4"}
+        # 改写路径不改修改时间（手眼结果列表按它排序）
+        r = inst.path("handeye_results") / "r.json"
+        assert json.loads(r.read_text(encoding="utf-8"))["intrinsics_yaml"] == "calib/handeye/r.yaml"
+        assert int(r.stat().st_mtime) == old_mtime
         doc = json.loads((inst.path("handeye_sessions") / "s1" / "handeye_result.json").read_text(encoding="utf-8"))
         assert doc["intrinsics_yaml"] == "data/handeye/s1/stereo_calibration.yaml"
         # data 被搬走；board_touch 单独归位，不混进手眼会话

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -82,7 +83,10 @@ def _rewrite_paths(inst: "instances.Instance", dry: bool) -> List[str]:
         if new != doc:
             changed.append(str(f.relative_to(inst.root)))
             if not dry:
+                # 保留修改时间：列表按修改时间排序（如手眼结果、TCP）
+                st = f.stat()
                 f.write_text(json.dumps(new, indent=2, ensure_ascii=False), encoding="utf-8")
+                os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))
     return changed
 
 
