@@ -10,13 +10,13 @@ import time
 from pathlib import Path
 from typing import Optional, Sequence
 
-from backends.base import Backend, Commander, LiftDriver, LiftReader, StateSource
+from backends.base import Backend, Commander, LiftDriver, LiftReader, StateSource, check_idle_motors
 from dds.sdk import init_channel
 from model.robot_profile import RobotProfile
 
 
 class LowCmdCommander(Commander):
-    def __init__(self, *, command_topic: str, release_motion_mode: bool,
+    def __init__(self, *, reader: StateSource, idle_motors: Sequence[int], command_topic: str, release_motion_mode: bool,
                  dds_domain: int, network_interface: str, sdk_path: Optional[Path]) -> None:
         if command_topic != "rt/lowcmd":
             raise ValueError(f"Only rt/lowcmd is implemented, got {command_topic}")
@@ -26,6 +26,8 @@ class LowCmdCommander(Commander):
         from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
         from unitree_sdk2py.utils.crc import CRC
 
+        self._reader = reader
+        self._idle_motors = tuple(idle_motors)
         self._release = bool(release_motion_mode)
         self._released_mode = False
         self._crc = CRC()
@@ -34,6 +36,8 @@ class LowCmdCommander(Commander):
         self._pub.Init()
 
     def prepare(self) -> None:
+        # 每次接管都查：机器人可能在两次接管之间换过状态
+        check_idle_motors(self._reader, self._idle_motors)
         if self._released_mode:
             return
         if not self._release:
@@ -106,10 +110,12 @@ class UnitreeLowCmdBackend(Backend):
             return self._state
 
     def commander(self) -> Commander:
-        self.state()
+        reader = self.state()
         with self._lock:
             if self._commander is None:
                 self._commander = LowCmdCommander(
+                    reader=reader,
+                    idle_motors=self.profile.control.idle_motors,
                     command_topic=self.profile.control.command_topic,
                     release_motion_mode=self.profile.control.release_motion_mode,
                     dds_domain=self._domain,

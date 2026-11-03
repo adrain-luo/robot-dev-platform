@@ -151,3 +151,21 @@ def test_waist_target_clamped_to_profile_limits(rig):
     tgt = loop.status()["waist_target_rad"]
     assert float(tgt[str(profile.waist.joint("yaw").motor)]) == profile.waist.joint("yaw").limit_rad[1]
     assert float(tgt[str(profile.waist.joint("pitch").motor)]) == profile.waist.joint("pitch").limit_rad[0]
+
+
+def test_idle_motor_guard_blocks_legged_robot():
+    """G1D 声明腿部电机空闲；若读到它们在工作（例如站立的 G1），退出运控前必须拒绝。"""
+    from backends.base import check_idle_motors
+
+    profile = active()
+    idle = profile.control.idle_motors
+    assert idle == tuple(range(12))
+    backend = MockBackend(profile)
+    try:
+        check_idle_motors(backend.state(), idle)  # mock 的腿部电机全 0：通过
+        with backend.robot._lock:
+            backend.robot.q[3] = 0.62  # 模拟站立时的膝关节角
+        with pytest.raises(PermissionErrorMotion, match="拒绝接管"):
+            check_idle_motors(backend.state(), idle)
+    finally:
+        backend.close()

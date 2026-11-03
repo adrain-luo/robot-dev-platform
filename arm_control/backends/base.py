@@ -13,6 +13,27 @@ from typing import Dict, Optional, Sequence, Tuple, Union
 from model.robot_profile import ArmLayout
 
 
+class PermissionErrorMotion(PermissionError):
+    """拒绝发令（只读模式、未接管、安全检查不过等），接口返回 403。"""
+
+
+def check_idle_motors(state: "StateSource", motors: Sequence[int]) -> None:
+    """退出运控前确认这些电机没在工作（如 G1D 没有腿）。
+
+    读到任何一个有角度或力矩，就说明连着的不是声明的机型（例如双足 G1 正站着），
+    此时退出运控会撤掉平衡控制，必须拒绝。
+    """
+    if not motors:
+        return
+    st = state.read_motor_states(motors)
+    active = [i for i in motors if abs(st[i]["q"]) > 1e-4 or abs(st[i]["tau_est"]) > 1e-3]
+    if active:
+        raise PermissionErrorMotion(
+            f"电机 {active} 正在工作，与机型声明不符（可能是站立中的双足机器人）。"
+            "为防止退出运控导致摔倒，拒绝接管。"
+        )
+
+
 @dataclass(frozen=True)
 class ArmState:
     timestamp_monotonic: float

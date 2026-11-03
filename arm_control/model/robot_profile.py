@@ -94,6 +94,8 @@ class ControlSpec:
     state_topic: str
     command_topic: str
     release_motion_mode: bool
+    # 退出运控前必须空闲的电机；读到在工作就拒绝接管
+    idle_motors: Tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -198,6 +200,7 @@ def _parse(raw: Dict[str, Any], root: Path) -> RobotProfile:
             state_topic=str(c.get("state_topic") or "rt/lowstate"),
             command_topic=str(c.get("command_topic") or "rt/lowcmd"),
             release_motion_mode=bool(c.get("release_motion_mode", True)),
+            idle_motors=tuple(int(i) for i in c.get("idle_motors") or ()),
         ),
         kp=kp,
         kd=kd,

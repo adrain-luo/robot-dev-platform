@@ -9,7 +9,8 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from backends.base import Commander, StateSource
+# PermissionErrorMotion 定义在后端接口里（后端安全检查也抛它），其它模块仍从这里导入
+from backends.base import Commander, PermissionErrorMotion, StateSource  # noqa: F401
 from model.arm_gravity import ArmGravity
 from model.fk_scene import RobotKinematics
 from model.layout import ArmLayout, get_arm
@@ -24,10 +25,6 @@ def _clamp_span(value: float, span: tuple) -> float:
     if not np.isfinite(value):
         raise ValueError("腰部角度必须是有限数")
     return float(min(hi, max(lo, value)))
-
-
-class PermissionErrorMotion(PermissionError):
-    pass
 
 
 class ArmLoop:
