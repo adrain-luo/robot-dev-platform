@@ -30,7 +30,7 @@ import poses as posesets
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 _DEBUG_HOSTS = (
-    "http://192.168.40.56:18081",
+    "http://192.168.123.164:18081",
 )
 
 def _kmat(src: Dict[str, Any]) -> np.ndarray:
