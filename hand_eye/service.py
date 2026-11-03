@@ -26,9 +26,10 @@ from model.urdf_fk import URDFRobotModel
 from solve_core import SolveOptions, load_intrinsics, object_points_m, solve_eye, stereo_cross_check
 import identify as iden
 import poses as posesets
+import instance as instances
 
-ROOT = Path(__file__).resolve().parent
-CONFIG_PATH = ROOT / "config.json"
+def config_path() -> Path:
+    return instances.path("handeye_config")
 _DEBUG_HOSTS = (
     "http://192.168.123.164:18081",
 )
@@ -154,9 +155,9 @@ DEFAULTS: Dict[str, Any] = {
 
 def load_config() -> Dict[str, Any]:
     cfg = dict(DEFAULTS)
-    if CONFIG_PATH.is_file():
+    if config_path().is_file():
         try:
-            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            raw = json.loads(config_path().read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             raw = {}
         if isinstance(raw, dict):
@@ -165,7 +166,7 @@ def load_config() -> Dict[str, Any]:
 
 
 def save_config(cfg: Dict[str, Any]) -> None:
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    config_path().write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 class HandEyeAPI:
@@ -496,7 +497,7 @@ class HandEyeAPI:
         if use_debug:
             tint = np.array([255, 120, 20], dtype=np.float32)
             cols = np.clip(0.35 * cols.astype(np.float32) + 0.65 * tint, 0, 255).astype(np.uint8)
-        cloud_dir = he_session.DATA_DIR / "clouds"
+        cloud_dir = instances.path("clouds")
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         ply = cloud_dir / f"{stamp}_cam.ply"
         n_ply = write_ply(ply, pts, cols[:, ::-1])
@@ -527,12 +528,12 @@ class HandEyeAPI:
     def _calib_yaml(self, cfg: Dict[str, Any]) -> Path:
         name = str(cfg.get("active_result") or "")
         if name:
-            p = he_results.RESULTS_DIR / f"{name}.yaml"
+            p = he_results.results_dir() / f"{name}.yaml"
             if p.is_file():
                 return p
-        intr = str(cfg.get("intrinsics") or "")
-        if intr and Path(intr).is_file():
-            return Path(intr)
+        intr = instances.active().from_stored(cfg.get("intrinsics"))
+        if intr is not None and intr.is_file():
+            return intr
         raise FileNotFoundError("先在手眼卡片里调用一组已保存的标定")
 
     def _matcher_for(self, yaml_path: Path) -> StereoMatcher:
@@ -659,6 +660,9 @@ class HandEyeAPI:
         for key in ("camera_source", "camera_host", "teleimager_path", "intrinsics", "board_size", "eye", "session"):
             if key in body and body[key] is not None:
                 cfg[key] = body[key]
+        if body.get("intrinsics"):
+            inst = instances.active()
+            cfg["intrinsics"] = inst.to_stored(inst.from_stored(str(body["intrinsics"])))
         if "square_size_mm" in body:
             raw = body["square_size_mm"]
             cfg["square_size_mm"] = None if raw in ("", None) else float(raw)
@@ -793,7 +797,7 @@ class HandEyeAPI:
         from intrinsics import calibrate_session
         fit = calibrate_session(data_dir, board, float(square), log=log)
         yaml_path = Path(fit["yaml"])
-        cfg["intrinsics"] = str(yaml_path)
+        cfg["intrinsics"] = instances.active().to_stored(yaml_path)
         save_config(cfg)
         urdf = self.app.settings.urdf
         meta = he_session.load_meta(data_dir)
@@ -857,13 +861,12 @@ class HandEyeAPI:
         cfg["active_result"] = doc["name"]
         if doc.get("session"):
             cfg["session"] = doc["session"]
-        yaml_path = str(doc.get("intrinsics_yaml") or "")
-        if not yaml_path:
-            cand = he_results.RESULTS_DIR / f"{doc['name']}.yaml"
-            if cand.is_file():
-                yaml_path = str(cand)
-        if yaml_path and Path(yaml_path).is_file():
-            cfg["intrinsics"] = yaml_path
+        inst = instances.active()
+        yaml_path = inst.from_stored(doc.get("intrinsics_yaml"))
+        if yaml_path is None or not yaml_path.is_file():
+            yaml_path = he_results.results_dir() / f"{doc['name']}.yaml"
+        if yaml_path.is_file():
+            cfg["intrinsics"] = inst.to_stored(yaml_path)
 
     def _load_named(self, body: Dict[str, Any]) -> Dict[str, Any]:
         doc = he_results.load_saved(str(body.get("name") or ""))

@@ -1,6 +1,6 @@
 """固定点 TCP：腕部转开时工作点不动，求工作点在腕坐标系里的位置。
 
-命名结果写在 config/tcp_results/{名字}.json，可再调用。"""
+命名结果写在实例的 calib/tcp/{名字}.json，可再调用。"""
 
 from __future__ import annotations
 
@@ -14,9 +14,15 @@ import numpy as np
 
 from model.robot_profile import active as active_profile
 
-ROOT = Path(__file__).resolve().parent
-RESULTS_DIR = ROOT / "config" / "tcp_results"
-_ACTIVE_PATH = RESULTS_DIR / "_active.json"
+import instance as instances
+
+
+def results_dir() -> Path:
+    return instances.path("tcp_results")
+
+
+def _active_path() -> Path:
+    return results_dir() / "_active.json"
 _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 # 躯干 y=0 镜像：位置/固定点反射；腕系偏置 y 取反；关节同姿态集符号
 _MIRROR_S = np.diag([1.0, -1.0, 1.0])
@@ -30,7 +36,7 @@ def _check_name(name: str) -> str:
 
 
 def _result_path(name: str) -> Path:
-    return RESULTS_DIR / f"{_check_name(name)}.json"
+    return results_dir() / f"{_check_name(name)}.json"
 
 
 def _mirror_dst_name(src_name: str, dst_arm: str) -> str:
@@ -59,10 +65,10 @@ def _mirror_q(q) -> List[float]:
 
 
 def list_saved() -> List[Dict[str, Any]]:
-    if not RESULTS_DIR.is_dir():
+    if not results_dir().is_dir():
         return []
     out = []
-    for path in sorted(RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for path in sorted(results_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         if path.name.startswith("_"):
             continue
         try:
@@ -85,10 +91,10 @@ def list_saved() -> List[Dict[str, Any]]:
 def _read_active_map() -> Dict[str, str]:
     """左右臂各自生效的 TCP 名。兼容旧格式 {"name": "..."}。"""
     out = {"left": "", "right": ""}
-    if not _ACTIVE_PATH.is_file():
+    if not _active_path().is_file():
         return out
     try:
-        doc = json.loads(_ACTIVE_PATH.read_text(encoding="utf-8"))
+        doc = json.loads(_active_path().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return out
     if not isinstance(doc, dict):
@@ -101,7 +107,7 @@ def _read_active_map() -> Dict[str, str]:
     name = str(doc.get("name") or "")
     if not name:
         return out
-    path = RESULTS_DIR / f"{name}.json"
+    path = results_dir() / f"{name}.json"
     arm = ""
     if path.is_file():
         try:
@@ -116,14 +122,14 @@ def _read_active_map() -> Dict[str, str]:
 
 
 def _write_active_map(active: Dict[str, str]) -> None:
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    results_dir().mkdir(parents=True, exist_ok=True)
     left = str(active.get("left") or "")
     right = str(active.get("right") or "")
     if not left and not right:
-        if _ACTIVE_PATH.is_file():
-            _ACTIVE_PATH.unlink()
+        if _active_path().is_file():
+            _active_path().unlink()
         return
-    _ACTIVE_PATH.write_text(
+    _active_path().write_text(
         json.dumps({"left": left, "right": right}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -237,7 +243,7 @@ class TcpSession:
         if self.arm not in ("left", "right"):
             raise ValueError("先记录某一侧手臂的姿态")
         name = _check_name(name)
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        results_dir().mkdir(parents=True, exist_ok=True)
         doc = {
             "name": name,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
@@ -329,7 +335,7 @@ class TcpSession:
             "result": res,
             "mirrored_from": {"name": src_name, "arm": src_arm},
         }
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        results_dir().mkdir(parents=True, exist_ok=True)
         dst_path.write_text(json.dumps(out_doc, indent=2, ensure_ascii=False), encoding="utf-8")
         status = self.status()
         status["mirrored_name"] = dst_name

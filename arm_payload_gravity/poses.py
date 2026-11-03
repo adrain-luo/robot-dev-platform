@@ -1,4 +1,4 @@
-"""姿态集：config/posesets/<名字>.json。示教记录实测角；左右关于躯干矢状面（y=0）镜像。
+"""姿态集：实例的 calib/posesets/<名字>.json。示教记录实测角；左右关于躯干矢状面（y=0）镜像。
 
 关节顺序：肩 pitch/roll/yaw、肘、腕 roll/pitch/yaw。
 G1D URDF 左右轴定义相同（pitch∥Y、roll∥X、yaw∥Z），限位关于 0 对调。
@@ -24,8 +24,11 @@ from model.arm_gravity import ArmGravity
 from model.layout import get_arm
 from model.robot_profile import active as active_profile
 
-HERE = Path(__file__).resolve().parent
-SETS_DIR = HERE / "config" / "posesets"
+import instance as instances
+
+
+def sets_dir() -> Path:
+    return instances.path("posesets")
 _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 
 def _mirror_sign() -> np.ndarray:
@@ -49,7 +52,7 @@ def _check_name(name: str) -> str:
 
 
 def set_path(name: str) -> Path:
-    return SETS_DIR / f"{_check_name(name)}.json"
+    return sets_dir() / f"{_check_name(name)}.json"
 
 
 def mirror_q(q) -> List[float]:
@@ -67,9 +70,9 @@ def condition_number(arm: str, qs: List, urdf_path: Path, base_link: str) -> Opt
 
 
 def list_sets(arm: Optional[str] = None) -> List[Dict]:
-    SETS_DIR.mkdir(parents=True, exist_ok=True)
+    sets_dir().mkdir(parents=True, exist_ok=True)
     out = []
-    for p in sorted(SETS_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+    for p in sorted(sets_dir().glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
@@ -95,7 +98,7 @@ def load_set(name: str) -> Dict:
 
 
 def save_set(d: Dict, urdf_path: Optional[Path] = None, base_link: str = "torso_link") -> Path:
-    SETS_DIR.mkdir(parents=True, exist_ok=True)
+    sets_dir().mkdir(parents=True, exist_ok=True)
     qs = [p["q"] for p in d.get("poses", [])]
     if urdf_path is not None and len(qs) >= 2:
         d["regressor_cond"] = round(condition_number(d["arm"], qs, urdf_path, base_link), 2)

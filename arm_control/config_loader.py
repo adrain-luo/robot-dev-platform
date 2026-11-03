@@ -1,21 +1,20 @@
-"""Load arm_control runtime settings (JSON + env overrides).
+"""Load arm_control runtime settings (instance.json + env overrides).
 
-config/g1d.json 只放这台机器的运行参数（网卡、DDS 域、默认限速）和机型名 `robot`；
+instances/<实例>/instance.json 放这台机器的运行参数（网卡、DDS 域、默认限速）和机型名 `robot`；
 关节表、话题、URDF 等机型数据在 robots/<robot>/robot.json。
 """
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import instance as instances
 from model.robot_profile import RobotProfile, load_profile
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_CONFIG = HERE / "config" / "g1d.json"
 
 
 @dataclass
@@ -34,10 +33,6 @@ class Settings:
     allow_real_motion: bool = False
     max_speed_rad_s: float = 0.2
 
-    @property
-    def config_dir(self) -> Path:
-        return HERE / "config"
-
 
 def _as_path(value: Any, relative_to: Optional[Path] = None) -> Optional[Path]:
     if value is None or value == "" or value == "null":
@@ -49,12 +44,10 @@ def _as_path(value: Any, relative_to: Optional[Path] = None) -> Optional[Path]:
 
 
 def load_settings(
-    path: Optional[Path] = None, robot: Optional[str] = None, backend: Optional[str] = None
+    inst: Optional["instances.Instance"] = None, robot: Optional[str] = None, backend: Optional[str] = None
 ) -> Settings:
-    cfg_path = Path(path) if path else DEFAULT_CONFIG
-    raw: Dict[str, Any] = {}
-    if cfg_path.exists():
-        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    inst = inst or instances.active()
+    raw: Dict[str, Any] = dict(inst.settings)
 
     defaults = raw.get("defaults") or {}
     robot_name = robot or os.environ.get("ARM_ROBOT") or raw.get("robot") or "g1d"

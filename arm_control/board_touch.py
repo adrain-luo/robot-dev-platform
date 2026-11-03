@@ -11,7 +11,11 @@ from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 
-LOG_DIR = Path(__file__).resolve().parent.parent / "hand_eye" / "data" / "board_touch"
+import instance as instances
+
+
+def log_dir() -> Path:
+    return instances.path("board_touch")
 # 明显不平整：角点离开拟合平面超过这些值就停，不往下摸。
 PLANE_RMS_MM = 10.0
 PLANE_MAX_MM = 20.0
@@ -134,9 +138,9 @@ class BoardTouch:
         if self._fh is not None:
             self._fh.close()
             self._fh = None
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_dir().mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = LOG_DIR / f"{stamp}.log"
+        path = log_dir() / f"{stamp}.log"
         self._fh = path.open("a", encoding="utf-8")
         self.log_path = str(path)
         self._log(f"日志 {path}")

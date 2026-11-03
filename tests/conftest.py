@@ -16,6 +16,16 @@ for sub in ("arm_control", "arm_payload_gravity", "hand_eye"):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import instance as instances  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def temp_instance():
+    """进程内的单元测试也用临时实例，不读写任何真实机器的数据。"""
+    inst = instances.activate(instances.temporary_instance("g1d"))
+    yield inst
+    instances.cleanup(inst)
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -67,12 +77,16 @@ def mock_server(tmp_path_factory):
         return
     port = _free_port()
     # 输出写文件：server 每个请求都打日志，接管道不读会写满阻塞
-    log_path = tmp_path_factory.mktemp("mock") / "server.log"
+    work = tmp_path_factory.mktemp("mock")
+    log_path = work / "server.log"
     log = open(log_path, "wb")
+    # 临时实例建在 pytest 的目录里：Windows 上 terminate 不走 atexit，靠 pytest 清理
+    env = {**os.environ, "TMP": str(work), "TEMP": str(work), "TMPDIR": str(work)}
+    env.pop("ARM_INSTANCE", None)
     proc = subprocess.Popen(
         [sys.executable, str(REPO / "arm_control" / "server.py"), "--backend", "mock",
          "--host", "127.0.0.1", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
+        stdout=log, stderr=subprocess.STDOUT, env=env,
     )
     client = Client(f"http://127.0.0.1:{port}")
     deadline = time.monotonic() + 30

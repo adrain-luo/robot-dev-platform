@@ -5,3 +5,6 @@ __pycache__/
 *.egg-info/
 arm_payload_gravity/data/
 hand_eye/data/
+# 实例：采集 / 测量数据不进 git；默认实例名只在本机
+instances/*/data/
+instances/default

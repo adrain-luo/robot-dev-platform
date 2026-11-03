@@ -21,15 +21,18 @@ import friction
 import identify as iden
 from model.arm_gravity import ArmGravity
 
-HERE = Path(__file__).resolve().parent
-VALIDATE_DIR = HERE / "data" / "validate"
+import instance as instances
+
+
+def validate_dir() -> Path:
+    return instances.path("validate")
 
 
 def list_results(arm: Optional[str] = None, poseset: Optional[str] = None) -> List[Dict]:
-    if not VALIDATE_DIR.is_dir():
+    if not validate_dir().is_dir():
         return []
     out = []
-    for p in sorted(VALIDATE_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+    for p in sorted(validate_dir().glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
@@ -56,8 +59,8 @@ def load_result(name: str) -> Dict:
         stem = stem[:-5]
     if not stem or "/" in stem or stem.startswith("."):
         raise ValueError("非法对比记录名")
-    p = (VALIDATE_DIR / f"{stem}.json").resolve()
-    if p.parent != VALIDATE_DIR.resolve() or not p.is_file():
+    p = (validate_dir() / f"{stem}.json").resolve()
+    if p.parent != validate_dir().resolve() or not p.is_file():
         raise FileNotFoundError(f"没有对比记录 {stem}")
     return json.loads(p.read_text(encoding="utf-8"))
 
@@ -353,8 +356,8 @@ class CompareTask:
                 "friction_band": self.band_info, "rows": self.rows, "summary": self.summary,
                 "finished": time.strftime("%Y-%m-%dT%H:%M:%S"),
             }
-            VALIDATE_DIR.mkdir(parents=True, exist_ok=True)
-            (VALIDATE_DIR / f"{self.session}.json").write_text(
+            validate_dir().mkdir(parents=True, exist_ok=True)
+            (validate_dir() / f"{self.session}.json").write_text(
                 json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
             self.phase = "完成"
             self.on_done(result)

@@ -7,8 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
+def data_dir() -> Path:
+    from instance import path
+    return path("handeye_sessions")
 
 # 未接管时手眼默认用的臂；末端连杆、基座按当前机型取
 ARM = "left"
@@ -29,10 +30,10 @@ def base_link() -> str:
 
 
 def list_sessions() -> List[Dict[str, Any]]:
-    if not DATA_DIR.is_dir():
+    if not data_dir().is_dir():
         return []
     out = []
-    for d in sorted(DATA_DIR.iterdir(), reverse=True):
+    for d in sorted(data_dir().iterdir(), reverse=True):
         if not d.is_dir() or not (d / "session_meta.json").is_file():
             continue
         n = len(list((d / "left").glob("*.jpg"))) if (d / "left").is_dir() else 0
@@ -56,13 +57,13 @@ def session_dir(name: str) -> Path:
     name = Path(str(name)).name
     if not name or name in (".", ".."):
         raise ValueError("会话名不对")
-    return DATA_DIR / name
+    return data_dir() / name
 
 
 def create_session(board_size: str, arm: str = ARM, poseset: str = "") -> Path:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    data_dir().mkdir(parents=True, exist_ok=True)
     name = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{arm}"
-    path = DATA_DIR / name
+    path = data_dir() / name
     path.mkdir(parents=True, exist_ok=False)
     for sub in ("left", "right", "joints"):
         (path / sub).mkdir()

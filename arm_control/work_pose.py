@@ -10,9 +10,15 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent
-POSES_DIR = ROOT / "config" / "work_poses"
-IK_MODE_PATH = ROOT / "config" / "pose_ik_mode.json"
+import instance as instances
+
+
+def poses_dir() -> Path:
+    return instances.path("work_poses")
+
+
+def ik_mode_path() -> Path:
+    return instances.path("pose_ik_mode")
 # single=旧：当前角一枪局部 IK；robust=新：多初值全姿态 IK
 IK_MODES = ("single", "robust")
 _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
@@ -21,8 +27,8 @@ _TCP_DIR_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 
 def _read_ik_mode() -> str:
     try:
-        if IK_MODE_PATH.is_file():
-            mode = str(json.loads(IK_MODE_PATH.read_text(encoding="utf-8")).get("mode") or "")
+        if ik_mode_path().is_file():
+            mode = str(json.loads(ik_mode_path().read_text(encoding="utf-8")).get("mode") or "")
             if mode in IK_MODES:
                 return mode
     except (OSError, json.JSONDecodeError, TypeError):
@@ -31,8 +37,8 @@ def _read_ik_mode() -> str:
 
 
 def _write_ik_mode(mode: str) -> None:
-    IK_MODE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    IK_MODE_PATH.write_text(
+    ik_mode_path().parent.mkdir(parents=True, exist_ok=True)
+    ik_mode_path().write_text(
         json.dumps({"mode": mode}, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
@@ -53,7 +59,7 @@ def _check_tcp_dir(tcp_name: str) -> str:
 
 
 def _dir(tcp_name: str) -> Path:
-    return POSES_DIR / _check_tcp_dir(tcp_name)
+    return poses_dir() / _check_tcp_dir(tcp_name)
 
 
 def _path(tcp_name: str, name: str) -> Path:
@@ -85,10 +91,10 @@ def list_for_tcp(tcp_name: str) -> List[Dict[str, Any]]:
 
 
 def list_all() -> List[Dict[str, Any]]:
-    if not POSES_DIR.is_dir():
+    if not poses_dir().is_dir():
         return []
     out: List[Dict[str, Any]] = []
-    for d in sorted(POSES_DIR.iterdir()):
+    for d in sorted(poses_dir().iterdir()):
         if not d.is_dir():
             continue
         out.extend(list_for_tcp(d.name))

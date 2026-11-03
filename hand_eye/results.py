@@ -1,4 +1,4 @@
-"""命名保存的手眼结果。数字拷在 config/results/，不依赖采集目录。"""
+"""命名保存的手眼结果。数字拷在实例的 calib/handeye/，不依赖采集目录。"""
 
 from __future__ import annotations
 
@@ -12,8 +12,14 @@ from typing import Any, Dict, List
 import cv2
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent
-RESULTS_DIR = ROOT / "config" / "results"
+def results_dir() -> Path:
+    from instance import path
+    return path("handeye_results")
+
+
+def _to_stored(p: Path) -> str:
+    from instance import active
+    return active().to_stored(p)
 _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 
 
@@ -25,14 +31,14 @@ def _check_name(name: str) -> str:
 
 
 def _path(name: str) -> Path:
-    return RESULTS_DIR / f"{_check_name(name)}.json"
+    return results_dir() / f"{_check_name(name)}.json"
 
 
 def list_saved() -> List[Dict[str, Any]]:
-    if not RESULTS_DIR.is_dir():
+    if not results_dir().is_dir():
         return []
     out = []
-    for p in sorted(RESULTS_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+    for p in sorted(results_dir().glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -115,8 +121,8 @@ def save_named(name: str, data_dir: Path) -> Dict[str, Any]:
         fit = _fit_from_yaml(yaml_src)
     meta_path = data_dir / "session_meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    yaml_dst = RESULTS_DIR / f"{name}.yaml"
+    results_dir().mkdir(parents=True, exist_ok=True)
+    yaml_dst = results_dir() / f"{name}.yaml"
     shutil.copyfile(yaml_src, yaml_dst)
     doc = {
         "name": name,
@@ -128,7 +134,7 @@ def save_named(name: str, data_dir: Path) -> Dict[str, Any]:
         "poseset": meta.get("poseset") or "",
         "board_size": meta.get("board_size") or "",
         "square_size_mm": fit.get("square_size_mm"),
-        "intrinsics_yaml": str(yaml_dst),
+        "intrinsics_yaml": _to_stored(yaml_dst),
         "intrinsics_fit": fit,
         "result": result,
     }

@@ -16,11 +16,14 @@ python server.py --allow-real-motion --max-speed 0.2
 
 首次若没有 `abyss` 环境：`conda env create -f environment.yml`，或跑 `./setup_env.sh`。
 
+启动时用 `instances/default` 里写的机器实例（设备上是 `bwt-g1d1`），也可 `--instance <名字>` 指定；新机器先建实例，见 [`instances/README.md`](instances/README.md)。
+
 ## 目录分工
 
 | 目录 | 职责 |
 |------|------|
 | `arm_control/` | **唯一发令处**：DDS、限速循环、URDF、前端、腰/立柱、TCP、空间点、棋盘触摸、识别定位、工作流 |
+| `instances/` | 机器实例：每台机器的设置与标定数据（TCP、手眼、负载、空间点…），见 [`instances/README.md`](instances/README.md) |
 | `arm_control/robots/` | 机型描述，每个机型一个目录（`robot.json` + URDF + 网格），见 [`robots/README.md`](arm_control/robots/README.md) |
 | `arm_payload_gravity/` | 姿态集、末端负载辨识、摩擦带、到位对比（接口挂在臂控网页上） |
 | `hand_eye/` | 头相机取流、棋盘检测、内参、手眼外参、SGBM 点云 |

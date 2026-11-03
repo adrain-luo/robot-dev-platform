@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from identify import MEASURE_DIR
+from identify import measure_dir
 
 N_JOINT = 7
 MAX_SESSIONS = 12
@@ -41,10 +41,10 @@ def _bidirectional(meta: Dict) -> bool:
 
 
 def _sessions(arm: str, poseset: Optional[str]) -> List[Path]:
-    if not MEASURE_DIR.exists():
+    if not measure_dir().exists():
         return []
     out = []
-    for d in sorted(MEASURE_DIR.iterdir(), reverse=True):
+    for d in sorted(measure_dir().iterdir(), reverse=True):
         meta_p, samp_p = d / "meta.json", d / "samples.json"
         if not (meta_p.exists() and samp_p.exists()):
             continue

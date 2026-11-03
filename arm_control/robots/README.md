@@ -4,7 +4,7 @@
 代码里与机型有关的数（关节表、电机号、增益、腰、立柱、URDF）都从这里读，
 由 `model/robot_profile.py` 加载，各模块用 `active()` 取当前机型。
 
-选哪个机型：`config/g1d.json` 的 `robot` 字段；也可以用环境变量 `ARM_ROBOT` 或 `server.py --robot <名字>` 覆盖。
+选哪个机型：机器实例 `instances/<实例>/instance.json` 的 `robot` 字段；也可以用环境变量 `ARM_ROBOT` 或 `server.py --robot <名字>` 覆盖。
 
 ## robot.json 字段
 
@@ -29,4 +29,4 @@
 
 1. 建 `robots/<名字>/`，放 URDF 和 `meshes/`。
 2. 照 `g1d/robot.json` 写一份，核对关节名与 URDF 一致（启动时会校验臂链）。
-3. 改 `config/g1d.json` 的 `robot`，或用 `--robot <名字>` 启动，先只读跑一遍。
+3. 给这台机器建实例（见 [`instances/README.md`](../../instances/README.md)），`robot` 填新机型名，先只读跑一遍。

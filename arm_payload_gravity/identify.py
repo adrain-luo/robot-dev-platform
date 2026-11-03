@@ -19,9 +19,15 @@ if str(_ARM) not in sys.path:
 
 from model.arm_gravity import ArmGravity
 
-HERE = Path(__file__).resolve().parent
-MEASURE_DIR = HERE / "data" / "measure"
-PAYLOAD_DIR = HERE / "config" / "payloads"
+import instance as instances
+
+
+def measure_dir() -> Path:
+    return instances.path("measure")
+
+
+def payload_dir() -> Path:
+    return instances.path("payloads")
 
 
 def theta_to_payload(theta) -> tuple:
@@ -42,14 +48,14 @@ _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 
 def payload_path(arm: str) -> Path:
     """最后一次应用到该臂的快照（拆换后启动仍可自动加载）。"""
-    last = PAYLOAD_DIR / f"_last_{arm}.json"
-    old = PAYLOAD_DIR / f"{arm}.json"
+    last = payload_dir() / f"_last_{arm}.json"
+    old = payload_dir() / f"{arm}.json"
     return last if last.exists() else old
 
 
 def save_payload(arm: str, d: Dict) -> Path:
-    PAYLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    p = PAYLOAD_DIR / f"_last_{arm}.json"
+    payload_dir().mkdir(parents=True, exist_ok=True)
+    p = payload_dir() / f"_last_{arm}.json"
     p.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
     return p
 
@@ -64,7 +70,7 @@ def load_payload(arm: str) -> Optional[Dict]:
 def clear_payload(arm: str) -> None:
     """清掉该臂「最后应用」快照（不影响命名补偿文件）。"""
     arm = "left" if arm == "left" else "right"
-    p = PAYLOAD_DIR / f"_last_{arm}.json"
+    p = payload_dir() / f"_last_{arm}.json"
     if p.is_file():
         p.unlink()
 
@@ -84,13 +90,13 @@ def _check_profile_name(name: str) -> str:
 
 
 def profile_path(name: str) -> Path:
-    return PAYLOAD_DIR / f"{_check_profile_name(name)}.json"
+    return payload_dir() / f"{_check_profile_name(name)}.json"
 
 
 def list_profiles(arm: Optional[str] = None) -> List[Dict]:
-    PAYLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    payload_dir().mkdir(parents=True, exist_ok=True)
     out = []
-    for p in sorted(PAYLOAD_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+    for p in sorted(payload_dir().glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
         if p.stem.startswith("_last_"):
             continue
         try:
@@ -114,10 +120,10 @@ def list_profiles(arm: Optional[str] = None) -> List[Dict]:
 
 
 def list_sessions(arm: Optional[str] = None, poseset: Optional[str] = None) -> List[Dict]:
-    if not MEASURE_DIR.exists():
+    if not measure_dir().exists():
         return []
     out = []
-    for d in sorted(MEASURE_DIR.iterdir(), reverse=True):
+    for d in sorted(measure_dir().iterdir(), reverse=True):
         meta_p, samp_p = d / "meta.json", d / "samples.json"
         if not meta_p.exists() or not samp_p.exists():
             continue
@@ -158,7 +164,7 @@ def load_profile(name: str) -> Dict:
 
 def save_profile(name: str, d: Dict, note: str = "") -> Dict:
     name = _check_profile_name(name)
-    PAYLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    payload_dir().mkdir(parents=True, exist_ok=True)
     out = dict(d)
     out["name"] = name
     if note:
@@ -371,7 +377,7 @@ class MeasureTask:
         self.avg_frames = avg_frames
         self.stop = threading.Event()
         self.samples: List[Dict] = []
-        self.session_dir = MEASURE_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_{poses_cfg['arm']}"
+        self.session_dir = measure_dir() / f"{time.strftime('%Y%m%d_%H%M%S')}_{poses_cfg['arm']}"
         self.phase = "待命"
         self.progress = [0, 0]
 

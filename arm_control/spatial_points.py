@@ -11,9 +11,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent
-POINTS_DIR = ROOT / "config" / "spatial_points"
-_ACTIVE_PATH = POINTS_DIR / "_active.json"
+import instance as instances
+
+
+def points_dir() -> Path:
+    return instances.path("spatial_points")
+
+
+def _active_path() -> Path:
+    return points_dir() / "_active.json"
 _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 
 
@@ -25,14 +31,14 @@ def _check_name(name: str) -> str:
 
 
 def _path(name: str) -> Path:
-    return POINTS_DIR / f"{_check_name(name)}.json"
+    return points_dir() / f"{_check_name(name)}.json"
 
 
 def list_saved() -> List[Dict[str, Any]]:
-    if not POINTS_DIR.is_dir():
+    if not points_dir().is_dir():
         return []
     out = []
-    for path in sorted(POINTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for path in sorted(points_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         if path.name.startswith("_"):
             continue
         try:
@@ -53,21 +59,21 @@ def list_saved() -> List[Dict[str, Any]]:
 
 
 def _read_active() -> str:
-    if not _ACTIVE_PATH.is_file():
+    if not _active_path().is_file():
         return ""
     try:
-        return str(json.loads(_ACTIVE_PATH.read_text(encoding="utf-8")).get("name") or "")
+        return str(json.loads(_active_path().read_text(encoding="utf-8")).get("name") or "")
     except (OSError, json.JSONDecodeError):
         return ""
 
 
 def _write_active(name: str) -> None:
-    POINTS_DIR.mkdir(parents=True, exist_ok=True)
+    points_dir().mkdir(parents=True, exist_ok=True)
     if not name:
-        if _ACTIVE_PATH.is_file():
-            _ACTIVE_PATH.unlink()
+        if _active_path().is_file():
+            _active_path().unlink()
         return
-    _ACTIVE_PATH.write_text(json.dumps({"name": name}, ensure_ascii=False, indent=2), encoding="utf-8")
+    _active_path().write_text(json.dumps({"name": name}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def solve_tcp_ik(model, q0, tcp_m, target_m) -> Tuple[np.ndarray, float]:
@@ -306,7 +312,7 @@ class SpatialPoints:
         point = np.asarray(point_m, dtype=float).reshape(3)
         if not np.all(np.isfinite(point)):
             raise ValueError("空间点不是有限数")
-        POINTS_DIR.mkdir(parents=True, exist_ok=True)
+        points_dir().mkdir(parents=True, exist_ok=True)
         doc = {
             "name": name,
             "saved_at": datetime.now().isoformat(timespec="seconds"),

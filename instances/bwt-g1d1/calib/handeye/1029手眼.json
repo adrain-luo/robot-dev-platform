@@ -8,9 +8,9 @@
   "poseset": "左臂手眼标定",
   "board_size": "11x8",
   "square_size_mm": 15.0,
-  "intrinsics_yaml": "/home/robot/abyss/project/g1d/hand_eye/config/results/1029手眼.yaml",
+  "intrinsics_yaml": "calib/handeye/1029手眼.yaml",
   "intrinsics_fit": {
-    "yaml": "/home/robot/abyss/project/g1d/hand_eye/data/20261029_100052_left/stereo_calibration.yaml",
+    "yaml": "data/handeye/20261029_100052_left/stereo_calibration.yaml",
     "num_pairs": 23,
     "image_size": [
       640,
@@ -63,7 +63,7 @@
         8
       ],
       "square_size_mm": 15.0,
-      "intrinsics_yaml": "/home/robot/abyss/project/g1d/hand_eye/data/20261029_100052_left/stereo_calibration.yaml",
+      "intrinsics_yaml": "data/handeye/20261029_100052_left/stereo_calibration.yaml",
       "T_cam2base": [
         [
           0.005386130046597312,
@@ -166,7 +166,7 @@
         8
       ],
       "square_size_mm": 15.0,
-      "intrinsics_yaml": "/home/robot/abyss/project/g1d/hand_eye/data/20261029_100052_left/stereo_calibration.yaml",
+      "intrinsics_yaml": "data/handeye/20261029_100052_left/stereo_calibration.yaml",
       "T_cam2base": [
         [
           0.01593959480431774,

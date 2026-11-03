@@ -2,7 +2,7 @@
   "camera_source": "teleimager",
   "camera_host": "192.168.123.164",
   "teleimager_path": "/home/robot/yx/teleimager_src_copy",
-  "intrinsics": "/home/robot/abyss/project/g1d/hand_eye/config/results/1029手眼.yaml",
+  "intrinsics": "calib/handeye/1029手眼.yaml",
   "board_size": "11x8",
   "square_size_mm": 15.0,
   "session": "20261029_100052_left",

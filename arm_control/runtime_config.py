@@ -7,9 +7,11 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-HERE = Path(__file__).resolve().parent
-LOCK_PATH = HERE / "config" / "runtime_lock.json"
-HAND_EYE_ROOT = HERE.parent / "hand_eye"
+import instance as instances
+
+
+def lock_path() -> Path:
+    return instances.path("runtime_lock")
 
 # 锁定后禁止从其它入口改这些配置
 _GUARD_PATHS = {
@@ -37,15 +39,15 @@ class RuntimeConfig:
     @staticmethod
     def _read_locked() -> bool:
         try:
-            if LOCK_PATH.is_file():
-                return bool(json.loads(LOCK_PATH.read_text(encoding="utf-8")).get("locked"))
+            if lock_path().is_file():
+                return bool(json.loads(lock_path().read_text(encoding="utf-8")).get("locked"))
         except (OSError, json.JSONDecodeError, TypeError):
             pass
         return False
 
     def _write_locked(self, locked: bool) -> None:
-        LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-        LOCK_PATH.write_text(json.dumps({"locked": bool(locked)}, indent=2), encoding="utf-8")
+        lock_path().parent.mkdir(parents=True, exist_ok=True)
+        lock_path().write_text(json.dumps({"locked": bool(locked)}, indent=2), encoding="utf-8")
 
     @property
     def locked(self) -> bool:
@@ -79,7 +81,7 @@ class RuntimeConfig:
 
     @staticmethod
     def list_stereo_yamls() -> List[Dict[str, str]]:
-        root = HAND_EYE_ROOT / "data"
+        root = instances.path("handeye_sessions")
         out: List[Dict[str, str]] = []
         if not root.is_dir():
             return out
@@ -122,7 +124,7 @@ class RuntimeConfig:
             try:
                 doc = he_results.load_saved(active)
                 bound_yaml = str(doc.get("intrinsics_yaml") or "")
-                cand = he_results.RESULTS_DIR / f"{active}.yaml"
+                cand = he_results.results_dir() / f"{active}.yaml"
                 if not bound_yaml and cand.is_file():
                     bound_yaml = str(cand)
             except (OSError, FileNotFoundError, json.JSONDecodeError, ValueError):
@@ -136,7 +138,7 @@ class RuntimeConfig:
                 doc = he_results.load_saved(item["name"])
                 yp = str(doc.get("intrinsics_yaml") or "")
                 if not yp:
-                    cand = he_results.RESULTS_DIR / f"{item['name']}.yaml"
+                    cand = he_results.results_dir() / f"{item['name']}.yaml"
                     if cand.is_file():
                         yp = str(cand)
                 row["intrinsics_yaml"] = yp

@@ -77,7 +77,7 @@ class PayloadAPI:
             task = self._id_task
         kind = self._id.get("kind")
         if sess and kind != "validate":
-            sdir = iden.MEASURE_DIR / str(sess)
+            sdir = iden.measure_dir() / str(sess)
             st["session_dir"] = str(sdir) if sdir.is_dir() else None
         else:
             st["session_dir"] = None
@@ -233,7 +233,7 @@ class PayloadAPI:
             session = body.get("session") or self.identify_status().get("session")
             if not session:
                 raise ValueError("没有测量会话")
-            sdir = iden.MEASURE_DIR / str(session)
+            sdir = iden.measure_dir() / str(session)
             samples = json.loads((sdir / "samples.json").read_text(encoding="utf-8"))
             meta = json.loads((sdir / "meta.json").read_text(encoding="utf-8"))
             source = str(body.get("source") or "pd")

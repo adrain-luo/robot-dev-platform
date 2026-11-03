@@ -60,20 +60,19 @@ python server.py --allow-real-motion --max-speed 0.2   # 真机
 | `dds/` | Unitree DDS：`lowstate`、立柱 `hispeed`、Agv |
 | `model/` | 机型加载（`robot_profile.py`）、关节布局、URDF FK、重力 |
 | `robots/<机型>/` | `robot.json` + URDF + 网格；字段说明见 [`robots/README.md`](robots/README.md) |
-| `config/g1d.json` | 本机运行参数：机型名 `robot`、网卡、DDS 域、默认限速 |
 | `frontend/` | 唯一前端 |
 | `detect_localize.py` | 识别定位流水线 |
 | `board_touch.py` | 棋盘看一眼 + 触摸 |
 | `tcp_calib.py` / `spatial_points.py` / `work_pose.py` | TCP、空间点、工作姿态 |
 | `lift_*.py` | 立柱零位与闭环 |
 | `runtime_config.py` | 可锁定的成套配置 |
-| `config/` | `g1d.json`、URDF、TCP/工作姿态/空间点/立柱零位等 |
+| `instance.py` | 机器实例：本机设置与标定数据的位置，见 [`instances/README.md`](../instances/README.md) |
 
 ## 数据落在哪
 
 | 内容 | 位置 |
 |------|------|
-| 姿态集、补偿文件 | `../arm_payload_gravity/config/` |
-| 负载测量、到位对比 | `../arm_payload_gravity/data/`（一般不进 git） |
-| 手眼会话与结果 | `../hand_eye/data/`、`../hand_eye/config/results/` |
-| TCP / 工作姿态 / 空间点 / 立柱零位 | `config/tcp_results/`、`config/work_poses/`、`config/spatial_points/`、`config/lift_zero.json` |
+| 姿态集、补偿文件 | 实例的 `calib/posesets/`、`calib/payloads/` |
+| 负载测量、到位对比 | 实例的 `data/measure/`、`data/validate/`（不进 git） |
+| 手眼会话与结果 | 实例的 `data/handeye/`、`calib/handeye/` |
+| TCP / 工作姿态 / 空间点 / 立柱零位 | 实例的 `calib/tcp/`、`calib/work_poses/`、`calib/spatial_points/`、`state/lift_zero.json` |

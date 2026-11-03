@@ -8,9 +8,12 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import math
+import os
 import re
+import signal
 import numpy as np
 import sys
 import threading
@@ -35,6 +38,7 @@ if str(HAND_EYE_ROOT) not in sys.path:
 from backends import BACKENDS, create_backend
 from backends.base import Backend, LiftDriver, LiftReader, StateSource
 from config_loader import load_settings
+import instance as instances
 from controller.arm_loop import ArmLoop, PermissionErrorMotion
 import lift_calib
 from lift_control import LiftController
@@ -331,6 +335,7 @@ class App:
             "mode": "real" if self.allow_real_motion else "readonly",
             "robot": self.settings.robot,
             "backend": self.backend.name,
+            "instance": instances.active().name,
             "arm": arm,
             "iface": self.settings.network_interface,
             "topic": self.settings.state_topic,
@@ -443,6 +448,7 @@ class App:
             "mode": "real" if self.allow_real_motion else "readonly",
             "robot": self.settings.robot,
             "backend": self.backend.name,
+            "instance": instances.active().name,
             "iface": self.settings.network_interface,
             "topic": self.settings.state_topic,
             "command_topic": self.settings.command_topic,
@@ -1386,15 +1392,26 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Arm viewer / optional motion")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=10184)
-    p.add_argument("--config", type=Path, default=None)
-    p.add_argument("--robot", default=None, help="机型名（robots/<名字>/robot.json），默认取 config 里的 robot")
+    p.add_argument("--instance", default=None,
+                   help="机器实例（instances/<名字>），默认按 ARM_INSTANCE / instances/default；mock 默认用临时实例")
+    p.add_argument("--robot", default=None, help="机型名（robots/<名字>/robot.json），默认取实例里的 robot")
     p.add_argument("--backend", default=None, choices=BACKENDS, help="硬件后端，默认取机型 robot.json；mock 为仿真")
     p.add_argument("--iface", default=None)
     p.add_argument("--allow-real-motion", action="store_true")
     p.add_argument("--max-speed", type=float, default=None, help="rad/s, default 0.2, clamp 0.02–1.0")
     args = p.parse_args()
 
-    settings = load_settings(args.config, robot=args.robot, backend=args.backend)
+    backend_name = args.backend or os.environ.get("ARM_BACKEND")
+    explicit = args.instance or os.environ.get("ARM_INSTANCE")
+    if backend_name == "mock" and not explicit:
+        # 仿真默认不碰任何真实机器的标定数据
+        inst = instances.temporary_instance(args.robot or "g1d")
+        atexit.register(instances.cleanup, inst)
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    else:
+        inst = instances.resolve(args.instance)
+    instances.activate(inst)
+    settings = load_settings(inst, robot=args.robot, backend=args.backend)
     activate_profile(settings.profile)
     if args.iface:
         settings.network_interface = args.iface
@@ -1413,7 +1430,7 @@ def main() -> int:
     if backend.name == "mock":
         mode = "MOCK"
     print(
-        f"[arm_control] {settings.robot} {mode}  http://{args.host}:{args.port}/  "
+        f"[arm_control] {settings.robot} {mode}  instance={inst.name}  http://{args.host}:{args.port}/  "
         f"iface={settings.network_interface}  max_speed={settings.max_speed_rad_s}",
         flush=True,
     )

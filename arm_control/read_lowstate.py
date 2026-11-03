@@ -20,13 +20,14 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from config_loader import load_settings
+import instance as instances
 from dds.lowstate import LowStateReader
 from model.layout import format_q_table, get_arm
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="G1D read-only rt/lowstate viewer")
-    p.add_argument("--config", type=Path, default=None, help="path to g1d.json")
+    p.add_argument("--instance", default=None, help="机器实例名（instances/<名字>），默认按 ARM_INSTANCE / instances/default")
     p.add_argument("--arm", choices=("right", "left", "both"), default="right")
     p.add_argument("--iface", default=None, help="override network interface")
     p.add_argument("--timeout", type=float, default=None, help="first-sample timeout (s)")
@@ -35,7 +36,7 @@ def main() -> int:
     p.add_argument("--rad", action="store_true", help="print radians instead of degrees")
     args = p.parse_args()
 
-    settings = load_settings(args.config)
+    settings = load_settings(instances.resolve(args.instance))
     iface = args.iface or settings.network_interface
     timeout = args.timeout if args.timeout is not None else settings.lowstate_timeout_s
     arms = ("right", "left") if args.arm == "both" else (args.arm,)

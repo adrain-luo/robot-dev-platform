@@ -1,6 +1,6 @@
 """立柱最低点标定：把当前 hispeed.y 记为零位行程。
 
-结果写在 config/lift_zero.json，重启后仍生效。
+结果写在实例的 state/lift_zero.json，重启后仍生效。
 """
 
 from __future__ import annotations
@@ -11,10 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import instance as instances
 from model.robot_profile import active as active_profile
 
-ROOT = Path(__file__).resolve().parent
-ZERO_PATH = ROOT / "config" / "lift_zero.json"
+
+def zero_path() -> Path:
+    return instances.path("lift_zero")
+
 
 _lock = threading.Lock()
 _zero_m: Optional[float] = None
@@ -33,9 +36,9 @@ def load_zero() -> float:
             return float(_zero_m)
         zero = _default_zero()
         source = "default"
-        if ZERO_PATH.is_file():
+        if zero_path().is_file():
             try:
-                doc = json.loads(ZERO_PATH.read_text(encoding="utf-8"))
+                doc = json.loads(zero_path().read_text(encoding="utf-8"))
                 zero = float(doc["height_zero_m"])
                 source = "file"
             except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
@@ -56,21 +59,21 @@ def save_zero(height_m: float) -> Dict[str, Any]:
         "saved_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "source": "frontend",
     }
-    ZERO_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ZERO_PATH.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    zero_path().parent.mkdir(parents=True, exist_ok=True)
+    zero_path().write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with _lock:
         _zero_m = zero
         _loaded = True
-    return {"ok": True, **doc, "path": str(ZERO_PATH.relative_to(ROOT))}
+    return {"ok": True, **doc, "path": instances.active().to_stored(zero_path())}
 
 
 def status() -> Dict[str, Any]:
     zero = load_zero()
-    from_file = ZERO_PATH.is_file()
+    from_file = zero_path().is_file()
     saved_at = None
     if from_file:
         try:
-            saved_at = json.loads(ZERO_PATH.read_text(encoding="utf-8")).get("saved_at")
+            saved_at = json.loads(zero_path().read_text(encoding="utf-8")).get("saved_at")
         except (OSError, json.JSONDecodeError, TypeError):
             saved_at = None
     return {

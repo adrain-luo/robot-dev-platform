@@ -6,6 +6,21 @@
 import math
 
 
+def test_mock_writes_go_to_temp_instance(mock_server):
+    """mock 默认用临时实例：页面上的保存 / 锁定不碰仓库里任何真实机器的数据。"""
+    from pathlib import Path
+    real = Path(__file__).resolve().parents[1] / "instances"
+    before = {p: p.stat().st_mtime_ns for p in real.rglob("*") if p.is_file()}
+    assert mock_server.get("/api/scene")["instance"] == "temp"
+    code, d = mock_server.post("/api/runtime-config/lock", {"locked": True})
+    assert code == 200 and d["locked"]
+    code, d = mock_server.post("/api/lift/set-zero")
+    assert code == 200 and d["ok"] and d["path"] == "state/lift_zero.json", d
+    mock_server.post("/api/runtime-config/lock", {"locked": False})
+    after = {p: p.stat().st_mtime_ns for p in real.rglob("*") if p.is_file()}
+    assert before == after
+
+
 def test_scene_shape(mock_server):
     s = mock_server.get("/api/scene")
     assert s["ok"] and s["backend"] == "mock" and s["robot"] == "g1d"
