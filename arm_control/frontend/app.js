@@ -96,6 +96,47 @@ function appendJointRows(tb, joints, { section } = {}) {
     tb.appendChild(tr);
   }
 }
+const WAIST_ROLE = { yaw: "旋转", pitch: "俯仰", roll: "侧倾" };
+window.ROBOT = null;
+
+// 机型能力（/api/robot）：标题、腰与立柱控件按它显示或隐藏
+function applyRobotCaps(caps) {
+  window.ROBOT = caps;
+  const title = `${caps.label} 臂控`;
+  document.title = title;
+  if ($("app-title")) $("app-title").textContent = title;
+  const show = (id, on) => { const el = $(id); if (el) el.style.display = on ? "" : "none"; };
+  const w = caps.waist;
+  const desc = w ? w.joints.map((j) => `电机 ${j.motor} ${WAIST_ROLE[j.role] || j.role}`).join(" / ") : "无";
+  if ($("joints-note")) $("joints-note").textContent = `臂：视图所选（双臂时显示控制臂）。腰：${desc}。`;
+  show("lift-zero-block", !!caps.lift);
+  show("lift-ctrl", !!caps.lift);
+  show("waist-ctrl", !!(w && w.movable));
+  if ($("waist-note")) {
+    if (!w) $("waist-note").textContent = "这台没有腰。";
+    else if (!w.movable) $("waist-note").textContent = "腰：只在接管时保持当前角，不开放转动（站立时转腰会影响平衡）。";
+    else {
+      const lim = w.joints.map((j) => `${WAIST_ROLE[j.role] || j.role} ${j.limit_deg[0].toFixed(1)}°～${j.limit_deg[1].toFixed(1)}°`).join("，");
+      $("waist-note").textContent = `腰：接管后与手臂共用限速。${lim}。条形拖到目标松手后走。`;
+    }
+  }
+  if (w) {
+    for (const j of w.joints) {
+      for (const id of [`waist-${j.role}-slider`, `waist-${j.role}`]) {
+        const el = $(id);
+        if (el) { el.min = String(j.limit_deg[0].toFixed(1)); el.max = String(j.limit_deg[1].toFixed(1)); }
+      }
+    }
+  }
+  if (caps.lift) {
+    for (const id of ["lift-slider", "lift-target"]) {
+      const el = $(id);
+      if (el) el.max = String(Math.round(caps.lift.stroke_max_mm));
+    }
+  }
+}
+fetch("/api/robot", { cache: "no-store" }).then((r) => r.json()).then(applyRobotCaps).catch(() => {});
+
 function renderTable(snap, waist) {
   const tb = $("joints-table").querySelector("tbody");
   tb.innerHTML = "";
@@ -103,7 +144,7 @@ function renderTable(snap, waist) {
     appendJointRows(tb, snap.joints, { section: `臂 · ${snap.arm || ""}` });
   }
   if (waist && waist.joints && waist.joints.length) {
-    appendJointRows(tb, waist.joints, { section: "腰 · 12 旋转 / 14 俯仰" });
+    appendJointRows(tb, waist.joints, { section: `腰 · ${waist.joints.map((j) => `${j.motor} ${WAIST_ROLE[j.label.replace("waist_", "")] || j.label}`).join(" / ")}` });
   }
 }
 
@@ -314,26 +355,27 @@ function applyCtrl(ctrl) {
   });
   const mirror = $("btn-poseset-mirror");
   if (mirror) mirror.disabled = !window.currentSet;
-  if ($("btn-teach")) $("btn-teach").disabled = !allow || !ctrl.engaged;
+  if ($("btn-teach")) $("btn-teach").disabled = !allow || !ctrl.engaged || settling;
   $("btn-teach").textContent = ctrl.float ? "结束拖拽" : "拖拽";
   $("grav-on").checked = ctrl.gravity_ff !== false;
+  const settling = !!(ctrl.engaged && ctrl.ready === false);
   $("engage-state").textContent = allow
-    ? (ctrl.engaged
+    ? (ctrl.transition ? `过渡中 · ${ctrl.transition}` : ctrl.engaged
         ? `${ctrl.float ? "拖拽中" : "已接管"} · ${ctrl.arm}${ctrl.waist_locked ? " · 腰保持" : ""}${
             ctrl.payload_mass_kg != null ? ` · 载 ${Number(ctrl.payload_mass_kg).toFixed(2)} kg${ctrl.payload_name ? "(" + ctrl.payload_name + ")" : ""}` : ""
           }`
         : "未接管")
     : "只读（加 --allow-real-motion 后可接管）";
-  document.querySelectorAll(".g-q, .g-slider").forEach((el) => { el.disabled = !allow || !!ctrl.float; });
-  $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float;
+  document.querySelectorAll(".g-q, .g-slider").forEach((el) => { el.disabled = !allow || !!ctrl.float || settling; });
+  $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float || settling;
   document.querySelectorAll(".tcp-jog-btn").forEach((el) => {
-    el.disabled = !allow || !ctrl.engaged || !!ctrl.float || tcpJogBusy;
+    el.disabled = !allow || !ctrl.engaged || !!ctrl.float || tcpJogBusy || settling;
   });
   ["tcp-jog-step-mm", "tcp-jog-step-deg"].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = !allow;
   });
-  const waistNeed = !allow || !ctrl.engaged || !!ctrl.float;
+  const waistNeed = !allow || !ctrl.engaged || !!ctrl.float || settling || !(window.ROBOT?.waist?.movable ?? true);
   ["btn-waist-go", "btn-waist-fill", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p",
    "waist-yaw", "waist-pitch", "waist-step", "waist-yaw-slider", "waist-pitch-slider"].forEach((id) => {
     const el = $(id);
@@ -396,6 +438,7 @@ async function poll() {
       for (const j of (arm && arm.joints) || []) joints[j.name] = j.q_rad;
     }
     Object.assign(joints, data.waist || {});
+    Object.assign(joints, data.body || {});
     if (data.lift && data.lift.joints) Object.assign(joints, data.lift.joints);
     window.lastWaist = data.waist || {};
     renderWaist(data);
@@ -1081,10 +1124,13 @@ function renderWaist(data) {
   if (!note) return;
   const w = data.waist || {};
   const tgt = (data.ctrl && data.ctrl.waist_target_rad) || null;
-  const yawRad = w.torso_Joint;
-  const pitchRad = w.Yaw_Joint;
-  let text = `腰实测 旋转 ${waistDeg(yawRad)}（电机12） · 俯仰 ${waistDeg(pitchRad)}（电机14）`;
-  if (tgt) text += `　指令 旋转 ${waistDeg(Number(tgt["12"]))} · 俯仰 ${waistDeg(Number(tgt["14"]))}`;
+  const axes = (w.joints || []).map((j) => ({ role: j.label.replace("waist_", ""), motor: j.motor, q: j.q_rad }));
+  const axis = (role) => axes.find((a) => a.role === role) || {};
+  const yawRad = axis("yaw").q;
+  const pitchRad = axis("pitch").q;
+  if (!axes.length) { note.textContent = "腰 —"; renderLiftCtrl(data.lift); return; }
+  let text = "腰实测 " + axes.map((a) => `${WAIST_ROLE[a.role] || a.role} ${waistDeg(a.q)}（电机${a.motor}）`).join(" · ");
+  if (tgt) text += "　指令 " + axes.map((a) => `${WAIST_ROLE[a.role] || a.role} ${waistDeg(Number(tgt[String(a.motor)]))}`).join(" · ");
   note.textContent = text;
   if (!waistSliderDragging && !window.waistTargetDirty) {
     const yawDeg = Number.isFinite(yawRad) ? yawRad * 180 / Math.PI : null;

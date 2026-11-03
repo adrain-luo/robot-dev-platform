@@ -117,6 +117,8 @@ class RobotProfile:
     mirror_q_sign: Tuple[float, ...]
     waist: Optional[WaistSpec]
     lift: Optional[LiftSpec]
+    # 只用于三维显示的其它关节（电机号 → URDF 关节名），如 G1 的腿
+    display_joints: Dict[int, str] = field(default_factory=dict)
 
     @property
     def meshes_dir(self) -> Path:
@@ -217,6 +219,7 @@ def _parse(raw: Dict[str, Any], root: Path) -> RobotProfile:
         mirror_q_sign=mirror,
         waist=waist,
         lift=lift,
+        display_joints={int(k): str(v) for k, v in (raw.get("display_joints") or {}).items()},
     )
 
 

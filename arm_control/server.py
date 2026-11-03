@@ -348,6 +348,44 @@ class App:
             "ctrl": ctrl,
         }
 
+    def robot_caps(self) -> Dict[str, Any]:
+        """给前端的机型能力：决定显示哪些控件。"""
+        p = self.profile
+        w = p.waist
+        return {
+            "ok": True,
+            "name": p.name,
+            "label": p.name.upper(),
+            "display_name": p.display_name,
+            "backend": self.backend.name,
+            "instance": instances.active().name,
+            "arms": list(p.arms),
+            "waist": None if w is None else {
+                "movable": w.movable,
+                "joints": [
+                    {"role": j.role, "name": j.urdf_joint, "motor": j.motor,
+                     "limit_deg": [math.degrees(j.limit_rad[0]), math.degrees(j.limit_rad[1])]}
+                    for j in w.joints
+                ],
+            },
+            "lift": None if p.lift is None else {"stroke_max_mm": p.lift.stroke_max_m * 1000.0},
+            # 接管 / 释放有过渡（arm_sdk）：页面显示进度，过渡中不能走点
+            "transitions": self.backend.name == "unitree_arm_sdk",
+            # 腿式机型：三维里根在骨盆，要按腿部实测贴地
+            "legged": bool(p.display_joints),
+        }
+
+    def body_joints(self) -> Dict[str, float]:
+        """只用于三维显示的其它关节（如 G1 的腿）。"""
+        disp = self.profile.display_joints
+        if not disp:
+            return {}
+        try:
+            st = self.reader().read_motor_states(list(disp))
+        except Exception:
+            return {}
+        return {name: st[i]["q"] for i, name in disp.items()}
+
     def both_scenes(self) -> Dict[str, Any]:
         self.reader()
         arms = {}
@@ -456,6 +494,7 @@ class App:
             "identify": self.payload.identify_status(),
             "handeye": self.handeye.status(),
             "waist": waist,
+            "body": self.body_joints(),
             "lift": lift,
             "tcp": self.tcp.status(),
             "spatial": self.points.status(),
@@ -1197,6 +1236,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_error(404)
                     return
                 _file(self, mesh, "application/octet-stream")
+                return
+            if path == "/api/robot":
+                _json(self, 200, APP.robot_caps())
                 return
             if path == "/api/runtime-config":
                 _json(self, 200, APP.runtime.snapshot())

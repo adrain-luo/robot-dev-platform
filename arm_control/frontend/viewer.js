@@ -117,6 +117,11 @@ const View = {
       this.robot = robot;
       robot.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(robot);
+      // 腿式机型（如 G1）根在骨盆、一截在原点下面：抬到脚落地，之后随腿部实测再贴地。
+      // 由后端机型能力明确告知，不按几何猜（G1D 底盘也有部分低于原点，但它不该动）
+      this._floating = await fetch("/api/robot", { cache: "no-store" })
+        .then((r) => r.json()).then((c) => !!c.legged).catch(() => false);
+      if (this._floating) this._ground(box);
       const size = box.getSize(new THREE.Vector3());
       this.height = Math.max(size.z, 0.4);
       const grid = new THREE.GridHelper(Math.max(this.height * 2.4, 2), 16, 0x243044, 0x1a2330);
@@ -227,9 +232,11 @@ const View = {
   },
   home() {
     if (!this.camera) return;
-    const distance = Math.max(this.height || 1.2, 1) * 1.7;
-    this.camera.position.set(distance * 0.85, -distance * 0.65, (this.height || 1) * 0.72);
-    this.controls.target.set(0, 0, (this.height || 1) * 0.35);
+    // 对准模型高度中部；腿式机型（G1）重心比带立柱的 G1D 高，按 0.35 会切掉头
+    const h = this.height || 1;
+    const distance = Math.max(h, 1) * (this._floating ? 2.0 : 1.7);
+    this.camera.position.set(distance * 0.85, -distance * 0.65, h * (this._floating ? 0.8 : 0.72));
+    this.controls.target.set(0, 0, h * (this._floating ? 0.5 : 0.35));
     this.controls.update();
     this.render();
   },
@@ -645,6 +652,12 @@ const View = {
   render() {
     if (this.renderer && this.scene3 && this.camera) this.renderer.render(this.scene3, this.camera);
   },
+  _ground(box) {
+    const b = box || new THREE.Box3().setFromObject(this.robot);
+    this.robot.position.z -= b.min.z;
+    this.robot.updateMatrixWorld(true);
+    this._groundAt = performance.now();
+  },
   sync(data) {
     if (!this.ready || !data) return false;
     try {
@@ -658,6 +671,7 @@ const View = {
         }
       }
       this.robot.updateMatrixWorld(true);
+      if (this._floating && performance.now() - (this._groundAt || 0) > 1000) this._ground();
       this._lines(this.cmdLine, data, "cmd_links");
       this._lines(this.tgtLine, data, "target_links");
       this._payload(data);

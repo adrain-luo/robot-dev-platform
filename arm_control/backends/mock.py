@@ -4,7 +4,7 @@
   刚度为 0（拖拽）时停在原处；指令超过 0.5 s 不来就保持当前角。
 - 力矩估计：kp·(q_cmd − q) − kd·dq + τ_ff，只是给页面一个合理的数。
 - 立柱：HeightAdjust 的 vz 乘官方满速 76.5 mm/s 积分，夹在零位到最大行程之间。
-- 初始姿态：两臂取 robot.json 的 home_q，腰 0，立柱在行程中段。
+- 初始姿态：两臂取 robot.json 的 home_q，腰 0，立柱在行程中段；有腿的机型摆成屈膝站姿。
 """
 
 from __future__ import annotations
@@ -32,6 +32,8 @@ CMD_TIMEOUT_S = 0.5
 LIFT_MAX_SPEED_MPS = 0.0765
 LIFT_CMD_TIMEOUT_S = 0.5
 MOCK_MODE_MACHINE = 5
+# G1 站立时实测的腿部角度（rad）
+MOCK_STAND = {"hip_pitch": -0.37, "knee": 0.63, "ankle_pitch": -0.30}
 
 
 class MockRobot:
@@ -47,6 +49,11 @@ class MockRobot:
         for arm in profile.arms.values():
             for i, qi in zip(arm.motor_indices, arm.home_q or [0.0] * arm.n):
                 self.q[i] = float(qi)
+        # 有腿的机型（只显示用的关节）摆成 G1 实测的屈膝站姿
+        for i, name in profile.display_joints.items():
+            for key, q in MOCK_STAND.items():
+                if key in name and i < n:
+                    self.q[i] = q
         self._cmd: Optional[Dict[str, List[float]]] = None
         self._cmd_t = 0.0
         self.last_t = time.monotonic()

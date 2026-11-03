@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>G1D 臂控</title>
+<title>臂控</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -21,7 +21,7 @@
   <div class="brand">
     <div class="mark" aria-hidden="true"></div>
     <div>
-      <h1>G1D 臂控</h1>
+      <h1 id="app-title">臂控</h1>
       <p id="meta" class="meta">等待低层状态</p>
     </div>
   </div>
@@ -522,7 +522,7 @@
           <article class="float" id="panel-joints">
             <button type="button" class="float-toggle">关节</button>
             <div class="float-body">
-              <p class="note">臂：视图所选（双臂时显示控制臂）。腰：电机 12 旋转 / 14 俯仰（官方 G1D 表）。</p>
+              <p class="note" id="joints-note">臂：视图所选（双臂时显示控制臂）。</p>
               <div class="table-scroll">
                 <table id="joints-table">
                   <thead>
@@ -531,19 +531,22 @@
                   <tbody></tbody>
                 </table>
               </div>
-              <div class="cmds">
-                <button id="btn-lift-zero" type="button">记为最低点</button>
+              <div id="lift-zero-block">
+                <div class="cmds">
+                  <button id="btn-lift-zero" type="button">记为最低点</button>
+                </div>
+                <p class="note" id="lift-now">立柱高度 —</p>
+                <p class="note" id="lift-delta">把立柱降到机械最低后点「记为最低点」，当前高度会写成零位并立刻应用到三维。</p>
               </div>
-              <p class="note" id="lift-now">立柱高度 —</p>
-              <p class="note" id="lift-delta">把立柱降到机械最低后点「记为最低点」，当前高度会写成零位并立刻应用到三维。</p>
             </div>
           </article>
 
           <article class="float" id="panel-waist">
             <button type="button" class="float-toggle">躯体控制</button>
             <div class="float-body">
-              <p class="note">腰：接管后与手臂共用限速。电机 12 旋转 ±155°，电机 14 俯仰 -2.5°～135°。条形拖到目标松手后走。</p>
+              <p class="note" id="waist-note">腰：接管后与手臂共用限速。条形拖到目标松手后走。</p>
               <p class="note" id="waist-now">腰 —</p>
+              <div id="waist-ctrl">
               <label class="field grow">旋转 °
                 <input id="waist-yaw-slider" type="range" min="-155" max="155" step="0.5" value="0">
               </label>
@@ -570,6 +573,8 @@
                 <button id="btn-waist-go" class="primary" type="button">到目标</button>
                 <button id="btn-waist-stop" class="danger" type="button">停止腰</button>
               </div>
+              </div>
+              <div id="lift-ctrl">
               <p class="note" style="margin-top:12px">立柱：用 Agv HeightAdjust 闭环到行程。条形拖到目标松手后走；也可按步长升/降一步。</p>
               <p class="note" id="lift-ctrl-now">立柱 —</p>
               <label class="field grow">行程 mm
@@ -588,6 +593,7 @@
                 <button id="btn-lift-up" type="button">升一步</button>
                 <button id="btn-lift-go" class="primary" type="button">到目标</button>
                 <button id="btn-lift-stop" class="danger" type="button">停止升降</button>
+              </div>
               </div>
             </div>
           </article>

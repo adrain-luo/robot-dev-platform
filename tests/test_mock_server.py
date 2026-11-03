@@ -107,3 +107,13 @@ def test_switch_arm_requires_release(mock_server):
     code, d = c.post("/api/control-arm", {"arm": "left"})
     assert code == 200 and d["ctrl"]["arm"] == "left"
     c.post("/api/control-arm", {"arm": "right"})
+
+
+def test_robot_caps(mock_server):
+    """前端靠它决定显示哪些控件：G1D 有立柱、腰可转、非腿式。"""
+    c = mock_server.get("/api/robot")
+    assert c["name"] == "g1d" and c["label"] == "G1D" and c["backend"] == "mock"
+    assert c["lift"]["stroke_max_mm"] == 420 and c["waist"]["movable"] is True
+    assert [j["motor"] for j in c["waist"]["joints"]] == [12, 14]
+    assert c["legged"] is False and c["transitions"] is False
+    assert mock_server.get("/api/scene")["body"] == {}
