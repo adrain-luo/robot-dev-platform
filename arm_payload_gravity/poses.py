@@ -2,7 +2,7 @@
 
 关节顺序：肩 pitch/roll/yaw、肘、腕 roll/pitch/yaw。
 G1D URDF 左右轴定义相同（pitch∥Y、roll∥X、yaw∥Z），限位关于 0 对调。
-镜像：绕 Y 的角不变，绕 X/Z 的角取反 → 符号 [1,-1,-1, 1,-1, 1,-1]。
+镜像：绕 Y 的角不变，绕 X/Z 的角取反 → 符号 [1,-1,-1, 1,-1, 1,-1]（机型 robot.json 的 mirror_q_sign）。
 """
 
 from __future__ import annotations
@@ -22,17 +22,23 @@ if str(_ARM) not in sys.path:
 
 from model.arm_gravity import ArmGravity
 from model.layout import get_arm
+from model.robot_profile import active as active_profile
 
 HERE = Path(__file__).resolve().parent
 SETS_DIR = HERE / "config" / "posesets"
 _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 
-# 与 H2 示教镜像同一套：pitch 同号，roll/yaw 反号
-MIRROR_SIGN = np.array([1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0])
-HOME_Q = {
-    "right": [0.2, -0.25, 0.0, 0.9, 0.0, -0.1, 0.0],
-    "left": [0.2, 0.25, 0.0, 0.9, 0.0, -0.1, 0.0],
-}
+def _mirror_sign() -> np.ndarray:
+    """机型 robot.json 的 mirror_q_sign（G1D：pitch 同号，roll/yaw 反号）。"""
+    sign = active_profile().mirror_q_sign
+    if not sign:
+        raise ValueError(f"{active_profile().name} 没有配置 mirror_q_sign，不能镜像")
+    return np.asarray(sign, float)
+
+
+def _home_q(arm: str) -> List[float]:
+    layout = get_arm(arm)
+    return list(layout.home_q) if layout.home_q else [0.0] * layout.n
 
 
 def _check_name(name: str) -> str:
@@ -47,7 +53,8 @@ def set_path(name: str) -> Path:
 
 
 def mirror_q(q) -> List[float]:
-    return [round(float(v), 5) + 0.0 for v in np.asarray(q, float).reshape(7) * MIRROR_SIGN]
+    sign = _mirror_sign()
+    return [round(float(v), 5) + 0.0 for v in np.asarray(q, float).reshape(sign.size) * sign]
 
 
 def condition_number(arm: str, qs: List, urdf_path: Path, base_link: str) -> Optional[float]:
@@ -110,7 +117,7 @@ def create_set(name: str, arm: str, note: str = "") -> Dict:
         "arm": arm,
         "note": note,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "home_q": list(HOME_Q[arm]),
+        "home_q": _home_q(arm),
         "poses": [],
     }
     save_set(d)
@@ -180,7 +187,7 @@ def mirror_set(src: str, urdf_path: Path, base_link: str, name: Optional[str] = 
         "note": note or f"由{src_arm}臂「{d.get('name')}」关于 y=0 镜像。",
         "created": now,
         "mirrored_from": {"name": d.get("name"), "arm": src_arm},
-        "home_q": mirror_q(d.get("home_q", HOME_Q[src_arm])),
+        "home_q": mirror_q(d.get("home_q", _home_q(src_arm))),
         "poses": poses,
     }
     path = set_path(new_name)

@@ -2,48 +2,10 @@
   "robot": "g1d",
   "network_interface": "enp86s0",
   "unitree_sdk_path": null,
-  "command_topic": "rt/lowcmd",
-  "state_topic": "rt/lowstate",
-  "urdf": "g1_d.urdf",
-  "base_link": "torso_link",
   "dds_domain": 0,
   "lowstate_timeout_s": 5.0,
-  "waist": {
-    "yaw_joint": "torso_Joint",
-    "yaw_motor_index": 12
-  },
-  "arms": {
-    "right": {
-      "tip_link": "right_wrist_yaw_link",
-      "joint_names": [
-        "right_shoulder_pitch_joint",
-        "right_shoulder_roll_joint",
-        "right_shoulder_yaw_joint",
-        "right_elbow_joint",
-        "right_wrist_roll_joint",
-        "right_wrist_pitch_joint",
-        "right_wrist_yaw_joint"
-      ],
-      "motor_indices": [22, 23, 24, 25, 26, 27, 28]
-    },
-    "left": {
-      "tip_link": "left_wrist_yaw_link",
-      "joint_names": [
-        "left_shoulder_pitch_joint",
-        "left_shoulder_roll_joint",
-        "left_shoulder_yaw_joint",
-        "left_elbow_joint",
-        "left_wrist_roll_joint",
-        "left_wrist_pitch_joint",
-        "left_wrist_yaw_joint"
-      ],
-      "motor_indices": [15, 16, 17, 18, 19, 20, 21]
-    }
-  },
   "defaults": {
     "max_speed_rad_s": 0.2,
-    "kp": null,
-    "kd": null,
     "allow_real_motion": false
   }
 }

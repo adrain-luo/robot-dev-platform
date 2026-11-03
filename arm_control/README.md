@@ -55,7 +55,9 @@ python server.py --allow-real-motion --max-speed 0.2   # 真机
 | `server.py` | HTTP + 汇总各模块 API |
 | `controller/` | `ArmLoop` 限速、接管、腰保持 |
 | `dds/` | `lowstate`、立柱 `hispeed`、Agv |
-| `model/` | 关节布局、URDF FK、重力 |
+| `model/` | 机型加载（`robot_profile.py`）、关节布局、URDF FK、重力 |
+| `robots/<机型>/` | `robot.json` + URDF + 网格；字段说明见 [`robots/README.md`](robots/README.md) |
+| `config/g1d.json` | 本机运行参数：机型名 `robot`、网卡、DDS 域、默认限速 |
 | `frontend/` | 唯一前端 |
 | `detect_localize.py` | 识别定位流水线 |
 | `board_touch.py` | 棋盘看一眼 + 触摸 |

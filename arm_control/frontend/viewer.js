@@ -140,7 +140,7 @@ const View = {
     return line;
   },
   async _load() {
-    const text = await fetch(BASE + "g1_d.urdf").then((r) => {
+    const text = await fetch(BASE + "robot.urdf").then((r) => {
       if (!r.ok) throw new Error("读不到 URDF");
       return r.text();
     });

@@ -9,20 +9,12 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from controller.gains import G1_NUM_MOTOR, KD_BODY, KP_BODY, WAIST_LOCK_KD, WAIST_LOCK_KP
 from dds.lowstate import LowStateReader
 from dds.sdk import init_channel
 from model.arm_gravity import ArmGravity
 from model.fk_scene import RobotKinematics
-from model.layout import (
-    ArmLayout,
-    WAIST_MOTOR_INDICES,
-    WAIST_PITCH_LIMIT_RAD,
-    WAIST_PITCH_MOTOR_INDEX,
-    WAIST_YAW_LIMIT_RAD,
-    WAIST_YAW_MOTOR_INDEX,
-    get_arm,
-)
+from model.layout import ArmLayout, get_arm
+from model.robot_profile import active as active_profile
 
 TAU_FF_LIMIT = 8.0
 TEACH_KD = 2.0
@@ -65,12 +57,15 @@ class ArmLoop:
 
         self.reader = reader
         self.kin = kin
+        self.profile = active_profile()
         self.layout: ArmLayout = get_arm(arm)
         self.max_speed = float(np.clip(max_speed_rad_s, 0.02, 1.0))
         self._dt = 1.0 / float(rate_hz)
         self.limits = self.kin.arms[self.layout.name].model.joint_limits()
-        self.kp_body = list(KP_BODY)
-        self.kd_body = list(KD_BODY)
+        self.kp_body = list(self.profile.kp)
+        self.kd_body = list(self.profile.kd)
+        self._waist = self.profile.waist
+        self._waist_motors = self._waist.hold_motors if self._waist else ()
         urdf = Path(urdf_path) if urdf_path is not None else self.kin.urdf_path
         self._grav = ArmGravity(self.layout.name, urdf, base_link)
         self._grav_on = True
@@ -130,6 +125,9 @@ class ArmLoop:
     def _release_motion_mode(self) -> None:
         if self._released_mode:
             return
+        if not self.profile.control.release_motion_mode:
+            self._released_mode = True
+            return
         try:
             from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (
                 MotionSwitcherClient,
@@ -153,13 +151,13 @@ class ArmLoop:
         msg, _ = self.reader.latest_msg()
         if msg is None:
             raise RuntimeError("no lowstate")
-        return {idx: float(msg.motor_state[idx].q) for idx in WAIST_MOTOR_INDICES}
+        return {idx: float(msg.motor_state[idx].q) for idx in self._waist_motors}
 
     def _slew_waist(self) -> None:
         if not self._waist_cmd or not self._waist_target:
             return
         step = self.max_speed * self._dt
-        for idx in WAIST_MOTOR_INDICES:
+        for idx in self._waist_motors:
             cur = float(self._waist_cmd[idx])
             tgt = float(self._waist_target[idx])
             d = tgt - cur
@@ -199,15 +197,18 @@ class ArmLoop:
                 self._waist_target = dict(waist_now)
 
     def set_waist(self, yaw_rad: Optional[float] = None, pitch_rad: Optional[float] = None) -> None:
+        if self._waist is None:
+            raise PermissionErrorMotion(f"{self.profile.name} 没有可控的腰")
         with self._lock:
             if not self._engaged or self._waist_target is None:
                 raise PermissionErrorMotion("先接管再动腰")
             if self._float:
                 raise PermissionErrorMotion("先急停退出拖拽，再动腰")
-            if yaw_rad is not None:
-                self._waist_target[WAIST_YAW_MOTOR_INDEX] = _clamp_span(float(yaw_rad), WAIST_YAW_LIMIT_RAD)
-            if pitch_rad is not None:
-                self._waist_target[WAIST_PITCH_MOTOR_INDEX] = _clamp_span(float(pitch_rad), WAIST_PITCH_LIMIT_RAD)
+            for role, value in (("yaw", yaw_rad), ("pitch", pitch_rad)):
+                if value is None:
+                    continue
+                j = self._waist.joint(role)
+                self._waist_target[j.motor] = _clamp_span(float(value), j.limit_rad)
 
     def hold_waist(self) -> None:
         """停在当前实测角（取消未走完的腰目标）。"""
@@ -344,7 +345,7 @@ class ArmLoop:
         self._cmd.mode_machine = int(getattr(msg, "mode_machine", 0))
         n_state = len(msg.motor_state)
         n_cmd = len(self._cmd.motor_cmd)
-        n = min(G1_NUM_MOTOR, n_state, n_cmd)
+        n = min(self.profile.num_motors, n_state, n_cmd)
         for i in range(n):
             slot = self._cmd.motor_cmd[i]
             ms = msg.motor_state[i]
@@ -359,8 +360,8 @@ class ArmLoop:
                 slot = self._cmd.motor_cmd[int(idx)]
                 slot.q = float(q_w)
                 slot.dq = 0.0
-                slot.kp = float(WAIST_LOCK_KP)
-                slot.kd = float(WAIST_LOCK_KD)
+                slot.kp = float(self._waist.lock_kp)
+                slot.kd = float(self._waist.lock_kd)
                 slot.tau = 0.0
         for name, qv, tau in zip(self.layout.joint_names, q_arm, tau_arm):
             idx = self.layout.motor_index(name)

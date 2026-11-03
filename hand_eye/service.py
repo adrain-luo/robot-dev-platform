@@ -200,8 +200,8 @@ class HandEyeAPI:
         return {
             "ok": True,
             "arm": he_session.ARM,
-            "tip_link": he_session.TIP_LINK,
-            "base_link": he_session.BASE_LINK,
+            "tip_link": he_session.tip_link(),
+            "base_link": he_session.base_link(),
             "camera_source": cfg.get("camera_source"),
             "camera_host": cfg.get("camera_host"),
             "teleimager_path": cfg.get("teleimager_path") or "",
@@ -797,8 +797,8 @@ class HandEyeAPI:
         save_config(cfg)
         urdf = self.app.settings.urdf
         meta = he_session.load_meta(data_dir)
-        base = str(meta.get("base_link") or self.app.settings.base_link or he_session.BASE_LINK)
-        tip = str(meta.get("tip_link") or he_session.TIP_LINK)
+        base = str(meta.get("base_link") or self.app.settings.base_link or he_session.base_link())
+        tip = str(meta.get("tip_link") or he_session.tip_link(meta.get("arm")))
         opt = SolveOptions(
             base_link=base,
             tip_link=tip,

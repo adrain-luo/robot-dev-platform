@@ -29,7 +29,7 @@ from solve_core import (  # noqa: E402
     stereo_cross_check,
 )
 
-DEFAULT_URDF = ARM_CONTROL / "config" / "g1_d.urdf"
+DEFAULT_URDF = ARM_CONTROL / "robots" / "g1d" / "g1_d.urdf"
 DEFAULT_TIP = "left_wrist_yaw_link"
 DEFAULT_BASE = "torso_link"
 

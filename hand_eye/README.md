@@ -20,6 +20,6 @@
 python solve_handeye.py --data data/会话名 --square-size 25
 ```
 
-不传 `--intrinsics` 时，先用该目录的左右图估计内参。`--urdf` 默认用 `arm_control/config/g1_d.urdf`。末端默认读会话里的 `tip_link`。
+不传 `--intrinsics` 时，先用该目录的左右图估计内参。`--urdf` 默认用 `arm_control/robots/g1d/g1_d.urdf`。末端默认读会话里的 `tip_link`。
 
 不要把旧工程里右手、`right_dex1_tool_link` 的 `T_cam2base` 数字抄过来。

@@ -1,0 +1,76 @@
+{
+  "name": "g1d",
+  "display_name": "Unitree G1D（轮式底盘 + 立柱 + 双臂）",
+  "urdf": "g1_d.urdf",
+  "base_link": "torso_link",
+  "num_motors": 29,
+  "control": {
+    "backend": "unitree_lowcmd",
+    "state_topic": "rt/lowstate",
+    "command_topic": "rt/lowcmd",
+    "release_motion_mode": true
+  },
+  "gains": {
+    "kp": [
+      60, 60, 60, 100, 40, 40,
+      60, 60, 60, 100, 40, 40,
+      60, 40, 40,
+      40, 40, 40, 40, 40, 40, 40,
+      200, 40, 180, 180, 40, 40, 40
+    ],
+    "kd": [
+      1, 1, 1, 2, 1, 1,
+      1, 1, 1, 2, 1, 1,
+      1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1
+    ]
+  },
+  "arms": {
+    "right": {
+      "tip_link": "right_wrist_yaw_link",
+      "joint_names": [
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint"
+      ],
+      "motor_indices": [22, 23, 24, 25, 26, 27, 28],
+      "home_q": [0.2, -0.25, 0.0, 0.9, 0.0, -0.1, 0.0]
+    },
+    "left": {
+      "tip_link": "left_wrist_yaw_link",
+      "joint_names": [
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "left_wrist_pitch_joint",
+        "left_wrist_yaw_joint"
+      ],
+      "motor_indices": [15, 16, 17, 18, 19, 20, 21],
+      "home_q": [0.2, 0.25, 0.0, 0.9, 0.0, -0.1, 0.0]
+    }
+  },
+  "mirror_q_sign": [1, -1, -1, 1, -1, 1, -1],
+  "waist": {
+    "joints": [
+      {"role": "yaw", "urdf_joint": "torso_Joint", "motor": 12, "limit_rad": [-2.7053, 2.7053]},
+      {"role": "pitch", "urdf_joint": "Yaw_Joint", "motor": 14, "limit_rad": [-0.04363, 2.3562]}
+    ],
+    "hold_motors": [12, 13, 14],
+    "lock_kp": 200.0,
+    "lock_kd": 4.0
+  },
+  "lift": {
+    "state_topic": "rt/hispeed_state",
+    "urdf_joints": ["LZ_mt_Joint", "LZ_it_Joint"],
+    "stage_limit_m": 0.21,
+    "stroke_max_m": 0.42,
+    "height_zero_m": -0.1897
+  }
+}

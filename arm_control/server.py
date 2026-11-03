@@ -40,21 +40,8 @@ from dds.lowstate import LowStateReader
 import lift_calib
 from lift_control import LiftController
 from model.fk_scene import RobotKinematics
-from model.layout import (
-    ARMS,
-    WAIST_PITCH_JOINT,
-    WAIST_PITCH_LIMIT_RAD,
-    WAIST_PITCH_MOTOR_INDEX,
-    WAIST_READ_MOTORS,
-    WAIST_YAW_JOINT,
-    WAIST_YAW_LIMIT_RAD,
-    WAIST_YAW_MOTOR_INDEX,
-    LIFT_JOINT_CANDIDATES,
-    LIFT_TOPIC,
-    get_arm,
-    lift_height_to_joints,
-    short_joint_label,
-)
+from model.layout import get_arm, short_joint_label
+from model.robot_profile import activate as activate_profile
 import identify as iden
 import poses as posesets
 import validate as vali
@@ -136,6 +123,7 @@ FRONTEND = HERE / "frontend"
 class App:
     def __init__(self, settings, kin: RobotKinematics, allow_real_motion: bool):
         self.settings = settings
+        self.profile = settings.profile
         self.kin = kin
         self.allow_real_motion = bool(allow_real_motion)
         self._reader: Optional[LowStateReader] = None
@@ -188,14 +176,20 @@ class App:
                     self.payload.restore(self.loop)
             return self._reader
 
+    def _require_lift(self):
+        if self.profile.lift is None:
+            raise PermissionErrorMotion(f"{self.profile.name} 没有立柱")
+        return self.profile.lift
+
     def hispeed(self) -> HispeedStateReader:
+        lift = self._require_lift()
         # 先起 lowstate（ChannelFactory）；勿在 _lock 里调 reader，锁不可重入
         self.reader()
         with self._lock:
             if self._hispeed is None:
                 self._hispeed = HispeedStateReader(
                     network_interface=self.settings.network_interface,
-                    state_topic=LIFT_TOPIC,
+                    state_topic=lift.state_topic,
                     dds_domain=self.settings.dds_domain,
                     timeout_s=self.settings.lowstate_timeout_s,
                     sdk_path=self.settings.unitree_sdk_path,
@@ -204,6 +198,7 @@ class App:
             return self._hispeed
 
     def agv(self) -> AgvClient:
+        self._require_lift()
         self.reader()
         with self._lock:
             if self._agv is None:
@@ -224,7 +219,9 @@ class App:
         agv = self.agv()
         with self._lock:
             if self._lift_ctrl is None:
-                self._lift_ctrl = LiftController(hispeed=hs, agv=agv)
+                self._lift_ctrl = LiftController(
+                    hispeed=hs, agv=agv, stroke_max_m=self.profile.lift.stroke_max_m
+                )
             return self._lift_ctrl
 
     def require_motion(self) -> None:
@@ -234,7 +231,7 @@ class App:
     def lift_set_zero_now(self) -> Dict[str, Any]:
         st = self.hispeed().latest()
         if st is None:
-            return {"ok": False, "error": f"还没有 {LIFT_TOPIC} 数据，稍后再试", "lift": None}
+            return {"ok": False, "error": f"还没有 {self.profile.lift.state_topic} 数据，稍后再试", "lift": None}
         out = lift_calib.save_zero(st.height_m)
         # 立刻按新零位重算，给前端刷新
         scene = self.both_scenes()
@@ -245,6 +242,10 @@ class App:
         return out
 
     def lift_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        if self.profile.lift is None:
+            if path == "/api/lift/stop":
+                return {"ok": True, "busy": False, "message": "没有立柱"}
+            return {"ok": False, "error": f"{self.profile.name} 没有立柱"}
         if path == "/api/lift/set-zero":
             return self.lift_set_zero_now()
         if path == "/api/lift/stop":
@@ -366,7 +367,7 @@ class App:
         self.reader()
         arms = {}
         err = None
-        for name in ARMS:
+        for name in self.profile.arms:
             try:
                 arms[name] = self.snapshot(name)
             except Exception as e:
@@ -374,46 +375,36 @@ class App:
                 arms[name] = None
         waist = {}
         lift = {}
+        spec = self.profile.waist
         try:
-            st_w = self.reader().read_motor_states(WAIST_READ_MOTORS)
-            yaw = st_w[WAIST_YAW_MOTOR_INDEX]
-            pitch = st_w[WAIST_PITCH_MOTOR_INDEX]
+            if spec is None:
+                raise LookupError("no waist")
+            st_w = self.reader().read_motor_states(spec.read_motors)
             def _tau(v: float):
                 return None if v != v else float(v)  # NaN → None
-            waist = {
-                WAIST_YAW_JOINT: yaw["q"],
-                WAIST_PITCH_JOINT: pitch["q"],
-                "yaw_deg": math.degrees(yaw["q"]),
-                "pitch_deg": math.degrees(pitch["q"]),
-                "limits_deg": {
-                    "yaw": [math.degrees(WAIST_YAW_LIMIT_RAD[0]), math.degrees(WAIST_YAW_LIMIT_RAD[1])],
-                    "pitch": [math.degrees(WAIST_PITCH_LIMIT_RAD[0]), math.degrees(WAIST_PITCH_LIMIT_RAD[1])],
-                },
-                "joints": [
-                    {
-                        "name": WAIST_YAW_JOINT,
-                        "label": "waist_yaw",
-                        "motor": WAIST_YAW_MOTOR_INDEX,
-                        "q_rad": yaw["q"],
-                        "q_deg": math.degrees(yaw["q"]),
-                        "dq": yaw["dq"],
-                        "tau_est": _tau(yaw["tau_est"]),
-                    },
-                    {
-                        "name": WAIST_PITCH_JOINT,
-                        "label": "waist_pitch",
-                        "motor": WAIST_PITCH_MOTOR_INDEX,
-                        "q_rad": pitch["q"],
-                        "q_deg": math.degrees(pitch["q"]),
-                        "dq": pitch["dq"],
-                        "tau_est": _tau(pitch["tau_est"]),
-                    },
-                ],
-            }
+            waist = {"limits_deg": {}, "joints": []}
+            for j in spec.joints:
+                s = st_w[j.motor]
+                waist[j.urdf_joint] = s["q"]
+                waist[f"{j.role}_deg"] = math.degrees(s["q"])
+                waist["limits_deg"][j.role] = [math.degrees(j.limit_rad[0]), math.degrees(j.limit_rad[1])]
+                waist["joints"].append({
+                    "name": j.urdf_joint,
+                    "label": f"waist_{j.role}",
+                    "motor": j.motor,
+                    "q_rad": s["q"],
+                    "q_deg": math.degrees(s["q"]),
+                    "dq": s["dq"],
+                    "tau_est": _tau(s["tau_est"]),
+                })
         except Exception:
             waist = {}
+        lift_spec = self.profile.lift
         # 官方：rt/hispeed_state Point32.y=高度 .z=速度（不在 lowstate）
         try:
+            if lift_spec is None:
+                raise LookupError("no lift")
+            topic = lift_spec.state_topic
             hs = self.hispeed()
             st = hs.latest()
             age = hs.age_s()
@@ -422,21 +413,21 @@ class App:
             if st is None:
                 lift = {
                     "available": False,
-                    "topic": LIFT_TOPIC,
+                    "topic": topic,
                     "height_m": None,
                     "velocity_mps": None,
                     "age_s": None,
-                    "joints": {n: 0.0 for n in LIFT_JOINT_CANDIDATES},
-                    "joints_urdf": list(LIFT_JOINT_CANDIDATES),
+                    "joints": {n: 0.0 for n in lift_spec.urdf_joints},
+                    "joints_urdf": list(lift_spec.urdf_joints),
                     "calib": calib,
-                    "note": f"等待 {LIFT_TOPIC}（Point32.y 高度 / .z 速度）。升降不在 rt/lowstate。",
+                    "note": f"等待 {topic}（Point32.y 高度 / .z 速度）。升降不在 rt/lowstate。",
                 }
             else:
-                joints = lift_height_to_joints(st.height_m, zero_m=zero_m)
+                joints = lift_spec.height_to_joints(st.height_m, zero_m=zero_m)
                 stroke = sum(joints.values())
                 lift = {
                     "available": True,
-                    "topic": LIFT_TOPIC,
+                    "topic": topic,
                     "height_m": st.height_m,
                     "height_mm": st.height_m * 1000.0,
                     "stroke_m": stroke,
@@ -446,18 +437,21 @@ class App:
                     "x": st.x,
                     "age_s": age,
                     "joints": joints,
-                    "joints_urdf": list(LIFT_JOINT_CANDIDATES),
+                    "joints_urdf": list(lift_spec.urdf_joints),
                     "calib": calib,
-                    "note": "来自 rt/hispeed_state；已映射到 LZ_mt / LZ_it 驱动三维",
+                    "note": f"来自 {topic}；已映射到 {' / '.join(n.removesuffix('_Joint') for n in lift_spec.urdf_joints)} 驱动三维",
                 }
         except Exception as e:
-            lift = {
-                "available": False,
-                "topic": LIFT_TOPIC,
-                "error": f"{type(e).__name__}: {e}",
-                "calib": lift_calib.status(),
-                "note": "订阅 rt/hispeed_state 失败",
-            }
+            if lift_spec is None:
+                lift = {}
+            else:
+                lift = {
+                    "available": False,
+                    "topic": lift_spec.state_topic,
+                    "error": f"{type(e).__name__}: {e}",
+                    "calib": lift_calib.status(),
+                    "note": f"订阅 {lift_spec.state_topic} 失败",
+                }
         if self._lift_ctrl is not None:
             try:
                 lift = {**lift, "ctrl": self._lift_ctrl.status()}
@@ -1207,11 +1201,11 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 _file(self, vendor, "text/javascript; charset=utf-8")
                 return
-            if path == "/urdf/g1_d.urdf":
-                _file(self, HERE / "config" / "g1_d.urdf", "application/xml")
+            if path in ("/urdf/robot.urdf", f"/urdf/{APP.profile.urdf.name}"):
+                _file(self, APP.profile.urdf, "application/xml")
                 return
             if path.startswith("/urdf/meshes/"):
-                mesh = _safe_under(HERE / "config" / "meshes", path.split("/")[-1])
+                mesh = _safe_under(APP.profile.meshes_dir, path.split("/")[-1])
                 if mesh is None:
                     self.send_error(404)
                     return
@@ -1370,12 +1364,15 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif path == "/api/waist/step":
                 # 相对当前目标（或实测）步进；与立柱 step 同思路
-                st_w = APP.reader().read_motor_states(WAIST_READ_MOTORS)
-                cur_yaw = st_w[WAIST_YAW_MOTOR_INDEX]["q"]
-                cur_pitch = st_w[WAIST_PITCH_MOTOR_INDEX]["q"]
+                spec = APP.profile.waist
+                if spec is None:
+                    raise PermissionErrorMotion(f"{APP.profile.name} 没有可控的腰")
+                m_yaw = spec.joint("yaw").motor
+                m_pitch = spec.joint("pitch").motor
+                st_w = APP.reader().read_motor_states(spec.read_motors)
                 tgt = (APP.ctrl_status() or {}).get("waist_target_rad") or {}
-                base_yaw = float(tgt.get(str(WAIST_YAW_MOTOR_INDEX), cur_yaw))
-                base_pitch = float(tgt.get(str(WAIST_PITCH_MOTOR_INDEX), cur_pitch))
+                base_yaw = float(tgt.get(str(m_yaw), st_w[m_yaw]["q"]))
+                base_pitch = float(tgt.get(str(m_pitch), st_w[m_pitch]["q"]))
                 dy = body.get("delta_yaw_deg")
                 dp = body.get("delta_pitch_deg")
                 new_yaw = base_yaw if dy in (None, "") else base_yaw + math.radians(float(dy))
@@ -1405,16 +1402,18 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     global APP
-    p = argparse.ArgumentParser(description="G1D arm viewer / optional motion")
+    p = argparse.ArgumentParser(description="Arm viewer / optional motion")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=10184)
     p.add_argument("--config", type=Path, default=None)
+    p.add_argument("--robot", default=None, help="机型名（robots/<名字>/robot.json），默认取 config 里的 robot")
     p.add_argument("--iface", default=None)
     p.add_argument("--allow-real-motion", action="store_true")
     p.add_argument("--max-speed", type=float, default=None, help="rad/s, default 0.2, clamp 0.02–1.0")
     args = p.parse_args()
 
-    settings = load_settings(args.config)
+    settings = load_settings(args.config, robot=args.robot)
+    activate_profile(settings.profile)
     if args.iface:
         settings.network_interface = args.iface
     if args.max_speed is not None:
@@ -1422,12 +1421,12 @@ def main() -> int:
     if settings.urdf is None or not settings.urdf.is_file():
         raise SystemExit(f"URDF not found: {settings.urdf}")
 
-    kin = RobotKinematics(settings.urdf, settings.base_link)
+    kin = RobotKinematics(settings.urdf, settings.base_link, list(settings.profile.arms))
     APP = App(settings, kin, allow_real_motion=args.allow_real_motion)
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     mode = "REAL MOTION" if args.allow_real_motion else "readonly"
     print(
-        f"[arm_control] {mode}  http://{args.host}:{args.port}/  "
+        f"[arm_control] {settings.robot} {mode}  http://{args.host}:{args.port}/  "
         f"iface={settings.network_interface}  max_speed={settings.max_speed_rad_s}",
         flush=True,
     )

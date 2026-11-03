@@ -11,7 +11,6 @@ from typing import Any, Dict, Optional
 
 from dds.agv_client import AgvClient
 from dds.hispeed import HispeedStateReader
-from model.layout import LIFT_STROKE_MAX_M
 import lift_calib
 
 _KP = 20.0
@@ -29,9 +28,11 @@ class LiftController:
         *,
         hispeed: HispeedStateReader,
         agv: AgvClient,
+        stroke_max_m: float,
     ) -> None:
         self._hispeed = hispeed
         self._agv = agv
+        self._stroke_max_m = float(stroke_max_m)
         self._lock = threading.Lock()
         self._target_m: Optional[float] = None
         self._busy = False
@@ -47,7 +48,7 @@ class LiftController:
             busy = self._busy
             err = self._last_error
         height = None if st is None else float(st.height_m)
-        stroke = None if height is None else max(0.0, min(LIFT_STROKE_MAX_M, height - zero))
+        stroke = None if height is None else max(0.0, min(self._stroke_max_m, height - zero))
         return {
             "busy": busy,
             "target_m": target,
@@ -57,8 +58,8 @@ class LiftController:
             "stroke_m": stroke,
             "stroke_mm": None if stroke is None else stroke * 1000.0,
             "zero_m": zero,
-            "stroke_max_m": LIFT_STROKE_MAX_M,
-            "stroke_max_mm": LIFT_STROKE_MAX_M * 1000.0,
+            "stroke_max_m": self._stroke_max_m,
+            "stroke_max_mm": self._stroke_max_m * 1000.0,
             "error": err,
         }
 
@@ -69,7 +70,7 @@ class LiftController:
     def clamp_height(self, height_m: float) -> float:
         zero = lift_calib.load_zero()
         lo = zero
-        hi = zero + LIFT_STROKE_MAX_M
+        hi = zero + self._stroke_max_m
         return max(lo, min(hi, float(height_m)))
 
     def goto(self, height_m: float) -> Dict[str, Any]:

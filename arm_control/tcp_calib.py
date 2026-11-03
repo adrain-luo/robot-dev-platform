@@ -12,13 +12,14 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from model.robot_profile import active as active_profile
+
 ROOT = Path(__file__).resolve().parent
 RESULTS_DIR = ROOT / "config" / "tcp_results"
 _ACTIVE_PATH = RESULTS_DIR / "_active.json"
 _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 # 躯干 y=0 镜像：位置/固定点反射；腕系偏置 y 取反；关节同姿态集符号
 _MIRROR_S = np.diag([1.0, -1.0, 1.0])
-_MIRROR_Q_SIGN = np.array([1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0])
 
 
 def _check_name(name: str) -> str:
@@ -49,9 +50,12 @@ def _mirror_R(R) -> List[List[float]]:
 
 def _mirror_q(q) -> List[float]:
     qa = np.asarray(q, dtype=float).reshape(-1)
-    if qa.size != 7:
-        raise ValueError("镜像需要 7 轴关节角样本")
-    return (qa * _MIRROR_Q_SIGN).tolist()
+    sign = np.asarray(active_profile().mirror_q_sign, dtype=float)
+    if sign.size == 0:
+        raise ValueError(f"{active_profile().name} 没有配置 mirror_q_sign，不能镜像")
+    if qa.size != sign.size:
+        raise ValueError(f"镜像需要 {sign.size} 轴关节角样本")
+    return (qa * sign).tolist()
 
 
 def list_saved() -> List[Dict[str, Any]]:

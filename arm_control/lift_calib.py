@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from model.layout import LIFT_HEIGHT_ZERO_M
+from model.robot_profile import active as active_profile
 
 ROOT = Path(__file__).resolve().parent
 ZERO_PATH = ROOT / "config" / "lift_zero.json"
@@ -22,7 +22,8 @@ _loaded = False
 
 
 def _default_zero() -> float:
-    return float(LIFT_HEIGHT_ZERO_M)
+    lift = active_profile().lift
+    return 0.0 if lift is None else float(lift.height_zero_m)
 
 
 def load_zero() -> float:

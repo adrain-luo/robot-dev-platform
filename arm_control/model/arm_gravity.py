@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from model.layout import BASE_LINK, get_arm
+from model.layout import get_arm
 from model.urdf_fk import URDFRobotModel, axis_angle_to_matrix, make_transform
 
 G_ACCEL = 9.81
@@ -69,7 +69,7 @@ def _parse_urdf(urdf_path: Path):
 
 
 class ArmGravity:
-    def __init__(self, arm: str, urdf_path: Path, base_link: str = BASE_LINK):
+    def __init__(self, arm: str, urdf_path: Path, base_link: str = "torso_link"):
         layout = get_arm(arm)
         self.arm = layout.name
         self.joint_names = list(layout.joint_names)

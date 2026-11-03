@@ -10,23 +10,22 @@ from typing import Any, Dict, List, Optional
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 
+# 未接管时手眼默认用的臂；末端连杆、基座按当前机型取
 ARM = "left"
-TIP_LINK = "left_wrist_yaw_link"
-BASE_LINK = "torso_link"
-JOINT_NAMES = (
-    "left_shoulder_pitch_joint",
-    "left_shoulder_roll_joint",
-    "left_shoulder_yaw_joint",
-    "left_elbow_joint",
-    "left_wrist_roll_joint",
-    "left_wrist_pitch_joint",
-    "left_wrist_yaw_joint",
-)
 
 
 def _layout(arm: str):
     from model.layout import get_arm
     return get_arm(arm)
+
+
+def tip_link(arm: Optional[str] = None) -> str:
+    return _layout(arm or ARM).tip_link
+
+
+def base_link() -> str:
+    from model.robot_profile import active
+    return active().base_link
 
 
 def list_sessions() -> List[Dict[str, Any]]:
@@ -46,7 +45,7 @@ def list_sessions() -> List[Dict[str, Any]]:
             "name": d.name,
             "n": n,
             "arm": meta.get("arm") or ARM,
-            "tip_link": meta.get("tip_link") or TIP_LINK,
+            "tip_link": meta.get("tip_link") or tip_link(meta.get("arm")),
             "board_size": meta.get("board_size") or "11x8",
             "poseset": meta.get("poseset") or "",
         })
@@ -82,7 +81,7 @@ def write_meta(path: Path, board_size: str, arm: Optional[str] = None, poseset: 
         "board_size": board_size,
         "arm": layout.name,
         "tip_link": layout.tip_link,
-        "base_link": BASE_LINK,
+        "base_link": base_link(),
         "poseset": poseset,
         "joint_source": "lowstate",
         "joint_names": list(layout.joint_names),
