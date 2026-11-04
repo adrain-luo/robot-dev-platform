@@ -91,18 +91,32 @@ def write_meta(path: Path, board_size: str, arm: Optional[str] = None, poseset: 
     (path / "session_meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def save_sample(path: Path, left_img, right_img, q, arm: str, pose_name: str = "") -> int:
+def save_sample(path: Path, left_img, right_img, q, arm: str, pose_name: str = "",
+                depth=None, camera_info: Optional[Dict[str, Any]] = None) -> int:
+    """存一帧。双目：left/ right/；RGB-D：left/（彩色）+ depth/（16 位 PNG），right_img 为 None。"""
     import cv2
     layout = _layout(arm)
     idx = next_index(path)
     stem = f"{idx:04d}"
     left_file = path / "left" / f"{stem}.jpg"
     right_file = path / "right" / f"{stem}.jpg"
+    depth_file = path / "depth" / f"{stem}.png"
     joints_file = path / "joints" / f"{stem}.json"
-    if not cv2.imwrite(str(left_file), left_img) or not cv2.imwrite(str(right_file), right_img):
-        left_file.unlink(missing_ok=True)
-        right_file.unlink(missing_ok=True)
+    written = [left_file]
+    ok = cv2.imwrite(str(left_file), left_img)
+    if ok and right_img is not None:
+        written.append(right_file)
+        ok = cv2.imwrite(str(right_file), right_img)
+    if ok and depth is not None:
+        depth_file.parent.mkdir(exist_ok=True)
+        written.append(depth_file)
+        ok = cv2.imwrite(str(depth_file), depth)
+    if not ok:
+        for f in written:
+            f.unlink(missing_ok=True)
         raise OSError("写图片失败")
+    if camera_info is not None and not (path / "camera_info.json").is_file():
+        (path / "camera_info.json").write_text(json.dumps(camera_info, indent=2, ensure_ascii=False), encoding="utf-8")
     record = {
         "index": idx,
         "timestamp": datetime.now().timestamp(),
@@ -114,13 +128,16 @@ def save_sample(path: Path, left_img, right_img, q, arm: str, pose_name: str = "
         "joint_names": list(layout.joint_names),
         "q_rad": [float(v) for v in q],
         "image": f"left/{stem}.jpg",
-        "image_right": f"right/{stem}.jpg",
     }
+    if right_img is not None:
+        record["image_right"] = f"right/{stem}.jpg"
+    if depth is not None:
+        record["depth"] = f"depth/{stem}.png"
     try:
         joints_file.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError:
-        left_file.unlink(missing_ok=True)
-        right_file.unlink(missing_ok=True)
+        for f in written:
+            f.unlink(missing_ok=True)
         raise
     return idx
 
@@ -144,3 +161,11 @@ def ensure_session(name: Optional[str], board_size: str) -> Path:
             raise FileNotFoundError(f"没有会话 {name}")
         return path
     return create_session(board_size)
+
+
+def camera_info(path: Path) -> Optional[Dict[str, Any]]:
+    """RGB-D 会话采集时存下的相机内参 / 外参；双目会话返回 None。"""
+    f = path / "camera_info.json"
+    if not f.is_file():
+        return None
+    return json.loads(f.read_text(encoding="utf-8"))

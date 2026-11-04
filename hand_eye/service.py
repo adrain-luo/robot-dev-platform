@@ -18,7 +18,8 @@ import numpy as np
 import session as he_session
 import results as he_results
 from stereo_match import StereoMatcher, colorize_disp, write_ply
-from camera import HeadCamera
+from camera import ROS_TOPICS, camera_kind, open_camera
+import rgbd
 from capture_task import CaptureTask
 from controller.arm_loop import PermissionErrorMotion
 from detection import detect_corners, parse_board_size
@@ -166,6 +167,7 @@ def load_config() -> Dict[str, Any]:
 
 
 def save_config(cfg: Dict[str, Any]) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -173,7 +175,7 @@ class HandEyeAPI:
     def __init__(self, app) -> None:
         self.app = app
         self._lock = threading.Lock()
-        self._cam: Optional[HeadCamera] = None
+        self._cam = None  # HeadCamera / RosRgbdCamera / MockRgbdCamera
         self._cam_key = ""
         self._matcher: Optional[StereoMatcher] = None
         self._matcher_key = ""
@@ -204,6 +206,8 @@ class HandEyeAPI:
             "tip_link": he_session.tip_link(),
             "base_link": he_session.base_link(),
             "camera_source": cfg.get("camera_source"),
+            "camera_kind": camera_kind(str(cfg.get("camera_source") or "teleimager")),
+            "ros_topics": dict(ROS_TOPICS, **(cfg.get("ros_topics") or {})),
             "camera_host": cfg.get("camera_host"),
             "teleimager_path": cfg.get("teleimager_path") or "",
             "camera_error": "" if cam is None else cam.last_error,
@@ -256,17 +260,20 @@ class HandEyeAPI:
     def preview_jpeg(self) -> Tuple[Optional[bytes], str]:
         cfg = load_config()
         cam = self._camera(cfg)
-        pair = cam.grab_pair(2.0)
-        if pair is None:
+        frame = cam.grab(2.0)
+        if frame is None:
             return None, cam.last_error or "没有画面"
-        left, right = pair
         try:
             board = parse_board_size(str(cfg.get("board_size") or "11x8"))
         except ValueError as exc:
             return None, str(exc)
-        _lf, left_vis = detect_corners(left, board, draw=True)
-        _rf, right_vis = detect_corners(right, board, draw=True)
-        vis = _stack_eyes(left_vis, right_vis)
+        _lf, left_vis = detect_corners(frame.color, board, draw=True)
+        if frame.right is not None:
+            _rf, right_vis = detect_corners(frame.right, board, draw=True)
+            vis = _stack_eyes(left_vis, right_vis)
+        else:
+            depth_vis = rgbd.colorize_depth(frame.depth, float(frame.info.get("depth_scale_m", 0.001)))
+            vis = _stack_eyes(left_vis, depth_vis, ("RGB", "DEPTH"))
         ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         if not ok:
             return None, "编码预览失败"
@@ -463,11 +470,16 @@ class HandEyeAPI:
         cfg = load_config()
         use_debug = str(body.get("source") or "") == "debug"
         cam = self._camera(cfg)
-        pair = cam.grab_pair(2.0)
-        if pair is None:
+        frame = cam.grab(2.0)
+        if frame is None:
             return {"ok": False, "error": cam.last_error or "没有画面"}
         note = ""
         hand_T = self._left_cam_to_torso(cfg)
+        if frame.depth is not None:
+            if use_debug:
+                return {"ok": False, "error": "调试口匹配只适用于 G1D 的双目相机"}
+            return self._rgbd_cloud(frame, hand_T)
+        pair = (frame.color, frame.right)
         if use_debug:
             try:
                 debug, host = self._fetch_debug_pose(str(body.get("url") or ""))
@@ -521,6 +533,45 @@ class HandEyeAPI:
             "ply_cam": str(ply),
             "ply_torso": None if torso_ply is None else str(torso_ply),
             "cloud": cloud,
+            "disparity_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
+            "note": note,
+        }
+
+    def _rgbd_cloud(self, frame, T: Optional[np.ndarray]) -> Dict[str, Any]:
+        """RGB-D：深度直接给点，不做立体匹配；点在彩色光学系，乘手眼外参到躯干。"""
+        import base64
+        if T is None:
+            return {"ok": False, "error": "没有彩色相机到躯干的外参。先调用已保存的手眼结果，点云才能画到模型上"}
+        pts, cols = rgbd.depth_to_color_cloud(frame.depth, frame.color, frame.info)
+        n_valid = int(pts.shape[0])
+        if n_valid < 50:
+            return {"ok": False, "error": f"有效深度点只有 {n_valid}，看相机前方是否太近（<0.15 m）或被遮挡"}
+        zz = pts[:, 2]
+        cols = np.ascontiguousarray(cols[:, ::-1])  # BGR → RGB
+        cloud_dir = instances.path("clouds")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ply = cloud_dir / f"{stamp}_cam.ply"
+        n_ply = write_ply(ply, pts, cols[:, ::-1])
+        homo = np.concatenate([pts, np.ones((pts.shape[0], 1))], axis=1)
+        pts_t = (T @ homo.T).T[:, :3]
+        torso_ply = cloud_dir / f"{stamp}_torso.ply"
+        write_ply(torso_ply, pts_t, cols[:, ::-1])
+        vis = rgbd.colorize_depth(frame.depth, float(frame.info.get("depth_scale_m", 0.001)))
+        ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        if not ok:
+            return {"ok": False, "error": "深度图编码失败"}
+        ext = frame.info.get("depth_to_color") or {}
+        note = f"RGB-D 深度点云：手眼外参光轴离竖直 {_optical_from_down_deg(T):.1f}°。"
+        if ext.get("assumed"):
+            note += "没收到深度到彩色的外参，按同轴零平移处理，点云约有 15 mm 偏差。"
+        return {
+            "ok": True,
+            "valid": n_valid,
+            "saved": n_ply,
+            "depth_m": {"median": float(np.median(zz)), "near": float(zz.min()), "far": float(np.percentile(zz, 95))},
+            "ply_cam": str(ply),
+            "ply_torso": str(torso_ply),
+            "cloud": {"xyz": np.round(pts_t, 4).reshape(-1).tolist(), "rgb": cols.reshape(-1).astype(int).tolist()},
             "disparity_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
             "note": note,
         }
@@ -641,17 +692,14 @@ class HandEyeAPI:
             self._cam.close()
             self._cam = None
 
-    def _camera(self, cfg: Dict[str, Any]) -> HeadCamera:
-        key = f"{cfg.get('camera_source')}|{cfg.get('camera_host')}|{cfg.get('teleimager_path')}"
+    def _camera(self, cfg: Dict[str, Any]):
+        key = (f"{cfg.get('camera_source')}|{cfg.get('camera_host')}|{cfg.get('teleimager_path')}|"
+               f"{json.dumps(cfg.get('ros_topics') or {}, sort_keys=True)}")
         with self._lock:
             if self._cam is None or key != self._cam_key:
                 if self._cam is not None:
                     self._cam.close()
-                self._cam = HeadCamera(
-                    source=str(cfg.get("camera_source") or "teleimager"),
-                    host=str(cfg.get("camera_host") or "192.168.123.164"),
-                    teleimager_path=str(cfg.get("teleimager_path") or ""),
-                )
+                self._cam = open_camera(cfg)
                 self._cam_key = key
             return self._cam
 
@@ -712,15 +760,16 @@ class HandEyeAPI:
         if meta.get("arm") and self.app.loop is not None and self.app.loop.arm != meta["arm"]:
             raise PermissionErrorMotion(f"这个会话是{meta['arm']}臂，当前控制臂是{self.app.loop.arm}")
         cam = self._camera(cfg)
-        pair = cam.grab_pair(3.0)
-        if pair is None:
+        frame = cam.grab(3.0)
+        if frame is None:
             return {"ok": False, "error": cam.last_error or "没有画面", **self._public(cfg)}
         st = self.app.reader().read_arm(arm)
         q = np.asarray(st.q, dtype=float).reshape(-1)
         if q.size != 7 or not np.all(np.isfinite(q)):
             return {"ok": False, "error": f"关节角不是 7 个有限数: {q.tolist()}", **self._public(cfg)}
         try:
-            idx = he_session.save_sample(path, pair[0], pair[1], q, arm)
+            idx = he_session.save_sample(path, frame.color, frame.right, q, arm,
+                                         depth=frame.depth, camera_info=frame.info or None)
         except OSError as exc:
             return {"ok": False, "error": str(exc), **self._public(cfg)}
         he_session.write_meta(path, f"{board[0]}x{board[1]}", arm=arm)
@@ -794,8 +843,16 @@ class HandEyeAPI:
         board = parse_board_size(str(cfg.get("board_size") or "11x8"))
         eye = str(cfg.get("eye") or "both")
         log: list = []
-        from intrinsics import calibrate_session
-        fit = calibrate_session(data_dir, board, float(square), log=log)
+        cam_info = he_session.camera_info(data_dir)
+        if cam_info is not None:
+            # RGB-D：只有彩色一路，内参用出厂 camera_info，不做双目标定
+            n_img = len(list((data_dir / "left").glob("*.jpg")))
+            fit = rgbd.write_session_intrinsics(data_dir, cam_info, float(square), n_img)
+            log.append(f"[内参] RGB-D 出厂内参 fx={fit['left_fx']:.1f} fy={fit['left_fy']:.1f}，{n_img} 张彩色图")
+            eye = "left"
+        else:
+            from intrinsics import calibrate_session
+            fit = calibrate_session(data_dir, board, float(square), log=log)
         yaml_path = Path(fit["yaml"])
         cfg["intrinsics"] = instances.active().to_stored(yaml_path)
         save_config(cfg)
@@ -828,6 +885,7 @@ class HandEyeAPI:
         combined = dict(results)
         if cross:
             combined.update(cross)
+        if cross or cam_info is not None:
             (data_dir / "handeye_result.json").write_text(
                 json.dumps(combined, indent=2, ensure_ascii=False), encoding="utf-8"
             )
@@ -895,14 +953,14 @@ class HandEyeAPI:
         return {"session": cfg.get("session") or "", "sessions": he_session.list_sessions()}
 
 
-def _stack_eyes(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+def _stack_eyes(left: np.ndarray, right: np.ndarray, labels=("L", "R")) -> np.ndarray:
     def mark(img: np.ndarray, text: str) -> np.ndarray:
         out = img.copy()
         cv2.putText(out, text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(out, text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
         return out
 
-    a, b = mark(left, "L"), mark(right, "R")
+    a, b = mark(left, labels[0]), mark(right, labels[1])
     if b.shape[1] != a.shape[1]:
         b = cv2.resize(b, (a.shape[1], int(b.shape[0] * a.shape[1] / b.shape[1])))
     return np.vstack([a, b])

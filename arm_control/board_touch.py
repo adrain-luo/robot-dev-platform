@@ -165,6 +165,8 @@ class BoardTouch:
             if T is None:
                 raise ValueError("先调用一组手眼结果，角点才能变到躯干上")
             cam = he._camera(cfg)
+            if getattr(cam, "kind", "stereo") != "stereo":
+                raise ValueError("棋盘触摸目前只支持双目相机（G1D）；RGB-D 相机的深度取点还没接入")
             pair = cam.grab_pair(3.0)
             if pair is None:
                 raise RuntimeError(cam.last_error or "没有画面")

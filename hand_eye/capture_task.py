@@ -50,7 +50,7 @@ class CaptureTask:
             st = self.loop.status()
             if not st.get("engaged") or st.get("float"):
                 raise RuntimeError("先接管，并退出拖拽")
-            probe = self.camera.grab_pair(3.0)
+            probe = self.camera.grab(3.0)
             if probe is None:
                 raise RuntimeError(self.camera.last_error or "没有画面，还没开始走点")
             path = he_session.create_session(self.board_size, arm=arm, poseset=str(self.poses_cfg.get("name") or ""))
@@ -69,14 +69,15 @@ class CaptureTask:
                 settled = iden.wait_settle(self.loop, pose["q"], self.stop, self.still)
                 if self.stop.is_set():
                     raise RuntimeError("已停止")
-                pair = self.camera.grab_pair(3.0)
-                if pair is None:
+                frame = self.camera.grab(3.0)
+                if frame is None:
                     raise RuntimeError(self.camera.last_error or f"{name} 没有画面")
                 samp = self.loop.arm_sample(wait=False)
                 q = np.asarray(samp["q_meas"], float).reshape(-1)
                 if q.size != 7 or not np.all(np.isfinite(q)):
                     raise RuntimeError(f"{name} 关节角无效")
-                he_session.save_sample(path, pair[0], pair[1], q, arm, pose_name=str(name))
+                he_session.save_sample(path, frame.color, frame.right, q, arm, pose_name=str(name),
+                                       depth=frame.depth, camera_info=frame.info or None)
                 self.saved += 1
                 self.progress = [self.saved, total]
                 extra = "（超时，未压进漂移阈）" if settled.get("timed_out") else ""

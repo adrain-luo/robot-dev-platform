@@ -2260,8 +2260,39 @@ function renderHeTable(st) {
   });
 }
 
+// 相机类型：双目（G1D teleimager）或 RGB-D（G1 D435i）。按它调整「双目」卡片与手眼表单
+function applyCameraKind(st) {
+  const kind = st && st.camera_kind;
+  if (!kind || window.cameraKind === kind) return;
+  window.cameraKind = kind;
+  const rgbd = kind === "rgbd";
+  const toggle = document.querySelector("#panel-cam > .float-toggle");
+  if (toggle) toggle.textContent = rgbd ? "相机（RGB-D）" : "双目";
+  if ($("cam-preview")) $("cam-preview").alt = rgbd ? "彩色 / 深度" : "左右目";
+  if ($("cam-disp")) $("cam-disp").alt = rgbd ? "深度" : "视差";
+  if ($("btn-cam-match")) $("btn-cam-match").textContent = rgbd ? "深度点云" : "匹配点云";
+  if ($("btn-cam-match-debug")) $("btn-cam-match-debug").style.display = rgbd ? "none" : "";
+  const host = $("he-host") && $("he-host").closest("label");
+  if (host) host.style.display = rgbd ? "none" : "";
+  const eye = $("he-eye");
+  if (eye) {
+    for (const opt of eye.options) {
+      if (opt.value === "left") opt.textContent = rgbd ? "彩色" : "左目";
+      else opt.disabled = rgbd;
+    }
+    if (rgbd) eye.value = "left";
+  }
+  if ($("he-intro")) {
+    $("he-intro").textContent = rgbd
+      ? "用姿态集里已经记好的点。采集按限速走完每点停稳，存彩色图与深度图；求解用相机出厂内参，只算彩色相机到躯干外参。左右对称用姿态集「镜像到对侧」。画面在左侧「相机」。"
+      : "用姿态集里已经记好的点。采集按限速走完每点停稳存图；求解先估内参再算相机到躯干外参。左右对称用姿态集「镜像到对侧」。画面在左侧「双目」。";
+  }
+}
+window.applyCameraKind = applyCameraKind;
+
 function renderHe(st) {
   if (!st) return;
+  applyCameraKind(st);
   renderHeTable(st);
   const sel = $("he-session");
   if (sel && document.activeElement !== sel) {
@@ -2291,7 +2322,10 @@ function renderHe(st) {
   }
   const lines = [];
   const fit = st.intrinsics_fit;
-  if (fit && fit.left_fx != null) {
+  if (fit && fit.camera === "rgbd") {
+    const n = fit.num_pairs != null ? ` · ${fit.num_pairs} 张` : "";
+    lines.push(`<div class="stat"><em>本次内参${n}</em><strong>出厂 fx ${Number(fit.left_fx).toFixed(1)} · fy ${Number(fit.left_fy).toFixed(1)}</strong><span class="note">RGB-D 相机，未从图像重新标定</span></div>`);
+  } else if (fit && fit.left_fx != null) {
     const rms = fit.left_rms_px != null
       ? `<span class="note">重投影 左 ${Number(fit.left_rms_px).toFixed(3)} / 右 ${Number(fit.right_rms_px).toFixed(3)} / 双目 ${Number(fit.stereo_rms_px).toFixed(3)} px · 基线 ${Number(fit.baseline_mm).toFixed(1)} mm</span>`
       : `<span class="note">基线 ${Number(fit.baseline_mm).toFixed(1)} mm</span>`;
@@ -2304,7 +2338,8 @@ function renderHe(st) {
       if (!r) continue;
       const t = r.t_cam2base_m || [];
       const tr = r.residual_translation_mm || {};
-      lines.push(`<div class="stat"><em>${eye === "left" ? "左目" : "右目"} → ${r.base_link || "torso_link"}</em><strong>${t.map((x) => Number(x).toFixed(4)).join(", ")} m</strong><span class="note">平移残差 均 ${Number(tr.mean).toFixed(2)} / 最大 ${Number(tr.max).toFixed(2)} mm · 内点 ${r.num_inliers}/${r.num_samples}</span></div>`);
+      const eyeName = eye === "left" ? (window.cameraKind === "rgbd" ? "彩色" : "左目") : "右目";
+      lines.push(`<div class="stat"><em>${eyeName} → ${r.base_link || "torso_link"}</em><strong>${t.map((x) => Number(x).toFixed(4)).join(", ")} m</strong><span class="note">平移残差 均 ${Number(tr.mean).toFixed(2)} / 最大 ${Number(tr.max).toFixed(2)} mm · 内点 ${r.num_inliers}/${r.num_samples}</span></div>`);
     }
     if (res.stereo_baseline_mm != null) {
       lines.push(`<div class="stat"><em>右目相对左目</em><strong>${Number(res.stereo_baseline_mm).toFixed(2)} mm</strong></div>`);
@@ -2357,6 +2392,7 @@ async function refreshHandeye() {
 window.refreshHandeye = refreshHandeye;
 function applyHeRun(st) {
   if (!st) return;
+  applyCameraKind(st);
   if (st.running) {
     const p = st.progress || [0, 0];
     if ($("he-count")) $("he-count").textContent = `${p[0]}/${p[1]}`;
@@ -2390,7 +2426,7 @@ async function refreshCamPreview() {
     if (!camPreviewWanted()) return; // 拉取中途若已收起，丢弃
     const msg = $("cam-msg");
     if (!res.ok) {
-      let text = "双目没有画面";
+      let text = window.cameraKind === "rgbd" ? "相机没有画面" : "双目没有画面";
       try { const data = await res.json(); if (data.error) text = data.error; } catch (e) { /* 非 JSON */ }
       if (msg) msg.textContent = text;
       return;
