@@ -2389,6 +2389,7 @@ function applyCameraKind(st) {
   if ($("cam-disp")) $("cam-disp").alt = rgbd ? "深度" : "视差";
   if ($("btn-cam-match")) $("btn-cam-match").textContent = rgbd ? "深度点云" : "匹配点云";
   if ($("btn-cam-match-debug")) $("btn-cam-match-debug").style.display = rgbd ? "none" : "";
+  if ($("cam-intr")) $("cam-intr").style.display = rgbd ? "" : "none";
   const host = $("he-host") && $("he-host").closest("label");
   if (host) host.style.display = rgbd ? "none" : "";
   const eye = $("he-eye");
@@ -2407,9 +2408,94 @@ function applyCameraKind(st) {
 }
 window.applyCameraKind = applyCameraKind;
 
+// RGB-D 彩色内参文件：出厂 / 自标定（上传到实例 calib/color_intrinsics）
+let camIntrInit = false;
+function renderColorIntr(st) {
+  const sel = $("cam-intr-select");
+  if (!sel || !Array.isArray(st.color_intrinsics)) return;
+  window.colorIntrFiles = st.color_intrinsics;
+  const want = camIntrInit ? sel.value : (st.cloud_color_intrinsics || "");
+  const sig = JSON.stringify(st.color_intrinsics.map((f) => [f.name, f.error || ""]));
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.innerHTML = '<option value="">出厂（camera_info）</option>';
+    for (const f of st.color_intrinsics) {
+      const o = document.createElement("option");
+      o.value = f.name;
+      o.textContent = f.error ? `${f.name}（无效）` : `${f.name} · ${f.size[0]}×${f.size[1]}`;
+      o.disabled = !!f.error;
+      sel.appendChild(o);
+    }
+  }
+  sel.value = [...sel.options].some((o) => o.value === want && !o.disabled) ? want : "";
+  camIntrInit = true;
+  showColorIntrInfo();
+}
+
+function showColorIntrInfo() {
+  const box = $("cam-intr-info");
+  const sel = $("cam-intr-select");
+  if (!box || !sel) return;
+  const f = (window.colorIntrFiles || []).find((x) => x.name === sel.value);
+  if ($("btn-cam-intr-delete")) $("btn-cam-intr-delete").disabled = !sel.value;
+  if (!f) {
+    box.textContent = "出厂内参：随 ROS camera_info 走，无畸变系数。";
+    return;
+  }
+  if (f.error) { box.textContent = `文件无效：${f.error}`; return; }
+  const rms = f.rms_px == null ? "" : `，重投影 RMS ${Number(f.rms_px).toFixed(3)} px`;
+  box.textContent = `${f.size[0]}×${f.size[1]}：fx ${f.fx.toFixed(1)} fy ${f.fy.toFixed(1)} cx ${f.cx.toFixed(1)} cy ${f.cy.toFixed(1)}`
+    + `，畸变 [${f.dist.map((v) => v.toFixed(3)).join(", ")}]${rms}。分辨率与当前画面不同时自动换算。只改点云取色位置，点的三维位置仍由深度决定。`;
+}
+
+if ($("cam-intr-select")) $("cam-intr-select").onchange = showColorIntrInfo;
+if ($("btn-cam-intr-match")) {
+  $("btn-cam-intr-match").onclick = () => matchCloud({ color_intrinsics: $("cam-intr-select").value }, "main");
+}
+if ($("btn-cam-intr-upload")) $("btn-cam-intr-upload").onclick = () => $("cam-intr-file").click();
+if ($("cam-intr-file")) {
+  $("cam-intr-file").onchange = async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = "";
+    if (!file) return;
+    let text;
+    try { text = await file.text(); JSON.parse(text); } catch (e) { flash(`读不了 ${file.name}：${e.message}`, false); return; }
+    const guess = file.name.replace(/\.json$/i, "").replace(/[^\w\-.一-鿿]/g, "_").slice(0, 48);
+    const name = (prompt("内参文件名（中英文、数字、_ - .）", guess) || "").trim();
+    if (!name) return;
+    const exists = (window.colorIntrFiles || []).some((f) => f.name === name);
+    if (exists && !confirm(`内参文件「${name}」已存在，覆盖？`)) return;
+    try {
+      const d = await post("/api/handeye/color-intrinsics/upload", { name, doc: text, force: exists });
+      $("cam-intr-select").dataset.sig = "";
+      renderHe(d);
+      $("cam-intr-select").value = d.saved_name;
+      showColorIntrInfo();
+      flash(d.message || "已上传", true);
+    } catch (e) {
+      flash(String(e.message || e), false);
+    }
+  };
+}
+if ($("btn-cam-intr-delete")) {
+  $("btn-cam-intr-delete").onclick = async () => {
+    const name = $("cam-intr-select").value;
+    if (!name || !confirm(`删除内参文件「${name}」？`)) return;
+    try {
+      const d = await post("/api/handeye/color-intrinsics/delete", { name });
+      $("cam-intr-select").value = "";
+      renderHe(d);
+      flash(d.message || "已删除", true);
+    } catch (e) {
+      flash(String(e.message || e), false);
+    }
+  };
+}
+
 function renderHe(st) {
   if (!st) return;
   applyCameraKind(st);
+  renderColorIntr(st);
   renderHeTable(st);
   const sel = $("he-session");
   if (sel && document.activeElement !== sel) {
@@ -2510,6 +2596,7 @@ window.refreshHandeye = refreshHandeye;
 function applyHeRun(st) {
   if (!st) return;
   applyCameraKind(st);
+  renderColorIntr(st);
   if (st.running) {
     const p = st.progress || [0, 0];
     if ($("he-count")) $("he-count").textContent = `${p[0]}/${p[1]}`;
@@ -2561,6 +2648,8 @@ async function refreshCamPreview() {
     camPreviewBusy = false;
   }
 }
+// 本段在顶层 try 块里，async 函数不会挂到全局；卡片展开的处理器（块外）要靠这里取到
+window.refreshCamPreview = refreshCamPreview;
 setInterval(refreshCamPreview, 700);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && camPreviewWanted()) refreshCamPreview();

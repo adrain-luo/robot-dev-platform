@@ -20,6 +20,7 @@ import results as he_results
 from stereo_match import StereoMatcher, colorize_disp, write_ply
 from camera import ROS_TOPICS, camera_kind, open_camera
 import rgbd
+import color_intrinsics as he_color_intr
 from capture_task import CaptureTask
 from controller.arm_loop import PermissionErrorMotion
 from detection import detect_corners, parse_board_size
@@ -220,6 +221,8 @@ class HandEyeAPI:
             "sessions": he_session.list_sessions(),
             "saved": he_results.list_saved(),
             "active_result": cfg.get("active_result") or "",
+            "color_intrinsics": he_color_intr.list_files(),
+            "cloud_color_intrinsics": cfg.get("cloud_color_intrinsics") or "",
             "running": running,
             "phase": phase,
             "progress": progress,
@@ -253,6 +256,10 @@ class HandEyeAPI:
             return self._delete_named(body)
         if path == "/api/handeye/match":
             return self._match(body)
+        if path == "/api/handeye/color-intrinsics/upload":
+            return self._color_intr_upload(body)
+        if path == "/api/handeye/color-intrinsics/delete":
+            return self._color_intr_delete(body)
         if path == "/api/detect/grab":
             return self._grab_detect(body)
         return None
@@ -478,7 +485,7 @@ class HandEyeAPI:
         if frame.depth is not None:
             if use_debug:
                 return {"ok": False, "error": "调试口匹配只适用于 G1D 的双目相机"}
-            return self._rgbd_cloud(frame, hand_T)
+            return self._rgbd_cloud(frame, hand_T, str(body.get("color_intrinsics") or ""))
         pair = (frame.color, frame.right)
         if use_debug:
             try:
@@ -537,12 +544,38 @@ class HandEyeAPI:
             "note": note,
         }
 
-    def _rgbd_cloud(self, frame, T: Optional[np.ndarray]) -> Dict[str, Any]:
-        """RGB-D：深度直接给点，不做立体匹配；点在彩色光学系，乘手眼外参到躯干。"""
+    def _rgbd_cloud(self, frame, T: Optional[np.ndarray], intr_name: str = "") -> Dict[str, Any]:
+        """RGB-D：深度直接给点，不做立体匹配；点在彩色光学系，乘手眼外参到躯干。
+
+        intr_name 非空时，彩色内参换成自标定文件（换算到当前分辨率）；只影响点在彩色图上的取色位置，
+        点的三维位置仍由深度相机内参与深度到彩色外参决定。
+        """
         import base64
         if T is None:
             return {"ok": False, "error": "没有彩色相机到躯干的外参。先调用已保存的手眼结果，点云才能画到模型上"}
-        pts, cols = rgbd.depth_to_color_cloud(frame.depth, frame.color, frame.info)
+        info = frame.info
+        intr_note = ""
+        intr_summary = None
+        if intr_name:
+            try:
+                applied = he_color_intr.apply_to_info(info, intr_name)
+            except (OSError, ValueError, KeyError) as exc:
+                return {"ok": False, "error": str(exc)}
+            info = applied["info"]
+            intr_summary = applied["summary"]
+            sm = intr_summary
+            conv = ""
+            if sm["converted_from"]:
+                conv = f"由 {sm['converted_from'][0]}×{sm['converted_from'][1]} 换算到 {sm['size'][0]}×{sm['size'][1]}，"
+            intr_note = (f"彩色内参用「{intr_name}」：{conv}fx {sm['fx']:.1f}（{sm['d_fx']:+.1f}）"
+                         f" cx {sm['cx']:.1f}（{sm['d_cx']:+.1f}） cy {sm['cy']:.1f}（{sm['d_cy']:+.1f}），含畸变。")
+        else:
+            intr_note = "彩色内参用出厂 camera_info。"
+        cfg = load_config()
+        if (cfg.get("cloud_color_intrinsics") or "") != intr_name:
+            cfg["cloud_color_intrinsics"] = intr_name
+            save_config(cfg)
+        pts, cols = rgbd.depth_to_color_cloud(frame.depth, frame.color, info)
         n_valid = int(pts.shape[0])
         if n_valid < 50:
             return {"ok": False, "error": f"有效深度点只有 {n_valid}，看相机前方是否太近（<0.15 m）或被遮挡"}
@@ -561,7 +594,7 @@ class HandEyeAPI:
         if not ok:
             return {"ok": False, "error": "深度图编码失败"}
         ext = frame.info.get("depth_to_color") or {}
-        note = f"RGB-D 深度点云：手眼外参光轴离竖直 {_optical_from_down_deg(T):.1f}°。"
+        note = f"RGB-D 深度点云：手眼外参光轴离竖直 {_optical_from_down_deg(T):.1f}°。" + intr_note
         if ext.get("assumed"):
             note += "没收到深度到彩色的外参，按同轴零平移处理，点云约有 15 mm 偏差。"
         return {
@@ -573,8 +606,31 @@ class HandEyeAPI:
             "ply_torso": str(torso_ply),
             "cloud": {"xyz": np.round(pts_t, 4).reshape(-1).tolist(), "rgb": cols.reshape(-1).astype(int).tolist()},
             "disparity_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
+            "color_intrinsics": intr_summary,
             "note": note,
         }
+
+    def _color_intr_upload(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        name = str(body.get("name") or "").strip()
+        try:
+            res = he_color_intr.save(name, body.get("doc"), force=bool(body.get("force")))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not res.get("ok"):
+            return res
+        return dict(self.status(), saved_name=res["name"], message=f"已保存内参文件「{res['name']}」")
+
+    def _color_intr_delete(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        name = str(body.get("name") or "").strip()
+        try:
+            he_color_intr.delete(name)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        cfg = load_config()
+        if cfg.get("cloud_color_intrinsics") == name:
+            cfg["cloud_color_intrinsics"] = ""
+            save_config(cfg)
+        return dict(self.status(), message=f"已删除内参文件「{name}」")
 
     def _calib_yaml(self, cfg: Dict[str, Any]) -> Path:
         name = str(cfg.get("active_result") or "")

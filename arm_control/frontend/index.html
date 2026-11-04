@@ -76,6 +76,18 @@
                 <button id="btn-cam-match" type="button">匹配点云</button>
                 <button id="btn-cam-match-debug" type="button">调试口匹配</button>
               </div>
+              <div id="cam-intr" style="display:none">
+                <label class="field grow">彩色内参
+                  <select id="cam-intr-select"><option value="">出厂（camera_info）</option></select>
+                </label>
+                <div class="cmds">
+                  <button id="btn-cam-intr-match" type="button" class="primary">按所选内参匹配</button>
+                  <button id="btn-cam-intr-upload" type="button">上传内参…</button>
+                  <button id="btn-cam-intr-delete" type="button">删除</button>
+                </div>
+                <input id="cam-intr-file" type="file" accept=".json,application/json" hidden>
+                <div id="cam-intr-info" class="note"></div>
+              </div>
               <img id="cam-disp" alt="视差" class="he-view">
               <div id="cam-match" class="note"></div>
               <div id="cam-msg" class="note"></div>

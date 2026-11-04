@@ -45,10 +45,70 @@ def depth_to_color_cloud(depth: np.ndarray, color: np.ndarray, info: Dict[str, A
     v = np.full(zc.shape, -1.0)
     u[front] = Kc[0, 0] * p_color[front, 0] / zc[front] + Kc[0, 2]
     v[front] = Kc[1, 1] * p_color[front, 1] / zc[front] + Kc[1, 2]
+    Dc = np.asarray(info["color"].get("D") or [], float).ravel()
+    if Dc.size and np.any(np.abs(Dc) > 1e-12) and front.any():
+        # 彩色图本身带畸变（自标内参才有；出厂 camera_info 为 0）：按 K+D 投影取色
+        proj, _ = cv2.projectPoints(p_color[front].reshape(-1, 1, 3), np.zeros(3), np.zeros(3), Kc, Dc)
+        u[front], v[front] = proj[:, 0, 0], proj[:, 0, 1]
     h, w = color.shape[:2]
     ui, vi = np.round(u).astype(int), np.round(v).astype(int)
     inside = front & (ui >= 0) & (ui < w) & (vi >= 0) & (vi < h)
     return p_color[inside], color[vi[inside], ui[inside]]
+
+
+def parse_color_intrinsics(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """读自标定的彩色内参 JSON。认两种写法：
+
+    - ``camera_matrix`` 3×3 + ``distortion`` + ``image_size`` [w, h]（相机内参标定工具导出的格式）
+    - ``K`` 9 个数 + ``D`` + ``size`` [w, h]（与 camera_info 同格式）
+    """
+    if not isinstance(doc, dict):
+        raise ValueError("内参文件应是 JSON 对象")
+    if "camera_matrix" in doc:
+        K = np.asarray(doc["camera_matrix"], float)
+    elif "K" in doc:
+        K = np.asarray(doc["K"], float)
+    else:
+        raise ValueError("内参文件里没有 camera_matrix 或 K")
+    if K.size != 9:
+        raise ValueError("相机矩阵应是 3×3")
+    K = K.reshape(3, 3)
+    D = np.asarray(doc.get("distortion", doc.get("D")) or [0.0] * 5, float).ravel()
+    if D.size not in (4, 5, 8, 12, 14):
+        raise ValueError(f"畸变系数个数 {D.size} 不对（应为 4/5/8/12/14 个）")
+    size = doc.get("image_size", doc.get("size"))
+    if not (isinstance(size, (list, tuple)) and len(size) == 2):
+        raise ValueError("缺 image_size [宽, 高]")
+    w, h = int(size[0]), int(size[1])
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    if not (w > 0 and h > 0 and fx > 0 and fy > 0 and 0 < cx < w and 0 < cy < h):
+        raise ValueError("内参数值不合理（焦距应为正，主点应在图内）")
+    if not np.all(np.isfinite(K)) or not np.all(np.isfinite(D)):
+        raise ValueError("内参里有非数值")
+    rms = doc.get("rms_px")
+    return {"K": K.reshape(-1).tolist(), "D": D.tolist(), "size": [w, h],
+            "rms_px": None if rms is None else float(rms), "saved_at": doc.get("saved_at")}
+
+
+def adapt_intrinsics(intr: Dict[str, Any], size_to) -> Dict[str, Any]:
+    """把一种分辨率下标的内参换到相机当前出图的分辨率。
+
+    D435 彩色各分辨率都由同一传感器缩放后居中裁切得到（出厂内参 1280×720 与 640×480 之间
+    正好满足：按高缩放 2/3、左右各裁 106.7 px），所以换算为：缩放 s = max(w2/w1, h2/h1)，
+    主点再平移居中裁切量。畸变系数作用于归一化坐标，不随之改变。
+    """
+    w1, h1 = intr["size"]
+    w2, h2 = int(size_to[0]), int(size_to[1])
+    K = np.asarray(intr["K"], float).reshape(3, 3).copy()
+    if (w1, h1) == (w2, h2):
+        return dict(intr, K=K.reshape(-1).tolist(), converted_from=None)
+    s = max(w2 / w1, h2 / h1)
+    ox, oy = (w2 - s * w1) / 2.0, (h2 - s * h1) / 2.0
+    K[0, 0] *= s
+    K[1, 1] *= s
+    K[0, 2] = K[0, 2] * s + ox
+    K[1, 2] = K[1, 2] * s + oy
+    return dict(intr, K=K.reshape(-1).tolist(), size=[w2, h2], converted_from=[w1, h1])
 
 
 def colorize_depth(depth: np.ndarray, scale_m: float = 0.001, far_m: float = 4.0) -> np.ndarray:
