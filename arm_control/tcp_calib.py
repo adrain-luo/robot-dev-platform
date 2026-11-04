@@ -75,7 +75,9 @@ def list_saved() -> List[Dict[str, Any]]:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        residual = (doc.get("result") or {}).get("residual_mm") or {}
+        res = doc.get("result") or {}
+        residual = res.get("residual_mm") or {}
+        tcp_m = res.get("tcp_m")
         out.append({
             "name": doc.get("name") or path.stem,
             "arm": doc.get("arm") or "",
@@ -84,6 +86,8 @@ def list_saved() -> List[Dict[str, Any]]:
             "residual_max_mm": residual.get("max"),
             "note": doc.get("note") or "",
             "saved_at": doc.get("saved_at") or "",
+            "tcp_mm": None if tcp_m is None else [float(v) * 1000.0 for v in tcp_m],
+            "source": doc.get("source") or ("mirror" if doc.get("mirrored_from") else "pivot"),
         })
     return out
 
@@ -196,6 +200,21 @@ def solve_pivot(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
         "residual_mm": {"mean": float(err.mean()), "max": float(err.max()), "each": err_mm},
         "wrist_spread_deg": spread,
         "warning": warning,
+    }
+
+
+def _manual_result(tcp_m) -> Dict[str, Any]:
+    """手动新建 / 修正的 TCP：只有偏置，没有标定固定点与残差。"""
+    tcp = [float(v) for v in tcp_m]
+    return {
+        "tcp_m": tcp,
+        "tcp_mm": [v * 1000.0 for v in tcp],
+        "fixed_point_m": None,
+        "fixed_mm": None,
+        "residual_mm": None,
+        "wrist_spread_deg": None,
+        "warning": "",
+        "manual": True,
     }
 
 
@@ -341,6 +360,100 @@ class TcpSession:
         status["mirrored_name"] = dst_name
         status["mirrored_arm"] = dst_arm
         status["message"] = f"已镜像为「{dst_name}」（{dst_side}臂）"
+        return status
+
+    def new_flange(self, name: str, arm: str, tip_link: str, note: str = "", force: bool = False) -> Dict[str, Any]:
+        """以腕末端中心（腕坐标系原点，偏置 0）新建一个 TCP，作为手动修正的起点。不改当前应用。"""
+        name = _check_name(name)
+        if arm not in ("left", "right"):
+            raise ValueError("先选左臂或右臂")
+        path = _result_path(name)
+        if path.is_file() and not force:
+            raise FileExistsError(f"TCP「{name}」已存在")
+        now = datetime.now().isoformat(timespec="seconds")
+        doc = {
+            "name": name,
+            "saved_at": now,
+            "arm": arm,
+            "tip_link": tip_link,
+            "base_link": "torso_link",
+            "note": (note or "").strip()[:80] or "腕末端中心（偏置 0），待修正",
+            "n": 0,
+            "samples": [],
+            "result": _manual_result([0.0, 0.0, 0.0]),
+            "source": "flange",
+            "edits": [],
+        }
+        results_dir().mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
+        if self.active_name == name:
+            self._apply_doc(doc)
+        side = "左" if arm == "left" else "右"
+        status = self.status()
+        status["message"] = f"已新建「{name}」：{side}臂腕末端中心，偏置 [0, 0, 0] mm"
+        status["saved_name"] = name
+        return status
+
+    def save_edit(self, src: str, tcp_mm, mode: str, name: str = "", note: Optional[str] = None,
+                  force: bool = False) -> Dict[str, Any]:
+        """保存修正后的偏置（腕坐标系，毫米）。mode=overwrite 覆盖原名；saveas 另存为 name。
+
+        偏置一改，原标定的固定点与残差就不再对应它，一并清掉；修正历史记在 edits 里。
+        覆盖的若是某臂当前应用的 TCP，立即重新加载（红点跟着变）。
+        """
+        src = _check_name(src)
+        path = _result_path(src)
+        if not path.is_file():
+            raise FileNotFoundError(f"没有 TCP 结果 {src}")
+        try:
+            new_mm = np.asarray(tcp_mm, dtype=float).reshape(3)
+        except (TypeError, ValueError):
+            raise ValueError("偏置需要 3 个数（毫米）")
+        if not np.all(np.isfinite(new_mm)) or float(np.max(np.abs(new_mm))) > 500.0:
+            raise ValueError("偏置每轴须是有限数，且不超过 ±500 mm")
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        old_m = (doc.get("result") or {}).get("tcp_m") or [0.0, 0.0, 0.0]
+        old_mm = np.asarray(old_m, dtype=float) * 1000.0
+        if mode == "overwrite":
+            dst = src
+        elif mode == "saveas":
+            dst = _check_name(name)
+            if dst == src:
+                raise ValueError("另存需要一个新名字；要改原名请用覆盖保存")
+            if _result_path(dst).is_file() and not force:
+                raise FileExistsError(f"TCP「{dst}」已存在")
+        else:
+            raise ValueError("mode 只能是 overwrite 或 saveas")
+        now = datetime.now().isoformat(timespec="seconds")
+        edits = list(doc.get("edits") or [])
+        edits.append({
+            "at": now,
+            "from_mm": [round(float(v), 3) for v in old_mm],
+            "to_mm": [round(float(v), 3) for v in new_mm],
+            "delta_mm": [round(float(v), 3) for v in new_mm - old_mm],
+        })
+        out = dict(doc)
+        out["name"] = dst
+        out["saved_at"] = now
+        out["result"] = _manual_result((new_mm / 1000.0).tolist())
+        out["edits"] = edits[-50:]
+        out["source"] = "flange" if doc.get("source") == "flange" else "edited"
+        if mode == "saveas":
+            out["edited_from"] = src
+            out.pop("mirrored_from", None)
+        if note is not None:
+            out["note"] = str(note).strip()[:80]
+        results_dir().mkdir(parents=True, exist_ok=True)
+        _result_path(dst).write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+        active = _read_active_map()
+        if self.active_name == dst or active.get(str(out.get("arm"))) == dst:
+            self._apply_doc(out)
+        d = new_mm - old_mm
+        verb = "已覆盖" if mode == "overwrite" else "已另存为"
+        status = self.status()
+        status["message"] = (f"{verb}「{dst}」：偏置 [{', '.join(f'{v:.1f}' for v in new_mm)}] mm"
+                             f"（变化 [{', '.join(f'{v:+.1f}' for v in d)}]）")
+        status["saved_name"] = dst
         return status
 
     def _apply_doc(self, doc: Dict[str, Any]) -> None:

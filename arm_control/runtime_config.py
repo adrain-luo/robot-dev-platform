@@ -74,6 +74,11 @@ class RuntimeConfig:
             raise ConfigLockedError("配置已锁定，请到「控制 → 配置」解锁后再改")
         if path == "/api/handeye/config" and body and "active_result" in body:
             raise ConfigLockedError("配置已锁定，请到「控制 → 配置」解锁后再改")
+        if path == "/api/tcp/edit-save" and body and str(body.get("mode") or "") == "overwrite":
+            import tcp_calib
+            name = str(body.get("src") or "")
+            if name and name in tcp_calib._read_active_map().values():
+                raise ConfigLockedError("配置已锁定，不能覆盖正在应用的 TCP；可以另存，或先解锁")
         if path == "/api/handeye/delete" and body:
             from service import load_config
             if load_config().get("active_result") == str(body.get("name") or ""):

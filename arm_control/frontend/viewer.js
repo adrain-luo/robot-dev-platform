@@ -508,6 +508,25 @@ const View = {
     this.render();
     return true;
   },
+  /** TCP 修正中的预览位置；橙色。传 null 清除。 */
+  setTcpPreview(xyz) {
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso) return false;
+    if (!this.tcpPreview && xyz && xyz.length >= 3) {
+      this.tcpPreview = new THREE.Mesh(
+        new THREE.SphereGeometry(0.011, 18, 14),
+        new THREE.MeshBasicMaterial({ color: 0xff8c1a, depthTest: true }),
+      );
+      torso.add(this.tcpPreview);
+    }
+    if (this.tcpPreview) {
+      const show = !!(xyz && xyz.length >= 3);
+      this.tcpPreview.visible = show;
+      if (show) this.tcpPreview.position.set(xyz[0], xyz[1], xyz[2]);
+    }
+    this.render();
+    return true;
+  },
   setSpatialPoint(xyz) {
     const torso = this.links.get("torso_link");
     if (!this.ready || !torso) return false;

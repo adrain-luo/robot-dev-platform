@@ -586,6 +586,18 @@ class App:
                     f"已删除「{name}」"
                     + (f"及 {n_wp} 个工作姿态" if n_wp else "")
                 )
+            elif path == "/api/tcp/new-flange":
+                arm = str(body.get("arm") or (self.loop.arm if self.loop is not None else "right"))
+                layout = get_arm(arm)
+                status = self.tcp.new_flange(str(body.get("name") or ""), layout.name, layout.tip_link,
+                                             str(body.get("note") or ""), force=bool(body.get("force")))
+            elif path == "/api/tcp/edit-save":
+                status = self.tcp.save_edit(
+                    str(body.get("src") or ""), body.get("tcp_mm"), str(body.get("mode") or ""),
+                    name=str(body.get("name") or ""),
+                    note=None if body.get("note") is None else str(body.get("note")),
+                    force=bool(body.get("force")),
+                )
             elif path == "/api/tcp/jog":
                 return self.tcp_jog(body)
             else:

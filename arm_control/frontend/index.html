@@ -418,6 +418,54 @@
                   </div>
                 </div>
               </section>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">修正</button>
+                <div class="subfold-body">
+                  <p class="note">偏置在腕坐标系（*_wrist_yaw_link）里：X 沿手指朝外，Y、Z 见三维模型。可以先以腕末端中心新建一个（偏置 0），再按量出的距离沿三轴平移；橙点是修改中的位置。</p>
+                  <div class="fields">
+                    <label class="field">手
+                      <select id="tcp-new-arm">
+                        <option value="right">右臂</option>
+                        <option value="left">左臂</option>
+                      </select>
+                    </label>
+                    <label class="field grow">新 TCP 名
+                      <input id="tcp-new-name" placeholder="例如 右手夹爪中心" maxlength="48">
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-tcp-new" type="button">记录末端中心为新 TCP</button>
+                  </div>
+                  <label class="field grow">编辑
+                    <select id="tcp-edit-select"></select>
+                  </label>
+                  <p class="note" id="tcp-edit-now">选一个 TCP 开始修正</p>
+                  <div class="fields">
+                    <label class="field">ΔX mm
+                      <input id="tcp-edit-dx" type="number" step="0.5" value="0">
+                    </label>
+                    <label class="field">ΔY mm
+                      <input id="tcp-edit-dy" type="number" step="0.5" value="0">
+                    </label>
+                    <label class="field">ΔZ mm
+                      <input id="tcp-edit-dz" type="number" step="0.5" value="0">
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-tcp-edit-move" type="button">平移</button>
+                    <button id="btn-tcp-edit-reset" type="button">重置</button>
+                    <button id="btn-tcp-edit-overwrite" class="primary" type="button">覆盖保存</button>
+                  </div>
+                  <div class="fields">
+                    <label class="field grow">另存为
+                      <input id="tcp-edit-newname" placeholder="新名字" maxlength="48">
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-tcp-edit-saveas" type="button">另存</button>
+                  </div>
+                </div>
+              </section>
             </div>
           </article>
 

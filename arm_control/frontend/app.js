@@ -1424,6 +1424,63 @@ function renderTcpTable(tcp) {
   });
 }
 
+// ---------- TCP 修正：新建（腕末端中心）、沿腕三轴平移、覆盖 / 另存 ----------
+window.tcpEdit = null; // { name, arm, base: [mm×3], cur: [mm×3] }
+function tcpEditText() {
+  const e = window.tcpEdit;
+  if (!e) return "选一个 TCP 开始修正";
+  const f = (v) => v.map((x) => Number(x).toFixed(1)).join(", ");
+  const d = e.cur.map((v, i) => v - e.base[i]);
+  const side = e.arm === "left" ? "左臂" : "右臂";
+  const moved = d.some((v) => Math.abs(v) > 1e-9);
+  return `「${e.name}」· ${side} · 原偏置 [${f(e.base)}] mm` +
+    (moved ? ` → 新偏置 [${f(e.cur)}] mm（变化 [${d.map((v) => (v >= 0 ? "+" : "") + v.toFixed(1)).join(", ")}]，未保存）` : "，未修改");
+}
+function renderTcpEdit(tcp, arms) {
+  const sel = $("tcp-edit-select");
+  if (!sel) return;
+  const saved = (tcp && tcp.saved) || [];
+  if (document.activeElement !== sel) {
+    const want = (window.tcpEdit && window.tcpEdit.name) || sel.value;
+    writeOptions(sel, saved.length ? "选择要修正的 TCP…" : "还没有 TCP",
+      saved.filter((s) => s.arm === "left" || s.arm === "right").map((s) => ({
+        value: s.name,
+        label: `${s.name} · ${s.arm === "left" ? "左" : "右"}${s.tcp_mm ? ` · [${s.tcp_mm.map((v) => Number(v).toFixed(0)).join(", ")}] mm` : ""}`,
+      })), want);
+  }
+  // 选中的 TCP 被别处改了（例如另一页覆盖）、且这里没改动：跟上
+  const e = window.tcpEdit;
+  if (e) {
+    const s = saved.find((x) => x.name === e.name);
+    if (!s) { window.tcpEdit = null; }
+    else if (s.tcp_mm && e.cur.every((v, i) => v === e.base[i])) {
+      e.base = s.tcp_mm.slice(); e.cur = s.tcp_mm.slice();
+    }
+  }
+  if ($("tcp-edit-now")) $("tcp-edit-now").textContent = tcpEditText();
+  if (arms) window.tcpEditArms = arms;
+  updateTcpPreview();
+}
+function updateTcpPreview() {
+  const e = window.tcpEdit;
+  const arms = window.tcpEditArms;
+  const view = window.RobotView;
+  if (!view || !view.setTcpPreview) return;
+  if (!e || !arms) { view.setTcpPreview(null); return; }
+  const pt = tcpOnWrist({ arm: e.arm, result: { tcp_m: e.cur.map((v) => v / 1000) } }, arms);
+  view.setTcpPreview(pt);
+}
+function selectTcpEdit(name) {
+  const s = (window.lastTcpSaved || []).find((x) => x.name === name);
+  if (!s) { window.tcpEdit = null; }
+  else {
+    const mm = (s.tcp_mm || [0, 0, 0]).slice();
+    window.tcpEdit = { name: s.name, arm: s.arm, base: mm.slice(), cur: mm.slice() };
+  }
+  if ($("tcp-edit-now")) $("tcp-edit-now").textContent = tcpEditText();
+  updateTcpPreview();
+}
+
 function renderTcp(tcp, arms) {
   const note = $("tcp-now");
   if (!note || !tcp) return;
@@ -1446,10 +1503,14 @@ function renderTcp(tcp, arms) {
   if (r) {
     const mm = (arr) => arr.map((v) => Number(v).toFixed(1)).join(", ");
     const res = r.residual_mm || {};
-    text += `。工作点相对腕 [${mm(r.tcp_mm)}] mm。固定点 [${mm(r.fixed_mm)}] mm。残差平均 ${Number(res.mean).toFixed(1)}、最大 ${Number(res.max).toFixed(1)} mm。`;
+    text += `。工作点相对腕 [${mm(r.tcp_mm || [0, 0, 0])}] mm。`;
+    if (r.fixed_mm) text += `固定点 [${mm(r.fixed_mm)}] mm。`;
+    if (r.residual_mm) text += `残差平均 ${Number(res.mean).toFixed(1)}、最大 ${Number(res.max).toFixed(1)} mm。`;
+    if (r.manual) text += "（手动设定 / 修正，无标定残差）";
     if (r.warning) text += r.warning;
   }
   note.textContent = text;
+  renderTcpEdit(tcp, arms);
   if (!arms) return;
   const live = tcpOnWrist(tcp, arms);
   const key = live ? live.map((v) => Number(v).toFixed(4)).join(",") : "";
@@ -1596,6 +1657,62 @@ $("btn-tcp-solve").onclick = async () => {
     flash(`TCP 已算出，最大残差 ${Number(res.max).toFixed(1)} mm`, true);
   } catch (e) { flash(String(e), false); }
 };
+$("tcp-edit-select").onchange = () => selectTcpEdit($("tcp-edit-select").value);
+$("btn-tcp-new").onclick = async () => {
+  const name = $("tcp-new-name").value.trim();
+  if (!name) { flash("给新 TCP 起个名字", false); return; }
+  const arm = $("tcp-new-arm").value;
+  const exists = (window.lastTcpSaved || []).some((s) => s.name === name);
+  if (exists && !confirm(`TCP「${name}」已存在，覆盖成腕末端中心（偏置 0）？`)) return;
+  try {
+    const d = await post("/api/tcp/new-flange", { name, arm, force: exists });
+    renderTcp(d);
+    $("tcp-new-name").value = "";
+    selectTcpEdit(name);
+    flash(d.message || `已新建「${name}」`, true);
+  } catch (e) { flash(String(e), false); }
+};
+$("btn-tcp-edit-move").onclick = () => {
+  const e = window.tcpEdit;
+  if (!e) { flash("先在下拉框选一个 TCP", false); return; }
+  const d = ["tcp-edit-dx", "tcp-edit-dy", "tcp-edit-dz"].map((id) => parseFloat($(id).value) || 0);
+  if (d.every((v) => v === 0)) { flash("填平移距离（毫米）", false); return; }
+  if (d.some((v) => Math.abs(v) > 200)) { flash("单次平移每轴不超过 200 mm", false); return; }
+  e.cur = e.cur.map((v, i) => Math.round((v + d[i]) * 1000) / 1000);
+  $("tcp-edit-now").textContent = tcpEditText();
+  updateTcpPreview();
+};
+$("btn-tcp-edit-reset").onclick = () => {
+  const e = window.tcpEdit;
+  if (!e) return;
+  e.cur = e.base.slice();
+  $("tcp-edit-now").textContent = tcpEditText();
+  updateTcpPreview();
+};
+async function tcpEditSave(mode) {
+  const e = window.tcpEdit;
+  if (!e) { flash("先在下拉框选一个 TCP", false); return; }
+  const body = { src: e.name, tcp_mm: e.cur, mode };
+  if (mode === "saveas") {
+    body.name = $("tcp-edit-newname").value.trim();
+    if (!body.name) { flash("另存要填新名字", false); return; }
+    if (body.name === e.name) { flash("另存要换个名字；改原名请用覆盖保存", false); return; }
+    const exists = (window.lastTcpSaved || []).some((s) => s.name === body.name);
+    if (exists && !confirm(`TCP「${body.name}」已存在，覆盖？`)) return;
+    body.force = exists;
+  } else if (!confirm(`覆盖「${e.name}」的偏置为 [${e.cur.map((v) => v.toFixed(1)).join(", ")}] mm？`)) {
+    return;
+  }
+  try {
+    const d = await post("/api/tcp/edit-save", body);
+    renderTcp(d);
+    if (mode === "saveas") $("tcp-edit-newname").value = "";
+    selectTcpEdit(d.saved_name || e.name);
+    flash(d.message || "已保存", true);
+  } catch (err) { flash(String(err), false); }
+}
+$("btn-tcp-edit-overwrite").onclick = () => tcpEditSave("overwrite");
+$("btn-tcp-edit-saveas").onclick = () => tcpEditSave("saveas");
 $("btn-tcp-save").onclick = async () => {
   const name = $("tcp-name").value.trim();
   if (!name) { flash("填一个名字", false); return; }
