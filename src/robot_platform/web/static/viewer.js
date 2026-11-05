@@ -114,6 +114,8 @@ const View = {
     requestAnimationFrame(kick);
     try {
       const robot = await this._load();
+      // 记下机器人自身（URDF）的网格：贴地只看它们，不让后来挂上去的点云 / 标记把模型顶高
+      robot.traverse((o) => { if (o.isMesh) o.userData.robotBody = true; });
       scene.add(robot);
       this.robot = robot;
       robot.updateMatrixWorld(true);
@@ -724,8 +726,16 @@ const View = {
     this._imuRP = [r, p];
     return !prev || Math.abs(prev[0] - r) + Math.abs(prev[1] - p) > 0.005;
   },
+  _bodyBox() {
+    const box = new THREE.Box3();
+    this.robot.traverse((o) => {
+      if (o.isMesh && o.userData.robotBody) box.expandByObject(o);
+    });
+    return box.isEmpty() ? new THREE.Box3().setFromObject(this.robot) : box;
+  },
   _ground(box) {
-    const b = box || new THREE.Box3().setFromObject(this.robot);
+    // 只按机器人自身网格贴地：躯干上挂的雷达 / 相机点云有地面以下的点，算进去会把整机顶高
+    const b = box || this._bodyBox();
     this.robot.position.z -= b.min.z;
     this.robot.updateMatrixWorld(true);
     this._groundAt = performance.now();
