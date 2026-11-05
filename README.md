@@ -32,7 +32,7 @@ python serve.py --backend mock   # 不接机器人，仿真
 | `hw/` | 硬件：`backends/`（G1D `unitree_lowcmd`、G1 `unitree_arm_sdk`、`mock`）、`dds/`、立柱闭环 |
 | `control/` | 臂控循环 `ArmLoop`（限速、接管、拖拽、腰保持）、URDF 正运动学、重力前馈 |
 | `calib/` | 标定：`tcp.py`、`lift.py`、`handeye/`（采集、求解、结果、内参）、`payload/`（负载辨识、姿态集、摩擦、到位对比） |
-| `perception/` | 相机（双目 / RGB-D / mock）、立体匹配、深度点云、相机与点云接口 `cloud_api.py`、G1D 调试口 `debug_port.py`、识别定位 |
+| `perception/` | 相机（双目 / RGB-D / mock）、立体匹配、深度点云、相机与点云接口 `cloud_api.py`、G1D 调试口 `debug_port.py`、识别定位、雷达（`lidar*.py`，G1 的 MID-360） |
 | `tasks/` | 面向操作的功能：工作姿态、空间点、棋盘触摸 |
 | `web/` | HTTP 服务 `server.py` 与前端 `static/` |
 | `paths.py` | 仓库内各目录的位置 |
@@ -47,7 +47,7 @@ python serve.py --backend mock   # 不接机器人，仿真
 | `third_party/unitree_sdk2_python/` | Unitree SDK |
 | `功能说明.md` | 按模块写的详细说明（算法、坐标、文件路径） |
 
-**边界：** 只有 `hw/` 的后端订阅 / 发布机器人话题（G1D 发 `rt/lowcmd`，G1 发 `rt/arm_sdk`；立柱另用 Agv + `rt/hispeed_state`）。其它模块经 `control/arm_loop.py` 发令，不另起服务、不另发 DDS。页面只有 `web/static/` 一份。
+**边界：** 只有 `hw/` 的后端订阅 / 发布机器人话题（G1D 发 `rt/lowcmd`，G1 发 `rt/arm_sdk`；立柱另用 Agv + `rt/hispeed_state`）。其它模块经 `control/arm_loop.py` 发令，不另起服务、不另发 DDS。唯一例外是雷达：`perception/lidar_worker.py` 在子进程里只读订阅宇树转发的点云话题，不发任何指令（放进子进程是为了不拖慢本进程的 `rt/lowstate`）。页面只有 `web/static/` 一份。
 
 导入一律写完整包名，例如 `from robot_platform.calib import tcp`，不再改 `sys.path`（只有 `serve.py`、`tools/` 脚本和测试夹具为了免安装，把 `src` 加进搜索路径）。
 
