@@ -74,6 +74,66 @@ function applyCameraKind(st) {
 
 window.applyCameraKind = applyCameraKind;
 
+// 相机下拉框：列出机型 robot.json 里声明的相机，选中的记到实例配置（state/handeye.json 的 camera）
+let camSelectBusy = false;
+function renderCameraSelect(st) {
+  const sel = $("cam-select");
+  if (!sel || !Array.isArray(st.cameras) || camSelectBusy) return;
+  const sig = JSON.stringify(st.cameras.map((c) => [c.id, c.label]));
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.innerHTML = "";
+    for (const c of st.cameras) {
+      const o = document.createElement("option");
+      o.value = c.id;
+      o.textContent = c.label;
+      sel.appendChild(o);
+    }
+    if (!st.cameras.length) {
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = st.camera_label || "（机型没有声明相机）";
+      sel.appendChild(o);
+    }
+  }
+  // 实例里用旧写法直接指定了来源、且对不上机型里的相机时，显示一项「实例配置」
+  const cur = st.camera || "";
+  if (cur && st.cameras.length) {
+    const stale = [...sel.options].find((o) => o.value === "");
+    if (stale) stale.remove();
+  }
+  if (!cur && st.cameras.length) {
+    let extra = [...sel.options].find((o) => o.value === "");
+    if (!extra) {
+      extra = document.createElement("option");
+      extra.value = "";
+      sel.prepend(extra);
+    }
+    extra.textContent = `实例配置：${st.camera_label || st.camera_source}`;
+  }
+  if (document.activeElement !== sel) sel.value = cur;
+  sel.disabled = st.cameras.length <= 1 && !!cur;
+  sel.title = `来源 ${st.camera_source}`;
+}
+
+if ($("cam-select")) {
+  $("cam-select").onchange = async () => {
+    const camera = $("cam-select").value;
+    if (!camera) return;
+    camSelectBusy = true;
+    try {
+      const d = await post("/api/handeye/config", { camera });
+      camSelectBusy = false;
+      renderHe(d);
+      if ($("cam-preview")) $("cam-preview").removeAttribute("src");
+      flash(`相机：${d.camera_label}`, true);
+    } catch (e) {
+      camSelectBusy = false;
+      flash(String(e.message || e), false);
+    }
+  };
+}
+
 // RGB-D 彩色内参文件：出厂 / 自标定（上传到实例 calib/color_intrinsics）
 let camIntrInit = false;
 
@@ -166,6 +226,7 @@ if ($("btn-cam-intr-delete")) {
 function renderHe(st) {
   if (!st) return;
   applyCameraKind(st);
+  renderCameraSelect(st);
   renderColorIntr(st);
   renderHeTable(st);
   const sel = $("he-session");
@@ -270,6 +331,7 @@ window.refreshHandeye = refreshHandeye;
 function applyHeRun(st) {
   if (!st) return;
   applyCameraKind(st);
+  renderCameraSelect(st);
   renderColorIntr(st);
   if (st.running) {
     const p = st.progress || [0, 0];

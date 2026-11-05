@@ -102,6 +102,19 @@ class ControlSpec:
     options: Dict[str, Any] = field(default_factory=dict)
 
 
+CAMERA_TYPES = ("teleimager", "ros_rgbd", "mock", "mock_rgbd")
+
+
+@dataclass(frozen=True)
+class CameraSpec:
+    """机型上的一台相机。type 决定怎么取图；其余字段是该类型的默认参数（实例配置可覆盖）。"""
+
+    id: str
+    label: str
+    type: str  # teleimager（双目）/ ros_rgbd（RGB-D 经 ROS 话题）/ mock / mock_rgbd
+    params: Dict[str, Any] = field(default_factory=dict)  # host、teleimager_path、ros_topics…
+
+
 @dataclass(frozen=True)
 class RobotProfile:
     name: str
@@ -119,6 +132,8 @@ class RobotProfile:
     lift: Optional[LiftSpec]
     # 只用于三维显示的其它关节（电机号 → URDF 关节名），如 G1 的腿
     display_joints: Dict[int, str] = field(default_factory=dict)
+    # 相机，按 robot.json 里的顺序；第一台是默认
+    cameras: Dict[str, CameraSpec] = field(default_factory=dict)
 
     @property
     def meshes_dir(self) -> Path:
@@ -220,7 +235,19 @@ def _parse(raw: Dict[str, Any], root: Path) -> RobotProfile:
         waist=waist,
         lift=lift,
         display_joints={int(k): str(v) for k, v in (raw.get("display_joints") or {}).items()},
+        cameras=_parse_cameras(raw.get("cameras") or {}),
     )
+
+
+def _parse_cameras(raw: Dict[str, Any]) -> Dict[str, CameraSpec]:
+    out: Dict[str, CameraSpec] = {}
+    for cid, spec in raw.items():
+        ctype = str(spec.get("type") or "")
+        if ctype not in CAMERA_TYPES:
+            raise ValueError(f"相机 {cid!r} 的 type {ctype!r} 不认识（可用：{', '.join(CAMERA_TYPES)}）")
+        params = {k: v for k, v in spec.items() if k not in ("type", "label")}
+        out[str(cid)] = CameraSpec(id=str(cid), label=str(spec.get("label") or cid), type=ctype, params=params)
+    return out
 
 
 def load_profile(name_or_path: str | Path) -> RobotProfile:

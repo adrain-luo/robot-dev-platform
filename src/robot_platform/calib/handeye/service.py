@@ -10,8 +10,7 @@ from typing import Any, Dict, Optional
 
 from robot_platform.calib.handeye import color_intrinsics as he_color_intr, results as he_results, session as he_session
 from robot_platform.calib.handeye.capture_task import CaptureTask
-from robot_platform.calib.handeye.config import load_config
-from robot_platform.perception.camera import camera_kind, ROS_TOPICS
+from robot_platform.calib.handeye.config import camera_choices, effective_camera, load_config
 from robot_platform.perception.stereo_match import StereoMatcher
 from robot_platform.perception.cloud_api import CameraCloudMixin
 from robot_platform.perception.debug_port import DebugPortMixin
@@ -41,6 +40,7 @@ class HandEyeAPI(CameraCloudMixin, DebugPortMixin, CaptureMixin, SolveMixin):
             if left.is_dir():
                 count = len(list(left.glob("*.jpg")))
         cam = self._cam
+        eff = effective_camera(cfg, mock=self._is_mock())
         with self._lock:
             task = self._task
             running = self._running
@@ -53,11 +53,14 @@ class HandEyeAPI(CameraCloudMixin, DebugPortMixin, CaptureMixin, SolveMixin):
             "arm": he_session.ARM,
             "tip_link": he_session.tip_link(),
             "base_link": he_session.base_link(),
-            "camera_source": cfg.get("camera_source"),
-            "camera_kind": camera_kind(str(cfg.get("camera_source") or "teleimager")),
-            "ros_topics": dict(ROS_TOPICS, **(cfg.get("ros_topics") or {})),
-            "camera_host": cfg.get("camera_host"),
-            "teleimager_path": cfg.get("teleimager_path") or "",
+            "camera": eff["id"],
+            "camera_label": eff["label"],
+            "cameras": camera_choices(),
+            "camera_source": eff["camera_source"],
+            "camera_kind": eff["camera_kind"],
+            "ros_topics": eff["ros_topics"],
+            "camera_host": eff["camera_host"],
+            "teleimager_path": eff["teleimager_path"],
             "camera_error": "" if cam is None else cam.last_error,
             "intrinsics": cfg.get("intrinsics") or "",
             "board_size": cfg.get("board_size") or "11x8",

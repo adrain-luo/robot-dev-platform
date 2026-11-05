@@ -4,6 +4,14 @@
   "urdf": "g1_d.urdf",
   "base_link": "torso_link",
   "num_motors": 29,
+  "cameras": {
+    "head": {
+      "label": "头部双目（teleimager）",
+      "type": "teleimager",
+      "host": "192.168.123.164",
+      "teleimager_path": "/home/robot/yx/teleimager_src_copy"
+    }
+  },
   "control": {
     "backend": "unitree_lowcmd",
     "state_topic": "rt/lowstate",

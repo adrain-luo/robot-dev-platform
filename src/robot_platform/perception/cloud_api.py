@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 from robot_platform.calib.handeye import color_intrinsics as he_color_intr, results as he_results
-from robot_platform.calib.handeye.config import load_config, save_config
+from robot_platform.calib.handeye.config import effective_camera, load_config, save_config
 from robot_platform.calib.handeye.detection import detect_corners, parse_board_size
 from robot_platform.core import instance as instances
 from robot_platform.perception import rgbd
@@ -40,14 +40,20 @@ def _stack_eyes(left: np.ndarray, right: np.ndarray, labels=("L", "R")) -> np.nd
 
 
 class CameraCloudMixin:
+    def _is_mock(self) -> bool:
+        backend = getattr(getattr(self, "app", None), "backend", None)
+        return getattr(backend, "name", "") == "mock"
+
     def _camera(self, cfg: Dict[str, Any]):
-        key = (f"{cfg.get('camera_source')}|{cfg.get('camera_host')}|{cfg.get('teleimager_path')}|"
-               f"{json.dumps(cfg.get('ros_topics') or {}, sort_keys=True)}")
+        """按实例配置与机型相机声明打开当前相机（规则见 calib/handeye/config.py）；参数没变就复用。"""
+        eff = effective_camera(cfg, mock=self._is_mock())
+        key = (f"{eff['camera_source']}|{eff['camera_host']}|{eff['teleimager_path']}|"
+               f"{json.dumps(eff['ros_topics'], sort_keys=True)}")
         with self._lock:
             if self._cam is None or key != self._cam_key:
                 if self._cam is not None:
                     self._cam.close()
-                self._cam = open_camera(cfg)
+                self._cam = open_camera(eff)
                 self._cam_key = key
             return self._cam
 

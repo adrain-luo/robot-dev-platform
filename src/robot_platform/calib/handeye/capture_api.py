@@ -9,7 +9,7 @@ import numpy as np
 
 from robot_platform.calib.handeye import session as he_session
 from robot_platform.calib.handeye.capture_task import CaptureTask
-from robot_platform.calib.handeye.config import load_config, save_config
+from robot_platform.calib.handeye.config import camera_choices, load_config, save_config
 from robot_platform.calib.handeye.detection import parse_board_size
 from robot_platform.calib.payload import identify as iden, poses as posesets
 from robot_platform.control.arm_loop import PermissionErrorMotion
@@ -22,6 +22,14 @@ class CaptureMixin:
         for key in ("camera_source", "camera_host", "teleimager_path", "intrinsics", "board_size", "eye", "session"):
             if key in body and body[key] is not None:
                 cfg[key] = body[key]
+        if body.get("camera_source"):
+            cfg.pop("camera", None)  # 显式给了来源：不再按下拉框选的相机
+        if body.get("camera"):
+            cid = str(body["camera"])
+            if cid not in {c["id"] for c in camera_choices()}:
+                raise ValueError(f"本机型没有相机 {cid!r}")
+            cfg["camera"] = cid
+            cfg.pop("camera_source", None)  # 下拉框选的相机优先，旧的来源写法作废
         if body.get("intrinsics"):
             inst = instances.active()
             cfg["intrinsics"] = inst.to_stored(inst.from_stored(str(body["intrinsics"])))
