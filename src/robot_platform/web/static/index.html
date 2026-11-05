@@ -128,34 +128,40 @@
           <article class="float" id="panel-detect">
             <button type="button" class="float-toggle">识别定位</button>
             <div class="float-body">
-              <p class="note">从调试口（YOLO）取<strong>左右目</strong>原图与掩膜，再按四边形网格投影到点云：左红 · 右蓝 · 中心绿。</p>
-              <label class="field grow">/pose 参数
-                <input id="detect-params" type="text" spellcheck="false" placeholder="例如 label=43010159 或 label=43010159&amp;fx=271.24" maxlength="512">
-              </label>
-              <p class="note">留空则用调试页默认；也可贴 JSON。网格默认 10×10。</p>
-              <div class="cmds">
-                <button id="btn-detect-grab" type="button">取图</button>
-                <button id="btn-detect-points" class="primary" type="button">点位获取</button>
-                <button id="btn-detect-calibrate" type="button">校准</button>
-                <button id="btn-detect-center" type="button">中心点提取</button>
-              </div>
-              <div class="detect-eyes" id="detect-eyes" hidden>
-                <div class="detect-eye">
-                  <div class="detect-eye-title">左目</div>
-                  <div class="detect-stack">
-                    <img id="detect-left-base" alt="左目原图" class="detect-layer">
-                    <img id="detect-left-mask" alt="左目YOLO" class="detect-layer">
+              <p class="note">识别定位的各个方案各占一张小卡，结果都画在中央三维里、供「工作流」取用。</p>
+              <section class="subfold open" id="detect-yolo">
+                <button type="button" class="subfold-toggle">烟盒 · YOLO（调试口）</button>
+                <div class="subfold-body">
+                  <p class="note">从调试口（YOLO）取<strong>左右目</strong>原图与掩膜，再按四边形网格投影到点云：左红 · 右蓝 · 中心绿。</p>
+                  <label class="field grow">/pose 参数
+                    <input id="detect-params" type="text" spellcheck="false" placeholder="例如 label=43010159 或 label=43010159&amp;fx=271.24" maxlength="512">
+                  </label>
+                  <p class="note">留空则用调试页默认；也可贴 JSON。网格默认 10×10。</p>
+                  <div class="cmds">
+                    <button id="btn-detect-grab" type="button">取图</button>
+                    <button id="btn-detect-points" class="primary" type="button">点位获取</button>
+                    <button id="btn-detect-calibrate" type="button">校准</button>
+                    <button id="btn-detect-center" type="button">中心点提取</button>
                   </div>
-                </div>
-                <div class="detect-eye">
-                  <div class="detect-eye-title">右目</div>
-                  <div class="detect-stack">
-                    <img id="detect-right-base" alt="右目原图" class="detect-layer">
-                    <img id="detect-right-mask" alt="右目YOLO" class="detect-layer">
+                  <div class="detect-eyes" id="detect-eyes" hidden>
+                    <div class="detect-eye">
+                      <div class="detect-eye-title">左目</div>
+                      <div class="detect-stack">
+                        <img id="detect-left-base" alt="左目原图" class="detect-layer">
+                        <img id="detect-left-mask" alt="左目YOLO" class="detect-layer">
+                      </div>
+                    </div>
+                    <div class="detect-eye">
+                      <div class="detect-eye-title">右目</div>
+                      <div class="detect-stack">
+                        <img id="detect-right-base" alt="右目原图" class="detect-layer">
+                        <img id="detect-right-mask" alt="右目YOLO" class="detect-layer">
+                      </div>
+                    </div>
                   </div>
+                  <p class="note" id="detect-note">还没有取图 / 点位</p>
                 </div>
-              </div>
-              <p class="note" id="detect-note">还没有取图 / 点位</p>
+              </section>
             </div>
           </article>
         </div>
