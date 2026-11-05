@@ -2,7 +2,7 @@
 /api/lidar/config（选雷达）、/api/lidar/stop（停止订阅）。
 
 用哪台雷达：实例 state/lidar.json 的 ``lidar``，没有就用机型 robot.json ``lidars`` 的第一台。
-订阅在第一次取用时才建立，20 s 没人取就自动断开，不占 DDS 带宽。
+订阅在第一次取用时才建立（真雷达在子进程里订阅，见 lidar_worker），20 s 没人取就自动断开。
 """
 
 from __future__ import annotations
@@ -17,10 +17,11 @@ import numpy as np
 
 from robot_platform.core import instance as instances
 from robot_platform.core.robot_profile import active as active_profile
-from robot_platform.perception.lidar import DdsLidar, MockLidar, link_transform
+from robot_platform.perception.lidar import MockLidar, link_transform
+from robot_platform.perception.lidar_worker import WorkerLidar
 
 IDLE_CLOSE_S = 20.0
-FIRST_FRAME_WAIT_S = 1.5
+FIRST_FRAME_WAIT_S = 5.0  # 含子进程启动、DDS 发现（实测 1–2 s）
 
 
 def _jet(t: np.ndarray) -> np.ndarray:
@@ -99,8 +100,9 @@ class LidarAPI:
         if mock:
             self._dev = MockLidar(self._T)
         else:
-            self._dev = DdsLidar(str(spec.params.get("topic") or ""), settings.dds_domain,
-                                 settings.network_interface, settings.unitree_sdk_path)
+            # DDS 订阅放在子进程里：不拖慢本进程的 lowstate，卡死了也能杀掉重开
+            self._dev = WorkerLidar(str(spec.params.get("topic") or ""), settings.dds_domain,
+                                    settings.network_interface, settings.unitree_sdk_path)
         self._dev_key = key
         return self._dev
 
@@ -151,7 +153,8 @@ class LidarAPI:
         frame = dev.latest()
         deadline = time.monotonic() + FIRST_FRAME_WAIT_S
         # 刚建立订阅时第一帧要一会儿才到（10 Hz），等一下而不是直接报「还没收到」
-        while frame is None and time.monotonic() < deadline and "失败" not in (dev.last_error or ""):
+        while (frame is None and time.monotonic() < deadline
+               and not any(k in (dev.last_error or "") for k in ("失败", "子进程"))):
             time.sleep(0.05)
             frame = dev.latest()
         if frame is None:
