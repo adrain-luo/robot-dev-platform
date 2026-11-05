@@ -20,6 +20,7 @@ from robot_platform.core.robot_profile import active as active_profile
 from robot_platform.perception.lidar import DdsLidar, MockLidar, link_transform
 
 IDLE_CLOSE_S = 20.0
+FIRST_FRAME_WAIT_S = 1.5
 
 
 def _jet(t: np.ndarray) -> np.ndarray:
@@ -140,6 +141,11 @@ class LidarAPI:
         except (LookupError, ValueError, OSError) as exc:
             return {"ok": False, "error": str(exc)}
         frame = dev.latest()
+        deadline = time.monotonic() + FIRST_FRAME_WAIT_S
+        # 刚建立订阅时第一帧要一会儿才到（10 Hz），等一下而不是直接报「还没收到」
+        while frame is None and time.monotonic() < deadline and "失败" not in (dev.last_error or ""):
+            time.sleep(0.05)
+            frame = dev.latest()
         if frame is None:
             return {"ok": False, "error": dev.last_error or "没有雷达数据"}
         xyz = frame["xyz"]
