@@ -28,6 +28,7 @@ ROS_TOPICS = {
     "extrinsics": "/camera/extrinsics/depth_to_color",
 }
 ROS_PY_PATHS = ("/opt/ros/noetic/lib/python3/dist-packages", "/usr/lib/python3/dist-packages")
+EXTRINSICS_WAIT_S = 1.5
 
 
 @dataclass
@@ -189,6 +190,8 @@ class RosRgbdCamera:
         self._subs: list = []
         self._latest: Dict[str, Any] = {}
         self._started = False
+        self._started_at = 0.0
+        self._wants_extrinsics = False
 
     def _start(self) -> bool:
         if self._started:
@@ -215,12 +218,14 @@ class RosRgbdCamera:
             try:
                 from realsense2_camera.msg import Extrinsics
                 self._subs.append(rospy.Subscriber(t["extrinsics"], Extrinsics, self._keep("extrinsics"), queue_size=1))
+                self._wants_extrinsics = True
             except Exception:
                 pass  # 没有外参消息类型时按深度与彩色同轴、零平移处理，点云会差约 15 mm
         except Exception as exc:
             self.last_error = f"订阅 ROS 相机话题失败: {exc}"
             return False
         self._started = True
+        self._started_at = time.monotonic()
         return True
 
     def _keep(self, name: str):
@@ -239,7 +244,11 @@ class RosRgbdCamera:
                 got = dict(self._latest)
             c, d = got.get("color"), got.get("depth")
             # 取在调用之后到达的一对，彩色与深度时间戳相差不超过 1 帧
-            if c and d and c[1] >= start and d[1] >= start and got.get("color_info") and got.get("depth_info"):
+            # 外参是一次性（latched）消息，刚订阅时可能晚于图像到；首次取帧最多多等 EXTRINSICS_WAIT_S
+            ext_ready = (not self._wants_extrinsics or "extrinsics" in got
+                         or time.monotonic() - self._started_at > EXTRINSICS_WAIT_S)
+            if (c and d and c[1] >= start and d[1] >= start and got.get("color_info") and got.get("depth_info")
+                    and ext_ready):
                 dt = abs(c[0].header.stamp.to_sec() - d[0].header.stamp.to_sec())
                 if dt <= 0.04:
                     try:
