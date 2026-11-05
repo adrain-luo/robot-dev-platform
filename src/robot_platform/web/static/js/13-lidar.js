@@ -111,6 +111,12 @@ if ($("lidar-select")) {
     } catch (e) { flash(String(e.message || e), false); }
   };
 }
+if ($("lidar-range")) {
+  // 拖动时只更新数字；松手后（非实时模式下已有点云时）按新距离重取一帧，实时模式下一拍自动生效。
+  $("lidar-range").addEventListener("input", () => {
+    $("lidar-range-val").textContent = (parseFloat($("lidar-range").value) || 8).toFixed(1);
+  });
+}
 ["lidar-range", "lidar-points", "lidar-color"].forEach((id) => {
   if ($(id)) $(id).addEventListener("change", () => { if (!lidarLive && window.RobotView && window.RobotView.lidarPoints) lidarFetchOnce(); });
 });

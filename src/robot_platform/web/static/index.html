@@ -113,7 +113,7 @@
                   </select>
                 </label>
               </div>
-              <label class="field grow">最远距离 <span id="cloud-max-dist-val">2.0</span> m
+              <label class="field grow"><span>最远距离 <span id="cloud-max-dist-val">2.0</span> m</span>
                 <input id="cloud-max-dist" type="range" min="0.5" max="8" step="0.1" value="2">
               </label>
               <p class="note">只影响画布显示：保留距机器人中心（基座原点）不超过该距离的点；拖条即时生效，不必重新匹配。</p>
@@ -172,9 +172,6 @@
               </label>
               <p class="note" id="lidar-desc">读宇树转发到 DDS 的点云（只订阅，不连雷达、不改雷达设置）。点按 URDF 安装位换到躯干系，画在中央三维里、跟着腰转。</p>
               <div class="fields">
-                <label class="field grow">最远 m
-                  <input id="lidar-range" type="number" min="0.5" max="40" step="0.5" value="8">
-                </label>
                 <label class="field grow">点数
                   <select id="lidar-points">
                     <option value="4000">4000</option>
@@ -189,6 +186,9 @@
                   </select>
                 </label>
               </div>
+              <label class="field grow"><span>最远距离 <span id="lidar-range-val">8.0</span> m</span>
+                <input id="lidar-range" type="range" min="0.5" max="40" step="0.5" value="8">
+              </label>
               <div class="cmds">
                 <button id="btn-lidar-live" type="button" class="primary">实时显示</button>
                 <button id="btn-lidar-once" type="button">取一帧</button>
