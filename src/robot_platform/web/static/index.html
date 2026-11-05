@@ -33,13 +33,6 @@
 </header>
 
 <nav class="dock" id="ctrl-group">
-  <label class="field slim">视图
-    <select id="arm-select">
-      <option value="right">右臂</option>
-      <option value="left">左臂</option>
-      <option value="both">双臂</option>
-    </select>
-  </label>
   <label class="field slim">控制臂
     <select id="control-arm">
       <option value="right">右</option>
@@ -55,8 +48,6 @@
     <input id="speed" type="number" step="0.05" min="0.02" max="1.0" value="0.2">
   </label>
   <button id="btn-speed">设</button>
-  <button id="btn-fill">填入当前角</button>
-  <button id="btn-goto" class="primary">出发</button>
   <div id="engage-state" class="state"></div>
 </nav>
 
@@ -705,7 +696,7 @@
           <article class="float" id="panel-motion">
             <button type="button" class="float-toggle">手臂控制</button>
             <div class="float-body">
-              <p class="note">控制臂 7 轴。拖滑条松手后，只改该关节、其余保持目标/实测，按网页限速走。也可用底栏「填入当前角 / 出发」。</p>
+              <p class="note">控制臂 7 轴。滑条平时跟着实测角走；拖滑条松手（或改数字回车）后，只改该关节、其余保持目标/实测，按底栏限速走。</p>
               <p class="note" id="arm-ctrl-now">手臂 —</p>
               <div class="arm-sliders" id="goto-inputs"></div>
               <div class="still" title="测量/走点到达后等实测角停住。窗口内 max|dq| 小于速度阈，且位置峰峰值小于漂移阈。">

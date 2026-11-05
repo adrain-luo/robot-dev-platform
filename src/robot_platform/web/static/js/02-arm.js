@@ -131,7 +131,7 @@ function applyCtrl(ctrl) {
   const settling = !!(ctrl.engaged && ctrl.ready === false);
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-goto", "btn-fill", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-he-run"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-he-run"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
   const mirror = $("btn-poseset-mirror");
@@ -142,12 +142,12 @@ function applyCtrl(ctrl) {
   $("engage-state").textContent = allow
     ? (ctrl.transition ? `过渡中 · ${ctrl.transition}` : ctrl.engaged
         ? `${ctrl.float ? "拖拽中" : "已接管"} · ${ctrl.arm}${ctrl.waist_locked ? " · 腰保持" : ""}${
+            ctrl.loop_hz ? ` · ${Math.round(ctrl.loop_hz)} Hz` : ""}${
             ctrl.payload_mass_kg != null ? ` · 载 ${Number(ctrl.payload_mass_kg).toFixed(2)} kg${ctrl.payload_name ? "(" + ctrl.payload_name + ")" : ""}` : ""
           }`
         : "未接管")
     : "只读（加 --allow-real-motion 后可接管）";
   document.querySelectorAll(".g-q, .g-slider").forEach((el) => { el.disabled = !allow || !!ctrl.float || settling; });
-  $("btn-goto").disabled = !allow || !ctrl.engaged || !!ctrl.float || settling;
   document.querySelectorAll(".tcp-jog-btn").forEach((el) => {
     el.disabled = !allow || !ctrl.engaged || !!ctrl.float || tcpJogBusy || settling;
   });
@@ -178,31 +178,20 @@ function applyCtrl(ctrl) {
   if (ctrl.arm) $("control-arm").value = ctrl.arm;
 }
 
-$("arm-select").onchange = () => { poll(); window.V3.draw(); };
-
-$("btn-fill").onclick = () => {
-  const view = $("control-arm")?.value || "right";
-  fetch("/api/status?arm=" + view).then((r) => r.json()).then((d) => {
-    if (d.ok) {
-      applyArmLimits(d.joints);
-      fillQ(d.joints.map((j) => j.q_rad));
-      flash("已填入当前角", true);
-    }
-  }).catch((e) => flash(String(e), false));
-};
-
 $("btn-engage").onclick = async () => {
   const sdk = window.ROBOT?.transitions;
+  const secs = (k, d) => Math.round(Number(window.ROBOT?.transition_s?.[k]) || d);
   const ask = sdk
-    ? "将经 rt/arm_sdk 接管腰与手臂（运控保持站立），约 12 秒过渡后才能走点。请有人看护、守急停。继续？"
+    ? `将经 rt/arm_sdk 接管腰与手臂（运控保持站立），约 ${secs("engage", 3)} 秒过渡后才能走点。请有人看护、守急停。继续？`
     : "将发布 rt/lowcmd 接管（会退出高层运动模式）。请扶住机器人。继续？";
   if (!confirm(ask)) return;
   try { await post("/api/engage", {}); flash("已接管：保持当前姿态", true); } catch (e) { flash(String(e), false); }
 };
 
 $("btn-release").onclick = async () => {
+  const rel = Math.round(Number(window.ROBOT?.transition_s?.release) || 3);
   const ask = window.ROBOT?.transitions
-    ? "释放：约 5 秒内把手臂交还运控，之后停止发令。继续？"
+    ? `释放：约 ${rel} 秒内把手臂交还运控（手臂会回到运控自己的姿态），之后停止发令。继续？`
     : "释放后停止发令，手臂可能下垂，请扶住。继续？";
   if (!confirm(ask)) return;
   try { await post("/api/release", {}); flash("已释放", true); } catch (e) { flash(String(e), false); }
@@ -239,8 +228,6 @@ $("btn-speed").onclick = async () => {
     flash("已设限速", true);
   } catch (e) { flash(String(e), false); }
 };
-
-$("btn-goto").onclick = () => armGotoFromUi(true);
 
 $("control-arm").onchange = async () => {
   try { await post("/api/control-arm", { arm: $("control-arm").value }); flash("控制臂已切换", true); }

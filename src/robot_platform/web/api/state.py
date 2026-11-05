@@ -97,6 +97,14 @@ class StateMixin:
             "ctrl": ctrl,
         }
 
+    def _transition_s(self):
+        """arm_sdk 接管 / 释放的总时长（秒），给页面提示用；其它后端为 None。"""
+        if self.backend.name != "unitree_arm_sdk":
+            return None
+        o = self.profile.control.options
+        return {"engage": float(o.get("acquire_s", 8.0)) + float(o.get("gain_ramp_s", 4.0)),
+                "release": float(o.get("release_gain_s", 2.0)) + float(o.get("release_s", 3.0))}
+
     def robot_caps(self) -> Dict[str, Any]:
         """给前端的机型能力：决定显示哪些控件。"""
         p = self.profile
@@ -120,6 +128,7 @@ class StateMixin:
             "lift": None if p.lift is None else {"stroke_max_mm": p.lift.stroke_max_m * 1000.0},
             # 接管 / 释放有过渡（arm_sdk）：页面显示进度，过渡中不能走点
             "transitions": self.backend.name == "unitree_arm_sdk",
+            "transition_s": self._transition_s(),
             # 腿式机型：三维里根在骨盆，要按腿部实测贴地
             "legged": bool(p.display_joints),
         }

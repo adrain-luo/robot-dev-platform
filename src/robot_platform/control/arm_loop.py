@@ -47,6 +47,7 @@ class ArmLoop:
         self.layout: ArmLayout = get_arm(arm)
         self.max_speed = float(np.clip(max_speed_rad_s, 0.02, 1.0))
         self._dt = 1.0 / float(rate_hz)
+        self._loop_period = self._dt  # 实测循环周期（指数平均），给页面看实际频率
         self.limits = self.kin.arms[self.layout.name].model.joint_limits()
         self.kp_body = list(self.profile.kp)
         self.kd_body = list(self.profile.kd)
@@ -106,10 +107,10 @@ class ArmLoop:
         q = self.reader.snapshot().q
         return {idx: float(q[idx]) for idx in self._waist_motors}
 
-    def _slew_waist(self) -> None:
+    def _slew_waist(self, dt: Optional[float] = None) -> None:
         if not self._waist_cmd or not self._waist_target:
             return
-        step = self.max_speed * self._dt
+        step = self.max_speed * (self._dt if dt is None else dt)
         for idx in self._waist_motors:
             cur = float(self._waist_cmd[idx])
             tgt = float(self._waist_target[idx])
@@ -282,6 +283,7 @@ class ArmLoop:
             "waist_target_rad": waist_target,
             "arm": self.layout.name,
             "max_speed_rad_s": self.max_speed,
+            "loop_hz": round(1.0 / self._loop_period, 1) if self._loop_period > 0 else None,
             "cmd_rad": cmd,
             "desired_rad": desired,
             "last_error": self._last_err,
@@ -291,8 +293,9 @@ class ArmLoop:
             "transition": self._commander.phase(),
         }
 
-    def _slew(self) -> None:
-        step = self.max_speed * self._dt
+    def _slew(self, dt: Optional[float] = None) -> None:
+        # 每拍走的量按实际经过的时间算：循环跑不满额定频率时，实际速度仍等于限速
+        step = self.max_speed * (self._dt if dt is None else dt)
         delta = self._desired_q - self._cmd_q
         n = float(np.max(np.abs(delta)))
         if n > step and n > 1e-12:
@@ -342,7 +345,14 @@ class ArmLoop:
 
     def _loop(self) -> None:
         next_t = time.perf_counter()
+        last = next_t
         while not self._stop.is_set():
+            now = time.perf_counter()
+            # 本拍实际间隔；卡顿后最多按 3 拍补，避免一下子跳一大步
+            dt = min(max(now - last, 0.0), 3.0 * self._dt)
+            last = now
+            if dt > 0:
+                self._loop_period = 0.95 * self._loop_period + 0.05 * dt
             try:
                 engaged = self._engaged
                 # 释放过渡中（arm_sdk）仍要发帧，按最后的指令角保持
@@ -350,8 +360,8 @@ class ArmLoop:
                     if engaged:
                         with self._lock:
                             if not self._float:
-                                self._slew()
-                            self._slew_waist()
+                                self._slew(dt)
+                            self._slew_waist(dt)
                     self._publish()
                     self._last_err = None
                 elif self._waist_cmd is not None:

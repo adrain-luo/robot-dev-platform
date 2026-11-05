@@ -784,11 +784,11 @@ const View = {
     return pts.filter(Boolean).map((p) => link.localToWorld(new THREE.Vector3(+p[0], +p[1], +p[2])));
   },
   _payload(data) {
-    const show = $("arm-select") ? $("arm-select").value : "both";
+    // 只有一个负载标记：优先画控制臂的，没有再画另一只
+    const ctrlArm = (window.lastCtrl && window.lastCtrl.arm) || "right";
     let placed = false;
-    for (const arm of ["right", "left"]) {
-      if (show === "left" && arm === "right") continue;
-      if (show === "right" && arm === "left") continue;
+    for (const arm of ctrlArm === "left" ? ["left", "right"] : ["right", "left"]) {
+      if (placed) break;
       const sc = data[arm];
       if (!sc || !(sc.payload_mass > 1e-6) || !sc.payload_com_m) continue;
       const wrist = this.links.get(arm === "left" ? "left_wrist_yaw_link" : "right_wrist_yaw_link");

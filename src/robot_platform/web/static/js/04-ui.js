@@ -55,10 +55,9 @@ async function poll() {
     if (data.runtime) renderRuntimeConfig(data.runtime);
     V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel, imu: data.imu || null };
     V3.draw();
-    const view = $("arm-select").value;
     const ctrlArm = data.ctrl?.arm || "right";
-    const tableArm = view === "left" ? left : view === "right" ? right : (ctrlArm === "left" ? left : right);
-    renderTable(tableArm, data.waist);
+    // 三维始终画双臂；关节表跟控制臂
+    renderTable(ctrlArm === "left" ? left : right, data.waist);
     const ctrlSnap = ctrlArm === "left" ? left : right;
     if (ctrlSnap && ctrlSnap.joints) syncArmSlidersFromLive(ctrlSnap.joints);
     const note = $("arm-ctrl-now");

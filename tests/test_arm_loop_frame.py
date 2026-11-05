@@ -169,3 +169,24 @@ def test_idle_motor_guard_blocks_legged_robot():
             check_idle_motors(backend.state(), idle)
     finally:
         backend.close()
+
+
+def test_slew_step_follows_elapsed_time(rig):
+    """限速按实际经过的时间算：同一个 dt，步长 = 限速 × dt；循环慢了每拍就走得多些。"""
+    _, _, _, loop = rig
+    loop.set_max_speed(0.5)
+    with loop._lock:
+        loop._cmd_q = np.zeros(7)
+        loop._desired_q = np.full(7, 1.0)  # 远处目标；按最大分量限幅
+        loop._clamp = lambda q: q          # 不让关节限位干扰这个测试
+        loop._slew(0.01)
+        assert np.allclose(loop._cmd_q, 0.005)
+        loop._slew(0.03)                   # 循环慢了一倍多：这一拍补上
+        assert np.allclose(loop._cmd_q, 0.005 + 0.015)
+
+
+def test_status_reports_loop_rate(rig):
+    _, _, _, loop = rig
+    time.sleep(0.5)
+    hz = loop.status()["loop_hz"]
+    assert hz is not None and 50 < hz < 130
