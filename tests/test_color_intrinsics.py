@@ -5,9 +5,9 @@ import json
 import numpy as np
 import pytest
 
-import color_intrinsics as he_color_intr
-import rgbd
-from camera import MockRgbdCamera
+from robot_platform.calib.handeye import color_intrinsics as he_color_intr
+from robot_platform.perception import rgbd
+from robot_platform.perception.camera import MockRgbdCamera
 
 # 2026-11-04 读到的 G1 D435i 出厂彩色内参
 F720 = [911.1815185546875, 0, 650.241943359375, 0, 910.4107666015625, 371.0053405761719, 0, 0, 1]
@@ -94,7 +94,7 @@ def test_upload_list_delete_api(mock_server):
 
 
 def test_rgbd_cloud_with_selected_intrinsics():
-    from service import HandEyeAPI, load_config
+    from robot_platform.calib.handeye.service import HandEyeAPI, load_config
 
     he_color_intr.save("t_cloud", DOC, force=True)
     api = HandEyeAPI(None)

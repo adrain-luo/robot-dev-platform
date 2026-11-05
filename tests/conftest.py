@@ -11,12 +11,11 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-for sub in ("arm_control", "arm_payload_gravity", "hand_eye"):
-    p = str(REPO / sub)
-    if p not in sys.path:
-        sys.path.insert(0, p)
+SRC = REPO / "src"
+if str(SRC) not in sys.path:  # pyproject 里 pytest 已配 pythonpath=src；直接 python 跑单个文件时兜底
+    sys.path.insert(0, str(SRC))
 
-import instance as instances  # noqa: E402
+from robot_platform.core import instance as instances  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -81,10 +80,11 @@ def mock_server(tmp_path_factory):
     log_path = work / "server.log"
     log = open(log_path, "wb")
     # 临时实例建在 pytest 的目录里：Windows 上 terminate 不走 atexit，靠 pytest 清理
-    env = {**os.environ, "TMP": str(work), "TEMP": str(work), "TMPDIR": str(work)}
+    env = {**os.environ, "TMP": str(work), "TEMP": str(work), "TMPDIR": str(work),
+           "PYTHONPATH": os.pathsep.join([str(SRC), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep)}
     env.pop("ARM_INSTANCE", None)
     proc = subprocess.Popen(
-        [sys.executable, str(REPO / "arm_control" / "server.py"), "--backend", "mock",
+        [sys.executable, "-m", "robot_platform", "--backend", "mock",
          "--host", "127.0.0.1", "--port", str(port)],
         stdout=log, stderr=subprocess.STDOUT, env=env,
     )

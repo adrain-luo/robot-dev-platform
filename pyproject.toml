@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robot-platform"
+version = "1.1.0.dev0"
+description = "Robot Development Platform：多机器人（G1D / G1）臂控、标定、感知与工作流"
+requires-python = ">=3.10"
+# 依赖见 requirements.txt / environment.yml（设备上用 conda 环境，pip install -e . --no-deps）
+dependencies = []
+
+[project.scripts]
+robot-platform = "robot_platform.web.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+robot_platform = ["robots/**/*", "web/static/**/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

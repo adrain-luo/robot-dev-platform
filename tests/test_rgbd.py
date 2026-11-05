@@ -6,8 +6,8 @@ import cv2
 import numpy as np
 import pytest
 
-import rgbd
-from camera import MockRgbdCamera
+from robot_platform.perception import rgbd
+from robot_platform.perception.camera import MockRgbdCamera
 
 K_COLOR = [607.45, 0, 326.83, 0, 606.94, 247.34, 0, 0, 1]
 K_DEPTH = [390.15, 0, 312.64, 0, 390.15, 240.39, 0, 0, 1]
@@ -65,9 +65,9 @@ def _render_board(K, T_board2cam, cols, rows, sq_m, size=(640, 480)):
 
 def test_rgbd_handeye_solve_recovers_camera_pose(tmp_path):
     """合成：已知相机在躯干的位姿、板在左腕上；按 G1 正运动学渲染各姿态的棋盘，走 RGB-D 求解流程。"""
-    from model.robot_profile import load_profile
-    from model.urdf_fk import URDFRobotModel
-    from solve_core import SolveOptions, load_intrinsics, make_T, object_points_m, solve_eye
+    from robot_platform.core.robot_profile import load_profile
+    from robot_platform.control.urdf_fk import URDFRobotModel
+    from robot_platform.calib.handeye.solve_core import SolveOptions, load_intrinsics, make_T, object_points_m, solve_eye
 
     p = load_profile("g1")
     model = URDFRobotModel(str(p.urdf), "torso_link", "left_wrist_yaw_link")

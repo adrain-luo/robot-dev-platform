@@ -1,0 +1,857 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>臂控</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="viewer">
+  <canvas id="scene3d"></canvas>
+  <div class="legend">
+    <span><i class="swatch solid"></i>实测</span>
+    <span><i class="swatch cmd"></i>指令</span>
+    <span><i class="swatch tgt"></i>目标</span>
+    <span><i class="swatch pay"></i>负载质心</span>
+    <span class="legend-ops">拖动旋转 · 右键平移 · 滚轮缩放 · 双击复位</span>
+  </div>
+</div>
+
+<header class="hud">
+  <div class="brand">
+    <div class="mark" aria-hidden="true"></div>
+    <div>
+      <h1 id="app-title">臂控</h1>
+      <p id="meta" class="meta">等待低层状态</p>
+    </div>
+  </div>
+  <div id="msg">推实物手臂对照 3D。发令需用 --allow-real-motion 启动，并点接管。</div>
+  <div class="mast-status">
+    <span id="mode-badge" class="badge ro">…</span>
+    <span id="pill" class="pill">连接中…</span>
+  </div>
+</header>
+
+<nav class="dock" id="ctrl-group">
+  <label class="field slim">视图
+    <select id="arm-select">
+      <option value="right">右臂</option>
+      <option value="left">左臂</option>
+      <option value="both">双臂</option>
+    </select>
+  </label>
+  <label class="field slim">控制臂
+    <select id="control-arm">
+      <option value="right">右</option>
+      <option value="left">左</option>
+    </select>
+  </label>
+  <label class="switch"><input id="grav-on" type="checkbox" checked><span>重力前馈</span></label>
+  <button id="btn-engage" class="primary">接管</button>
+  <button id="btn-teach">拖拽</button>
+  <button id="btn-hold" class="danger">急停(保持)</button>
+  <button id="btn-release">释放</button>
+  <label class="field slim">限速
+    <input id="speed" type="number" step="0.05" min="0.02" max="1.0" value="0.2">
+  </label>
+  <button id="btn-speed">设</button>
+  <button id="btn-fill">填入当前角</button>
+  <button id="btn-goto" class="primary">出发</button>
+  <div id="engage-state" class="state"></div>
+</nav>
+
+<!-- 左书：感知 [页|签] -->
+<section class="book book-left" data-book="left">
+  <div class="pages">
+    <div class="page" data-page="vision">
+      <div class="page-sheet">
+        <div class="page-head"><strong>感知</strong><span>3 张卡片</span></div>
+        <div class="page-cards">
+          <article class="float" id="panel-cam">
+            <button type="button" class="float-toggle">双目</button>
+            <div class="float-body">
+              <p class="note">展开后才从相机取预览（约 0.7 s 一帧）；收起即停，不占带宽。</p>
+              <img id="cam-preview" alt="左右目" class="he-view">
+              <div class="cmds">
+                <button id="btn-cam-match" type="button">匹配点云</button>
+                <button id="btn-cam-match-debug" type="button">调试口匹配</button>
+              </div>
+              <div id="cam-intr" style="display:none">
+                <label class="field grow">彩色内参
+                  <select id="cam-intr-select"><option value="">出厂（camera_info）</option></select>
+                </label>
+                <div class="cmds">
+                  <button id="btn-cam-intr-match" type="button" class="primary">按所选内参匹配</button>
+                  <button id="btn-cam-intr-upload" type="button">上传内参…</button>
+                  <button id="btn-cam-intr-delete" type="button">删除</button>
+                </div>
+                <input id="cam-intr-file" type="file" accept=".json,application/json" hidden>
+                <div id="cam-intr-info" class="note"></div>
+              </div>
+              <img id="cam-disp" alt="视差" class="he-view">
+              <div id="cam-match" class="note"></div>
+              <div id="cam-msg" class="note"></div>
+            </div>
+          </article>
+          <article class="float" id="panel-render">
+            <button type="button" class="float-toggle">渲染</button>
+            <div class="float-body">
+              <p class="note">控制中央画布的彩色点云。棋盘角点、红点、黄点不受清除影响。</p>
+              <div class="fields">
+                <label class="field grow">挂接
+                  <select id="render-frame">
+                    <option value="vision" selected>视觉（跟躯干/相机）</option>
+                    <option value="scene">场景（钉在世界）</option>
+                  </select>
+                </label>
+                <label class="field grow">叠帧
+                  <select id="render-stack">
+                    <option value="single" selected>单帧场景</option>
+                    <option value="fixed">固定场景</option>
+                  </select>
+                </label>
+              </div>
+              <label class="field grow">最远距离 <span id="cloud-max-dist-val">2.0</span> m
+                <input id="cloud-max-dist" type="range" min="0.5" max="8" step="0.1" value="2">
+              </label>
+              <p class="note">只影响画布显示：保留距机器人中心（基座原点）不超过该距离的点；拖条即时生效，不必重新匹配。</p>
+              <div class="cmds">
+                <button id="btn-render-match" type="button">匹配点云</button>
+                <button id="btn-cloud-clear" type="button">点云清除</button>
+                <button id="btn-cloud-optimize" type="button">点云优化</button>
+              </div>
+              <p class="note" id="render-note">视觉 · 单帧 · ≤2.0 m · 0 层</p>
+            </div>
+          </article>
+          <article class="float" id="panel-detect">
+            <button type="button" class="float-toggle">识别定位</button>
+            <div class="float-body">
+              <p class="note">从调试口（YOLO）取<strong>左右目</strong>原图与掩膜，再按四边形网格投影到点云：左红 · 右蓝 · 中心绿。</p>
+              <label class="field grow">/pose 参数
+                <input id="detect-params" type="text" spellcheck="false" placeholder="例如 label=43010159 或 label=43010159&amp;fx=271.24" maxlength="512">
+              </label>
+              <p class="note">留空则用调试页默认；也可贴 JSON。网格默认 10×10。</p>
+              <div class="cmds">
+                <button id="btn-detect-grab" type="button">取图</button>
+                <button id="btn-detect-points" class="primary" type="button">点位获取</button>
+                <button id="btn-detect-calibrate" type="button">校准</button>
+                <button id="btn-detect-center" type="button">中心点提取</button>
+              </div>
+              <div class="detect-eyes" id="detect-eyes" hidden>
+                <div class="detect-eye">
+                  <div class="detect-eye-title">左目</div>
+                  <div class="detect-stack">
+                    <img id="detect-left-base" alt="左目原图" class="detect-layer">
+                    <img id="detect-left-mask" alt="左目YOLO" class="detect-layer">
+                  </div>
+                </div>
+                <div class="detect-eye">
+                  <div class="detect-eye-title">右目</div>
+                  <div class="detect-stack">
+                    <img id="detect-right-base" alt="右目原图" class="detect-layer">
+                    <img id="detect-right-mask" alt="右目YOLO" class="detect-layer">
+                  </div>
+                </div>
+              </div>
+              <p class="note" id="detect-note">还没有取图 / 点位</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </div>
+  <nav class="bookmarks" aria-label="左侧书签">
+    <button type="button" class="bookmark" data-page="vision" aria-pressed="false">
+      感知<span class="count">3</span>
+    </button>
+  </nav>
+</section>
+
+<!-- 右书：标定 / 控制 [签|页] -->
+<section class="book book-right" data-book="right">
+  <nav class="bookmarks" aria-label="右侧书签">
+    <button type="button" class="bookmark" data-page="calib" aria-pressed="false">
+      标定<span class="count">6</span>
+    </button>
+    <button type="button" class="bookmark" data-page="control" aria-pressed="false">
+      控制<span class="count">7</span>
+    </button>
+    <button type="button" class="bookmark" data-page="workflow" aria-pressed="false">
+      工作流<span class="count">1</span>
+    </button>
+  </nav>
+  <div class="pages">
+    <div class="page" data-page="calib">
+      <div class="page-sheet">
+        <div class="page-head"><strong>标定</strong><span>6 张卡片</span></div><!-- 姿态集/负载/对比/手眼/TCP/工作姿态；棋盘触摸已迁控制 -->
+        <div class="page-cards">
+          <article class="float" id="panel-poses">
+            <button type="button" class="float-toggle">姿态集 <span id="pose-cond" class="aside"></span></button>
+            <div class="float-body">
+              <p class="note">拖拽到位后按空格或「记录」。镜像关于躯干 y=0：roll/yaw 反号，pitch 同号。</p>
+              <div class="fields">
+                <label class="field grow">姿态集
+                  <select id="poseset-select"></select>
+                </label>
+                <label class="field">新建到
+                  <select id="poseset-arm">
+                    <option value="right">右臂</option>
+                    <option value="left">左臂</option>
+                  </select>
+                </label>
+                <label class="field grow">名字
+                  <input id="poseset-new" placeholder="新姿态集" maxlength="48">
+                </label>
+              </div>
+              <div class="cmds">
+                <button id="btn-poseset-new">新建</button>
+                <button id="btn-poseset-del">删集</button>
+                <button id="btn-poseset-record" class="primary">记录</button>
+                <button id="btn-poseset-mirror">镜像到对侧</button>
+              </div>
+              <div id="pose-chips"></div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-id">
+            <button type="button" class="float-toggle">末端负载 <span id="id-progress" class="aside"></span></button>
+            <div class="float-body">
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">管理</button>
+                <div class="subfold-body">
+                  <p class="note">已保存的补偿文件。点「应用」列勾选设为<strong>该文件所属手臂</strong>的补偿（左右可各勾一个，与 TCP 相同）；正控该臂时立即进前馈，对侧换臂后自动带上。删除若正在应用会清掉该侧登记。</p>
+                  <div class="asset-table-wrap">
+                    <table id="payload-table" class="asset-table">
+                      <thead>
+                        <tr>
+                          <th>名称</th>
+                          <th>臂</th>
+                          <th>质量</th>
+                          <th>备注</th>
+                          <th>应用</th>
+                          <th>删除</th>
+                        </tr>
+                      </thead>
+                      <tbody id="payload-table-body"></tbody>
+                    </table>
+                  </div>
+                  <p class="note" id="payload-table-empty">还没有补偿文件</p>
+                  <div class="cmds">
+                    <button id="btn-id-clear" type="button">去掉负载</button>
+                  </div>
+                </div>
+              </section>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">录入</button>
+                <div class="subfold-body">
+                  <p class="note">按当前姿态集双向走点。α 固定为 1，只解质量与质心。求解后可命名保存；「存并应用」会写入前馈。</p>
+                  <div class="cmds">
+                    <button id="btn-id-measure" class="primary">测量当前集</button>
+                    <button id="btn-id-stop" class="danger">停止</button>
+                  </div>
+                  <div class="fields">
+                    <label class="field grow">测量会话
+                      <select id="id-session" title="已保存的测量会话，求解用这一份样本，不用再走点"></select>
+                    </label>
+                    <label class="field">力矩
+                      <select id="id-source">
+                        <option value="pd">PD 重构</option>
+                        <option value="est">tau_est</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-id-solve">求解</button>
+                  </div>
+                  <div class="fields">
+                    <label class="field grow">命名
+                      <input id="payload-new" placeholder="例如 左手向后气泵" maxlength="48">
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-id-apply">存并应用到前馈</button>
+                    <button id="btn-payload-save">只存不应用</button>
+                  </div>
+                  <div id="id-result"></div>
+                  <pre id="id-log"></pre>
+                </div>
+              </section>
+            </div>
+          </article>
+
+          <article class="float" id="panel-val">
+            <button type="button" class="float-toggle">到位对比 <span id="val-progress" class="aside"></span></button>
+            <div class="float-body">
+              <p class="note">同一姿态集、同一限速。记录保存在实例的 data/validate/。</p>
+              <label class="field">已保存记录
+                <select id="val-session" title="已保存的到位对比"></select>
+              </label>
+              <div id="val-file" class="path"></div>
+              <div class="checks">
+                <label class="switch"><input id="val-base" type="checkbox" checked><span>基线</span></label>
+                <label class="switch"><input id="val-pay" type="checkbox" checked><span>补偿</span></label>
+                <label class="switch"><input id="val-corr" type="checkbox"><span>补偿+修正</span></label>
+                <label class="field tiny">次数
+                  <input id="val-iters" type="number" min="1" max="6" value="2">
+                </label>
+                <button id="btn-val-start" class="primary">开始对比</button>
+              </div>
+              <div id="val-band" class="note"></div>
+              <div id="val-summary" class="schemes"></div>
+              <div class="table-scroll">
+                <table id="val-table">
+                  <thead><tr><th>方案</th><th>姿态</th><th>max°</th><th>末端 mm</th><th>修正</th><th>s</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-he">
+            <button type="button" class="float-toggle">手眼标定 <span id="he-count" class="aside"></span></button>
+            <div class="float-body">
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">管理</button>
+                <div class="subfold-body">
+                  <p class="note">已保存的手眼结果（含配套双目 yaml）。点「应用」列勾选设为当前配置；同配置只留一个勾。删除若正在应用会一并取消。</p>
+                  <div class="asset-table-wrap">
+                    <table id="he-table" class="asset-table">
+                      <thead>
+                        <tr>
+                          <th>名称</th>
+                          <th>臂</th>
+                          <th>基线</th>
+                          <th>应用</th>
+                          <th>删除</th>
+                        </tr>
+                      </thead>
+                      <tbody id="he-table-body"></tbody>
+                    </table>
+                  </div>
+                  <p class="note" id="he-table-empty">还没有保存的手眼结果</p>
+                </div>
+              </section>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">录入</button>
+                <div class="subfold-body">
+                <p class="note" id="he-intro">用姿态集里已经记好的点。采集按限速走完每点停稳存图；求解先估内参再算相机到躯干外参。左右对称用姿态集「镜像到对侧」。画面在左侧「双目」。</p>
+                <div id="he-msg" class="note"></div>
+                <div class="fields">
+                  <label class="field grow">采集会话
+                    <select id="he-session"></select>
+                  </label>
+                  <label class="field">格子 mm
+                    <input id="he-square" type="number" step="0.1" min="1" placeholder="边长">
+                  </label>
+                </div>
+                <div class="fields">
+                  <label class="field">求解眼
+                    <select id="he-eye">
+                      <option value="both">左右</option>
+                      <option value="left">左目</option>
+                      <option value="right">右目</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="fields">
+                  <label class="field">棋盘
+                    <input id="he-board" value="11x8" maxlength="8">
+                  </label>
+                  <label class="field grow">相机主机
+                    <input id="he-host" value="192.168.123.164" spellcheck="false">
+                  </label>
+                </div>
+                <div class="cmds">
+                  <button id="btn-he-run" class="primary">采集当前集</button>
+                  <button id="btn-he-stop" class="danger">停止</button>
+                  <button id="btn-he-capture">补一帧</button>
+                  <button id="btn-he-solve">求解</button>
+                </div>
+                <div class="fields">
+                  <label class="field grow">命名保存
+                    <input id="he-calib-name" placeholder="例如 货架左目外参" maxlength="48">
+                  </label>
+                </div>
+                <div class="cmds">
+                  <button id="btn-he-save">保存</button>
+                </div>
+                <div id="he-result"></div>
+                </div>
+              </section>
+            </div>
+          </article>
+
+          <article class="float" id="panel-tcp">
+            <button type="button" class="float-toggle">TCP</button>
+            <div class="float-body">
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">管理</button>
+                <div class="subfold-body">
+                  <p class="note">已保存的 TCP。点「应用」列勾选设为该手当前配置（同手只保留一个勾）；镜像生成「原名_左/右」，不带工作姿态。</p>
+                  <div class="asset-table-wrap">
+                    <table id="tcp-table" class="asset-table">
+                      <thead>
+                        <tr>
+                          <th>名称</th>
+                          <th>手</th>
+                          <th>备注</th>
+                          <th>应用</th>
+                          <th>镜像</th>
+                          <th>删除</th>
+                        </tr>
+                      </thead>
+                      <tbody id="tcp-table-body"></tbody>
+                    </table>
+                  </div>
+                  <p class="note" id="tcp-table-empty">还没有保存的 TCP</p>
+                </div>
+              </section>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">录入</button>
+                <div class="subfold-body">
+                  <p class="note">拖拽时把末端工作点对准空间里的同一个点，转开腕部，每个姿态记一次，再计算。红点是当前爪尖。算出后命名保存；固定点可另存进空间点（黄点）。</p>
+                  <p class="note" id="tcp-now">还没有姿态</p>
+                  <div class="cmds">
+                    <button id="btn-tcp-record" type="button">记录姿态</button>
+                    <button id="btn-tcp-undo" type="button">去掉最后</button>
+                    <button id="btn-tcp-clear" type="button">清空</button>
+                    <button id="btn-tcp-solve" class="primary" type="button">计算</button>
+                  </div>
+                  <div class="fields">
+                    <label class="field grow">命名
+                      <input id="tcp-name" placeholder="例如 左手尖对货架" maxlength="48">
+                    </label>
+                  </div>
+                  <label class="field">备注
+                    <input id="tcp-note" placeholder="怎么标的，可空" maxlength="80">
+                  </label>
+                  <div class="cmds">
+                    <button id="btn-tcp-save" type="button">保存</button>
+                  </div>
+                </div>
+              </section>
+              <section class="subfold">
+                <button type="button" class="subfold-toggle">修正</button>
+                <div class="subfold-body">
+                  <p class="note">偏置在腕坐标系（*_wrist_yaw_link）里：X 沿手指朝外，Y、Z 见三维模型。可以先以腕末端中心新建一个（偏置 0），再按量出的距离沿三轴平移；橙点是修改中的位置。</p>
+                  <div class="fields">
+                    <label class="field">手
+                      <select id="tcp-new-arm">
+                        <option value="right">右臂</option>
+                        <option value="left">左臂</option>
+                      </select>
+                    </label>
+                    <label class="field grow">新 TCP 名
+                      <input id="tcp-new-name" placeholder="例如 右手夹爪中心" maxlength="48">
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-tcp-new" type="button">记录末端中心为新 TCP</button>
+                  </div>
+                  <label class="field grow">编辑
+                    <select id="tcp-edit-select"></select>
+                  </label>
+                  <p class="note" id="tcp-edit-now">选一个 TCP 开始修正</p>
+                  <div class="fields">
+                    <label class="field">ΔX mm
+                      <input id="tcp-edit-dx" type="number" step="0.5" value="0">
+                    </label>
+                    <label class="field">ΔY mm
+                      <input id="tcp-edit-dy" type="number" step="0.5" value="0">
+                    </label>
+                    <label class="field">ΔZ mm
+                      <input id="tcp-edit-dz" type="number" step="0.5" value="0">
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-tcp-edit-move" type="button">平移</button>
+                    <button id="btn-tcp-edit-reset" type="button">重置</button>
+                    <button id="btn-tcp-edit-overwrite" class="primary" type="button">覆盖保存</button>
+                  </div>
+                  <div class="fields">
+                    <label class="field grow">另存为
+                      <input id="tcp-edit-newname" placeholder="新名字" maxlength="48">
+                    </label>
+                  </div>
+                  <div class="cmds">
+                    <button id="btn-tcp-edit-saveas" type="button">另存</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </article>
+
+          <article class="float" id="panel-work-pose">
+            <button type="button" class="float-toggle">工作姿态 <span id="wp-lock-badge" class="aside"></span></button>
+            <div class="float-body">
+              <p class="note">与<strong>当前已调用的 TCP</strong>绑定，只记腕部在躯干系下的方向（如向前/向下）。拖拽摆好后「记下」；「调用」会尽量保持 TCP 位置只转姿态，到位后锁定。锁定时空间点/棋盘触摸保持该方向；拖拽或手臂控制会解锁。</p>
+              <p class="note" id="wp-now">锁定：无</p>
+              <p class="note" id="wp-tcp-hint">TCP：—</p>
+              <div class="fields">
+                <label class="field grow">已保存
+                  <select id="wp-select"></select>
+                </label>
+                <label class="field grow">命名
+                  <input id="wp-name" placeholder="例如 向下" maxlength="48">
+                </label>
+              </div>
+              <label class="field">备注
+                <input id="wp-note" placeholder="怎么摆的，可空" maxlength="80">
+              </label>
+              <div class="cmds">
+                <button id="btn-wp-save" type="button">记下当前姿态</button>
+                <button id="btn-wp-load" class="primary" type="button">调用并锁定</button>
+                <button id="btn-wp-clear" type="button">解锁</button>
+                <button id="btn-wp-del" type="button">删除</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" data-page="control">
+      <div class="page-sheet">
+        <div class="page-head"><strong>控制</strong><span>7 张卡片</span></div>
+        <div class="page-cards">
+          <article class="float" id="panel-config">
+            <button type="button" class="float-toggle">配置 <span id="cfg-lock-badge" class="aside"></span></button>
+            <div class="float-body">
+              <p class="note">共用项在上；左右臂分两列。锁定后其它板块不能改这些配置；解锁只在这里。</p>
+              <div id="cfg-now" class="cfg-now"></div>
+              <div class="cfg-shared">
+                <div class="fields">
+                  <label class="field grow">手眼结果（自动带上对应双目 yaml）
+                    <select id="cfg-he"></select>
+                  </label>
+                  <button id="btn-cfg-stereo" type="button">应用手眼</button>
+                </div>
+                <p class="note" id="cfg-stereo-bound">双目 yaml：—</p>
+                <div class="fields">
+                  <label class="field grow">锁定姿态时的 IK（不上锁，随时可改）
+                    <select id="cfg-pose-ik-mode">
+                      <option value="robust">新·多初值（推荐）</option>
+                      <option value="single">旧·当前角单次局部 IK</option>
+                    </select>
+                  </label>
+                  <button id="btn-cfg-pose-ik-mode" type="button">应用 IK 策略</button>
+                </div>
+                <p class="note">只影响「工作姿态已锁定」时的碰点/棋盘/调用姿态；未锁定仍是纯位置 IK。</p>
+              </div>
+              <div class="cfg-arms">
+                <section class="cfg-arm" data-arm="left">
+                  <header class="cfg-arm-head">左臂</header>
+                  <p class="cfg-arm-now" id="cfg-now-left">—</p>
+                  <label class="field grow">重力补偿
+                    <select id="cfg-grav-left"></select>
+                  </label>
+                  <button id="btn-cfg-grav-left" type="button">应用重力</button>
+                  <label class="field grow">TCP
+                    <select id="cfg-tcp-left"></select>
+                  </label>
+                  <button id="btn-cfg-tcp-left" type="button">应用 TCP</button>
+                  <label class="field grow">工作姿态（不上锁）
+                    <select id="cfg-wp-left"></select>
+                  </label>
+                  <button id="btn-cfg-wp-left" type="button">应用工作姿态</button>
+                </section>
+                <section class="cfg-arm" data-arm="right">
+                  <header class="cfg-arm-head">右臂</header>
+                  <p class="cfg-arm-now" id="cfg-now-right">—</p>
+                  <label class="field grow">重力补偿
+                    <select id="cfg-grav-right"></select>
+                  </label>
+                  <button id="btn-cfg-grav-right" type="button">应用重力</button>
+                  <label class="field grow">TCP
+                    <select id="cfg-tcp-right"></select>
+                  </label>
+                  <button id="btn-cfg-tcp-right" type="button">应用 TCP</button>
+                  <label class="field grow">工作姿态（不上锁）
+                    <select id="cfg-wp-right"></select>
+                  </label>
+                  <button id="btn-cfg-wp-right" type="button">应用工作姿态</button>
+                </section>
+              </div>
+              <div class="cmds">
+                <button id="btn-cfg-lock" class="danger" type="button">锁定配置</button>
+                <button id="btn-cfg-unlock" class="primary" type="button">解锁</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-joints">
+            <button type="button" class="float-toggle">关节</button>
+            <div class="float-body">
+              <p class="note" id="joints-note">臂：视图所选（双臂时显示控制臂）。</p>
+              <div class="table-scroll">
+                <table id="joints-table">
+                  <thead>
+                    <tr><th>关节</th><th>电机</th><th>q (deg)</th><th>dq</th><th>τ_est</th></tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div id="lift-zero-block">
+                <div class="cmds">
+                  <button id="btn-lift-zero" type="button">记为最低点</button>
+                </div>
+                <p class="note" id="lift-now">立柱高度 —</p>
+                <p class="note" id="lift-delta">把立柱降到机械最低后点「记为最低点」，当前高度会写成零位并立刻应用到三维。</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-waist">
+            <button type="button" class="float-toggle">躯体控制</button>
+            <div class="float-body">
+              <p class="note" id="waist-note">腰：接管后与手臂共用限速。条形拖到目标松手后走。</p>
+              <p class="note" id="waist-now">腰 —</p>
+              <div id="waist-ctrl">
+              <label class="field grow">旋转 °
+                <input id="waist-yaw-slider" type="range" min="-155" max="155" step="0.5" value="0">
+              </label>
+              <label class="field grow">俯仰 °
+                <input id="waist-pitch-slider" type="range" min="-2.5" max="135" step="0.5" value="0">
+              </label>
+              <div class="fields">
+                <label class="field">旋转目标 °
+                  <input id="waist-yaw" type="number" step="0.5" min="-155" max="155" value="0">
+                </label>
+                <label class="field">俯仰目标 °
+                  <input id="waist-pitch" type="number" step="0.5" min="-2.5" max="135" value="0">
+                </label>
+                <label class="field">步长 °
+                  <input id="waist-step" type="number" step="0.5" min="0.5" max="30" value="5">
+                </label>
+              </div>
+              <div class="cmds">
+                <button id="btn-waist-fill" type="button">填入当前角</button>
+                <button id="btn-waist-yaw-m" type="button">旋转−</button>
+                <button id="btn-waist-yaw-p" type="button">旋转+</button>
+                <button id="btn-waist-pitch-m" type="button">俯仰−</button>
+                <button id="btn-waist-pitch-p" type="button">俯仰+</button>
+                <button id="btn-waist-go" class="primary" type="button">到目标</button>
+                <button id="btn-waist-stop" class="danger" type="button">停止腰</button>
+              </div>
+              </div>
+              <div id="lift-ctrl">
+              <p class="note" style="margin-top:12px">立柱：用 Agv HeightAdjust 闭环到行程。条形拖到目标松手后走；也可按步长升/降一步。</p>
+              <p class="note" id="lift-ctrl-now">立柱 —</p>
+              <label class="field grow">行程 mm
+                <input id="lift-slider" type="range" min="0" max="420" step="1" value="0">
+              </label>
+              <div class="fields">
+                <label class="field">目标 mm
+                  <input id="lift-target" type="number" step="1" min="0" max="420" value="0">
+                </label>
+                <label class="field">步长 mm
+                  <input id="lift-step" type="number" step="1" min="1" max="100" value="10">
+                </label>
+              </div>
+              <div class="cmds">
+                <button id="btn-lift-down" type="button">降一步</button>
+                <button id="btn-lift-up" type="button">升一步</button>
+                <button id="btn-lift-go" class="primary" type="button">到目标</button>
+                <button id="btn-lift-stop" class="danger" type="button">停止升降</button>
+              </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-motion">
+            <button type="button" class="float-toggle">手臂控制</button>
+            <div class="float-body">
+              <p class="note">控制臂 7 轴。拖滑条松手后，只改该关节、其余保持目标/实测，按网页限速走。也可用底栏「填入当前角 / 出发」。</p>
+              <p class="note" id="arm-ctrl-now">手臂 —</p>
+              <div class="arm-sliders" id="goto-inputs"></div>
+              <div class="still" title="测量/走点到达后等实测角停住。窗口内 max|dq| 小于速度阈，且位置峰峰值小于漂移阈。">
+                <label class="field">速度阈
+                  <input id="still-dq" type="number" step="0.005" min="0.02" value="0.05">
+                </label>
+                <label class="field">漂移阈
+                  <input id="still-drift" type="number" step="0.001" min="0.002" value="0.01">
+                </label>
+                <label class="field">窗口 s
+                  <input id="still-win" type="number" step="0.1" min="0.2" value="0.5">
+                </label>
+                <label class="field">超时 s
+                  <input id="still-to" type="number" step="0.5" min="2" value="8">
+                </label>
+                <button id="btn-still">设置</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-tcp-jog">
+            <button type="button" class="float-toggle">TCP 控制</button>
+            <div class="float-body">
+              <p class="note">点动<strong>当前控制臂已调用的 TCP</strong>（画布红点）。方向按<strong>躯干坐标</strong>：+X 前、+Y 左、+Z 上。平移时姿态不动；旋转时红点不动、绕躯干轴转。到不了会报错。</p>
+              <p class="note" id="tcp-jog-now">TCP —</p>
+              <div class="fields">
+                <label class="field">平移步长 mm
+                  <input id="tcp-jog-step-mm" type="number" min="0.5" max="50" step="0.5" value="5">
+                </label>
+                <label class="field">旋转步长 °
+                  <input id="tcp-jog-step-deg" type="number" min="0.5" max="30" step="0.5" value="5">
+                </label>
+              </div>
+              <p class="note tcp-jog-label">平移 · 红点平移、姿态不变</p>
+              <div class="tcp-jog-pad" aria-label="TCP 平移">
+                <span class="tcp-jog-spacer"></span>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="z" data-sign="1">上<span>+Z</span></button>
+                <span class="tcp-jog-spacer"></span>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="y" data-sign="1">左<span>+Y</span></button>
+                <span class="tcp-jog-hub" title="TCP 红点">红点</span>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="y" data-sign="-1">右<span>−Y</span></button>
+                <span class="tcp-jog-spacer"></span>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="z" data-sign="-1">下<span>−Z</span></button>
+                <span class="tcp-jog-spacer"></span>
+              </div>
+              <div class="cmds tcp-jog-fb">
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="x" data-sign="1">前 +X</button>
+                <button type="button" class="tcp-jog-btn" data-jog="translate" data-axis="x" data-sign="-1">后 −X</button>
+              </div>
+              <p class="note tcp-jog-label">旋转 · 轴过红点、沿躯干 XYZ</p>
+              <div class="tcp-jog-rot" aria-label="TCP 旋转">
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="x" data-sign="-1">绕 X −</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="x" data-sign="1">绕 X +</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="y" data-sign="-1">绕 Y −</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="y" data-sign="1">绕 Y +</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="z" data-sign="-1">绕 Z −</button>
+                <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="z" data-sign="1">绕 Z +</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-board">
+            <button type="button" class="float-toggle">棋盘触摸</button>
+            <div class="float-body">
+              <p class="note">先看一眼 9×6 内角点，角点会画在中央画面上，绿点是第一下。每个点先到上方 5 cm，垂直下降 4 cm，再垂直抬升 4 cm，然后下一个点。若已锁定工作姿态，全程保持该方向。急停会中止。</p>
+              <div class="fields">
+                <label class="field">内角
+                  <input id="board-size" value="9x6" maxlength="8">
+                </label>
+                <label class="field">上方 cm
+                  <input id="board-above" type="number" min="1" max="15" step="0.5" value="5">
+                </label>
+                <label class="field">下降 cm
+                  <input id="board-down" type="number" min="0.5" max="14" step="0.5" value="4">
+                </label>
+                <label class="field">抬升 cm
+                  <input id="board-up" type="number" min="0.5" max="14" step="0.5" value="4">
+                </label>
+                <label class="switch"><input id="board-ideal" type="checkbox"><span>理想对齐</span></label>
+              </div>
+              <div class="cmds">
+                <button id="btn-board-look" type="button">看一眼</button>
+                <button id="btn-board-start" class="primary" type="button">开始触摸</button>
+                <button id="btn-board-stop" class="danger" type="button">停止</button>
+              </div>
+              <div id="board-log" class="note"></div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-point">
+            <button type="button" class="float-toggle">空间点</button>
+            <div class="float-body">
+              <p class="note">黄点是躯干系位置，不分左右手。记下固定点/爪尖/绿点均可。「让 TCP 碰」用<strong>当前控制臂</strong>和<strong>该臂已调用的 TCP</strong>。</p>
+              <p class="note" id="pt-now">还没有空间点</p>
+              <div class="fields">
+                <label class="field grow">已保存
+                  <select id="pt-select"></select>
+                </label>
+                <label class="field grow">命名
+                  <input id="pt-name" placeholder="例如 货架角" maxlength="48">
+                </label>
+              </div>
+              <label class="field">备注
+                <input id="pt-note" placeholder="怎么来的，可空" maxlength="80">
+              </label>
+              <div class="cmds">
+                <button id="btn-pt-fixed" type="button">记下标定固定点</button>
+                <button id="btn-pt-now" type="button">记下当前工作点</button>
+                <button id="btn-pt-center" type="button">记下当前中心点（绿）</button>
+                <button id="btn-pt-load" type="button">调用</button>
+                <button id="btn-pt-del" type="button">删除</button>
+              </div>
+              <div class="pt-goto-box" id="pt-goto-box">
+                <p class="note"><strong>碰点策略</strong>：相对所选空间点的躯干系偏置（mm）。例如 Z=+10 则目标在黄点上方 10 mm；不改空间点本身。</p>
+                <div class="fields">
+                  <label class="field">ΔX mm
+                    <input id="pt-off-x" type="number" step="1" value="0">
+                  </label>
+                  <label class="field">ΔY mm
+                    <input id="pt-off-y" type="number" step="1" value="0">
+                  </label>
+                  <label class="field">ΔZ mm
+                    <input id="pt-off-z" type="number" step="1" value="0">
+                  </label>
+                  <button id="btn-pt-off-clear" type="button">清零</button>
+                </div>
+                <label class="switch">
+                  <input id="pt-refine" type="checkbox" checked>
+                  <span>启用误差补偿（到位后按实测再瞄，最多 2 步）</span>
+                </label>
+                <p class="note" id="pt-aim-note">瞄准：与空间点重合</p>
+                <div class="cmds">
+                  <button id="btn-pt-goto" class="primary" type="button">让 TCP 碰这个点</button>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" data-page="workflow">
+      <div class="page-sheet">
+        <div class="page-head"><strong>工作流</strong><span>1 张卡片</span></div>
+        <div class="page-cards">
+          <article class="float" id="panel-wf-detect-goto">
+            <button type="button" class="float-toggle">识别-末端到位 <span id="wf-dg-phase" class="aside">待开始</span></button>
+            <div class="float-body">
+              <p class="note">① 调用并锁定工作姿态 → ② 点位获取→校准→中心（浅蓝临时点）→ ③ 偏置+提升 碰点 → ④ 仅偏置 碰点。阶段钮：开始 / 下一步 / 完成后点「完成」复位；「自动继续」从当前进度接着跑；「停止」在进行中急停并复位，或在已跑过步骤、不想继续时直接复位。</p>
+              <label class="field grow">工作姿态（必选）
+                <select id="wf-dg-wp"></select>
+              </label>
+              <label class="field grow">识别参数（可选）
+                <input id="wf-dg-params" type="text" spellcheck="false" placeholder="例如 label=43010159" maxlength="512">
+              </label>
+              <p class="note"><strong>偏置</strong>（第四步；第三步 = 偏置 + 提升）· 躯干系 mm</p>
+              <div class="fields">
+                <label class="field">ΔX
+                  <input id="wf-dg-ox" type="number" step="1" value="0">
+                </label>
+                <label class="field">ΔY
+                  <input id="wf-dg-oy" type="number" step="1" value="0">
+                </label>
+                <label class="field">ΔZ
+                  <input id="wf-dg-oz" type="number" step="1" value="0">
+                </label>
+                <label class="field">提升 ΔZ
+                  <input id="wf-dg-hz" type="number" step="1" value="20">
+                </label>
+              </div>
+              <label class="switch">
+                <input id="wf-dg-refine" type="checkbox" checked>
+                <span>启用误差补偿（第三、四步共用）</span>
+              </label>
+              <p class="note" id="wf-dg-aim-note">第三步瞄准 = 中心 + 偏置 + 提升；第四步 = 中心 + 偏置</p>
+              <div class="cmds">
+                <button id="btn-wf-dg-step" class="primary" type="button">开始</button>
+                <button id="btn-wf-dg-all" type="button">自动继续</button>
+                <button id="btn-wf-dg-stop" class="danger" type="button" disabled>停止</button>
+              </div>
+              <p class="note" id="wf-dg-note">还没跑过</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script type="module" src="/static/viewer.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

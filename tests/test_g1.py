@@ -6,12 +6,12 @@ import time
 import numpy as np
 import pytest
 
-from backends.base import Commander, PermissionErrorMotion
-from backends.mock import MockBackend
-from backends.unitree_arm_sdk import ArmSdkSchedule, blend_frame
-from controller.arm_loop import ArmLoop
-from model.fk_scene import RobotKinematics
-from model.robot_profile import activate, active, load_profile
+from robot_platform.hw.backends.base import Commander, PermissionErrorMotion
+from robot_platform.hw.backends.mock import MockBackend
+from robot_platform.hw.backends.unitree_arm_sdk import ArmSdkSchedule, blend_frame
+from robot_platform.control.arm_loop import ArmLoop
+from robot_platform.control.fk_scene import RobotKinematics
+from robot_platform.core.robot_profile import activate, active, load_profile
 
 
 class Clock:

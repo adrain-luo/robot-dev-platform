@@ -21,10 +21,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "arm_control"))
+sys.path.insert(0, str(REPO / "src"))  # 未 pip install -e . 时也能直接运行
 
-import instance as instances  # noqa: E402
-from instance import INSTANCE_FILE, LAYOUT, LEGACY_LAYOUT, LEGACY_SETTINGS  # noqa: E402
+from robot_platform.core import instance as instances  # noqa: E402
+from robot_platform.core.instance import INSTANCE_FILE, LAYOUT, LEGACY_LAYOUT, LEGACY_SETTINGS  # noqa: E402
 
 DATA_KEYS = ("clouds", "board_touch", "handeye_sessions", "measure", "validate")
 SETTINGS_KEYS = ("network_interface", "unitree_sdk_path", "dds_domain", "lowstate_timeout_s", "defaults")

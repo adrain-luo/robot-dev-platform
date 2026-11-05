@@ -6,11 +6,11 @@ import time
 import numpy as np
 import pytest
 
-from backends.base import Commander
-from backends.mock import MockBackend
-from controller.arm_loop import TEACH_KD, ArmLoop, PermissionErrorMotion
-from model.fk_scene import RobotKinematics
-from model.robot_profile import active
+from robot_platform.hw.backends.base import Commander
+from robot_platform.hw.backends.mock import MockBackend
+from robot_platform.control.arm_loop import TEACH_KD, ArmLoop, PermissionErrorMotion
+from robot_platform.control.fk_scene import RobotKinematics
+from robot_platform.core.robot_profile import active
 
 
 class Recorder(Commander):
@@ -155,7 +155,7 @@ def test_waist_target_clamped_to_profile_limits(rig):
 
 def test_idle_motor_guard_blocks_legged_robot():
     """G1D 声明腿部电机空闲；若读到它们在工作（例如站立的 G1），退出运控前必须拒绝。"""
-    from backends.base import check_idle_motors
+    from robot_platform.hw.backends.base import check_idle_motors
 
     profile = active()
     idle = profile.control.idle_motors

@@ -1,7 +1,7 @@
 # 机器实例
 
 每台机器一个目录 `instances/<名字>/`，放这台机器自己的设置和标定数据。
-机型（关节表、URDF 等）在 `arm_control/robots/<机型>/`，两台同型号机器共用机型、各有实例。
+机型（关节表、URDF 等）在 `src/robot_platform/robots/<机型>/`，两台同型号机器共用机型、各有实例。
 
 ## 布局
 
@@ -32,7 +32,7 @@ instances/<名字>/
 
 ## 选哪个实例
 
-依次看：`server.py --instance <名字>`、环境变量 `ARM_INSTANCE`、`instances/default` 文件（一行名字，只在本机，不进 git）。
+依次看：`serve.py --instance <名字>`、环境变量 `ARM_INSTANCE`、`instances/default` 文件（一行名字，只在本机，不进 git）。
 都没有时启动会报错并列出已有实例。
 
 `--backend mock` 不指定实例时用一个空的临时实例，退出即删，不碰任何真实机器的数据。

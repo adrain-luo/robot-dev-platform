@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import instance as instances
+from robot_platform.core import instance as instances
 
 REPO = Path(__file__).resolve().parents[1]
 

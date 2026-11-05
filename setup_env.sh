@@ -23,9 +23,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 env -u PYTHONPATH PYTHONNOUSERSITE=1 "$ROOT/bin/python" - <<PY
 import site, sys
 from pathlib import Path
-sys.path.insert(0, str(Path("$HERE") / "arm_control"))
+sys.path.insert(0, str(Path("$HERE") / "src"))
 import cyclonedds, numpy
-from dds.sdk import ensure_sdk
+from robot_platform.hw.dds.sdk import ensure_sdk
 root = ensure_sdk()
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # noqa: F401
 print("ok", sys.executable)
