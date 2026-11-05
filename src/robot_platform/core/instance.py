@@ -94,9 +94,16 @@ class Instance:
         # 以 / 开头的按绝对路径处理（Windows 上读设备写下的 /home/... 也一样）
         if not (p.is_absolute() or str(s).startswith("/")):
             return self.root / p
+        posix = p.as_posix()
+        # 别的仓库副本里同名实例写下的绝对路径（例如搬到新仓库前的旧目录）：本实例有同一个文件就用本实例的
+        marker = f"/instances/{self.name}/"
+        i = posix.find(marker)
+        if i >= 0:
+            mine = self.root / posix[i + len(marker):]
+            if mine.exists():
+                return mine
         if p.exists():
             return p
-        posix = p.as_posix()
         for key, legacy in sorted(LEGACY_LAYOUT.items(), key=lambda kv: -len(kv[1])):
             marker = "/" + legacy.rstrip("/") + "/"
             i = posix.find(marker)

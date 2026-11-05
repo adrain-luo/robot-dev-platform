@@ -39,6 +39,21 @@ def test_legacy_absolute_paths_map_into_instance(tmp_path):
     assert inst.from_stored("/home/robot/yx/teleimager_src_copy").as_posix() == "/home/robot/yx/teleimager_src_copy"
 
 
+def test_other_checkout_instance_paths_prefer_own_copy(tmp_path):
+    """搬仓库后，数据里写着旧目录下同名实例的绝对路径：本实例有这个文件就用本实例的。"""
+    inst = _inst(tmp_path)
+    old_root = tmp_path / "old_repo" / "instances" / "t"
+    old_file = old_root / "data/handeye/s1/stereo_calibration.yaml"
+    old_file.parent.mkdir(parents=True)
+    old_file.write_text("old")
+    stored = old_file.as_posix()
+    assert inst.from_stored(stored) == old_file, "本实例没有这份时仍用原路径"
+    mine = inst.root / "data/handeye/s1/stereo_calibration.yaml"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("new")
+    assert inst.from_stored(stored) == mine
+
+
 def test_migration_script(tmp_path):
     legacy = tmp_path / "old"
     old_abs = "/home/robot/abyss/project/g1d"
