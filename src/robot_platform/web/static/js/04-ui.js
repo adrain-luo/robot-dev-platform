@@ -53,7 +53,7 @@ async function poll() {
     renderBoard(data.board);
     renderDetect(data.detect);
     if (data.runtime) renderRuntimeConfig(data.runtime);
-    V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel };
+    V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel, imu: data.imu || null };
     V3.draw();
     const view = $("arm-select").value;
     const ctrlArm = data.ctrl?.arm || "right";

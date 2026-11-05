@@ -15,7 +15,9 @@
       "label": "头部 MID-360（宇树 DDS 转发）",
       "type": "unitree_dds",
       "topic": "rt/utlidar/cloud_livox_mid360",
-      "link": "mid360_link"
+      "link": "mid360_link",
+      "mount_rpy": [3.141592653589793, 0.0, 0.0],
+      "mount_note": "只保留倒装（横滚 180°）。URDF 的 mid360_joint 另有 2.93° 俯仰，但宇树转发的点云已经补偿过：2026-11-05 G1 实测，按 URDF 算地面与 IMU+腰推算的重力差 2.66°，去掉俯仰后差 0.28°。"
     }
   },
   "control": {

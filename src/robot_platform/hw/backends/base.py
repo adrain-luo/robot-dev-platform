@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 from robot_platform.core.robot_profile import ArmLayout
 
@@ -80,6 +80,10 @@ class StateSource(ABC):
 
     @abstractmethod
     def snapshot(self) -> MotorSnapshot: ...
+
+    def read_imu(self) -> Optional[Dict[str, Any]]:
+        """机身 IMU（腿式机型在骨盆）：{"rpy": [r, p, y] rad, "quat": [w, x, y, z]}；没有就 None。"""
+        return None
 
 
 class Commander(ABC):

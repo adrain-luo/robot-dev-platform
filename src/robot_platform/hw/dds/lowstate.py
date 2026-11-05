@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Union
+from typing import Any, Dict, Optional, Sequence, Union
 
 from robot_platform.hw.backends.base import ArmState, MotorSnapshot, StateSource
 from robot_platform.core.layout import ArmLayout, get_arm
@@ -100,6 +100,18 @@ class LowStateReader(StateSource):
         if msg is None:
             raise RuntimeError("lowstate message missing after wait")
         return {int(i): float(msg.motor_state[int(i)].q) for i in motor_indices}
+
+    def read_imu(self) -> Optional[Dict[str, Any]]:
+        """lowstate 里的 IMU（G1 在骨盆）。rpy 为 ZYX 欧拉角（rad），quat 为 [w, x, y, z]。"""
+        with self._lock:
+            msg = self._msg
+        imu = getattr(msg, "imu_state", None) if msg is not None else None
+        if imu is None:
+            return None
+        try:
+            return {"rpy": [float(v) for v in imu.rpy], "quat": [float(v) for v in imu.quaternion]}
+        except (TypeError, ValueError):
+            return None
 
     def snapshot(self) -> MotorSnapshot:
         with self._lock:

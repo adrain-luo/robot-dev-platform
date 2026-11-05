@@ -71,6 +71,7 @@ const View = {
   links: new Map(),
   motions: new Map(),
   cloudFrame: "vision", // vision=跟躯干；scene=钉在世界
+  imuLevel: true, // 腿式机型按 IMU 横滚 / 俯仰摆正骨盆（渲染卡片可关）
   cloudAccumulate: false, // false=单帧；true=固定场景累加
   cloudMaxDistM: 2.0, // 距机器人中心（基座原点）最远显示距离；0=不裁
   cloudLayers: [],
@@ -699,6 +700,30 @@ const View = {
   render() {
     if (this.renderer && this.scene3 && this.camera) this.renderer.render(this.scene3, this.camera);
   },
+  // 腿式机型：按机身 IMU（在骨盆）的横滚 / 俯仰转骨盆，网格平面即真实水平面；不用偏航（会漂，也无意义）。
+  // 返回姿态是否明显变了（变了就马上重新贴地）。
+  setImuLevel(on) {
+    this.imuLevel = !!on;
+    if (!this.imuLevel && this.robot) {
+      this.robot.rotation.set(0, 0, 0);
+      this._imuRP = null;
+      this.robot.updateMatrixWorld(true);
+      this._ground();
+      this.render();
+    }
+    return this.imuLevel;
+  },
+  _applyImuLevel(imu) {
+    if (!this._floating || !this.robot || this.imuLevel === false) return false;
+    const rpy = imu && imu.rpy;
+    if (!Array.isArray(rpy) || rpy.length < 2 || !rpy.slice(0, 2).every(Number.isFinite)) return false;
+    const [r, p] = rpy;
+    // IMU 的 rpy 是 ZYX 欧拉角：R = Rz(yaw)·Ry(pitch)·Rx(roll)，去掉偏航即 Ry(pitch)·Rx(roll)
+    this.robot.rotation.set(r, p, 0, "ZYX");
+    const prev = this._imuRP;
+    this._imuRP = [r, p];
+    return !prev || Math.abs(prev[0] - r) + Math.abs(prev[1] - p) > 0.005;
+  },
   _ground(box) {
     const b = box || new THREE.Box3().setFromObject(this.robot);
     this.robot.position.z -= b.min.z;
@@ -717,8 +742,9 @@ const View = {
           mot.node.quaternion.setFromAxisAngle(mot.axis, q);
         }
       }
+      const tilted = this._applyImuLevel(data.imu);
       this.robot.updateMatrixWorld(true);
-      if (this._floating && performance.now() - (this._groundAt || 0) > 1000) this._ground();
+      if (this._floating && (tilted || performance.now() - (this._groundAt || 0) > 1000)) this._ground();
       this._lines(this.cmdLine, data, "cmd_links");
       this._lines(this.tgtLine, data, "target_links");
       this._payload(data);

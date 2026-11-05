@@ -99,6 +99,9 @@
             <button type="button" class="float-toggle">渲染</button>
             <div class="float-body">
               <p class="note">控制中央画布的彩色点云。棋盘角点、红点、黄点不受清除影响。</p>
+              <label class="switch" title="用机身 IMU 的横滚 / 俯仰把骨盆摆正，网格就是真实水平面；关掉则骨盆画成水平（旧行为）">
+                <input id="render-imu-level" type="checkbox" checked><span>按 IMU 水平摆正</span>
+              </label>
               <div class="fields">
                 <label class="field grow">挂接
                   <select id="render-frame">

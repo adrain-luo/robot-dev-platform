@@ -135,6 +135,13 @@ class StateMixin:
             return {}
         return {name: st[i]["q"] for i, name in disp.items()}
 
+    def _imu(self):
+        """机身 IMU 姿态，给三维把骨盆按重力摆正（只用横滚 / 俯仰）。没有就 None。"""
+        try:
+            return self.reader().read_imu()
+        except Exception:
+            return None
+
     def both_scenes(self) -> Dict[str, Any]:
         self.reader()
         arms = {}
@@ -244,6 +251,7 @@ class StateMixin:
             "handeye": self.handeye.status(),
             "waist": waist,
             "body": self.body_joints(),
+            "imu": self._imu(),
             "lift": lift,
             "tcp": self.tcp.status(),
             "spatial": self.points.status(),

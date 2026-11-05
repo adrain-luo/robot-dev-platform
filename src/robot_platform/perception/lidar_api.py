@@ -17,7 +17,7 @@ import numpy as np
 
 from robot_platform.core import instance as instances
 from robot_platform.core.robot_profile import active as active_profile
-from robot_platform.perception.lidar import MockLidar, link_transform
+from robot_platform.perception.lidar import MockLidar, _rpy_matrix, link_transform
 from robot_platform.perception.lidar_worker import WorkerLidar
 
 IDLE_CLOSE_S = 20.0
@@ -97,6 +97,10 @@ class LidarAPI:
         """建新订阅（调用方持锁）。"""
         settings = self.app.settings
         self._T = link_transform(settings.urdf, settings.base_link, spec.link)
+        rpy = spec.params.get("mount_rpy")
+        if rpy is not None:
+            # 机型文件覆盖安装姿态（位置仍用 URDF）：见 robot.json 里的 mount_note
+            self._T[:3, :3] = _rpy_matrix(*[float(v) for v in rpy])
         if mock:
             self._dev = MockLidar(self._T)
         else:

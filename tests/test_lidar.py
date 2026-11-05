@@ -116,3 +116,15 @@ def test_stuck_close_does_not_block_lidar_api(g1_lidar_api, monkeypatch):
     never.set()
     assert not t.is_alive(), "雷达接口被卡住的断开堵住了"
     assert done["status"]["ok"] and done["cloud"]["ok"]
+
+
+def test_g1_lidar_mount_override_drops_urdf_pitch(g1_lidar_api):
+    """robot.json 的 mount_rpy 覆盖 URDF 的安装姿态：只留倒装，去掉宇树已补偿过的 2.93° 俯仰；位置仍取 URDF。"""
+    import math
+
+    api = g1_lidar_api
+    assert api.cloud("max_points=500")["ok"]
+    T = api._T
+    np.testing.assert_allclose(T[:3, :3], np.diag([1.0, -1.0, -1.0]), atol=1e-9)
+    np.testing.assert_allclose(T[:3, 3], [0.0002835, 0.00003, 0.428434], atol=1e-9)
+    assert abs(math.degrees(active().lidars["head"].params["mount_rpy"][1])) < 1e-9
