@@ -16,6 +16,7 @@ from robot_platform.core.runtime_config import RuntimeConfig
 from robot_platform.hw.backends.base import Backend, LiftDriver, LiftReader, StateSource
 from robot_platform.hw.lift_control import LiftController
 from robot_platform.perception.detect_localize import DetectLocalize
+from robot_platform.perception.lidar_api import LidarAPI
 from robot_platform.tasks.board_touch import BoardTouch
 from robot_platform.tasks.spatial_points import SpatialPoints
 from robot_platform.tasks.work_pose import WorkPoseSession
@@ -57,6 +58,7 @@ class App(StateMixin, LiftMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMi
         except (OSError, json.JSONDecodeError, ValueError):
             traceback.print_exc()
         self.handeye = HandEyeAPI(self)
+        self.lidar = LidarAPI(self)
 
     def reader(self) -> StateSource:
         with self._lock:

@@ -122,6 +122,8 @@ def main() -> int:
         print("\n[arm_control] stopped")
         if APP.handeye:
             APP.handeye.close()
+        if APP.lidar:
+            APP.lidar.close()
         if APP.loop:
             APP.loop.shutdown()
         backend.close()

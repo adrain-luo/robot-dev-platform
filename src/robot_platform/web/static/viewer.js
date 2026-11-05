@@ -460,6 +460,34 @@ const View = {
     this.render();
     return true;
   },
+  // 雷达点云：单独一层，挂在躯干上（点已在躯干系），每次刷新替换，不参与相机点云的叠帧 / 清除
+  setLidarCloud(xyz, rgb) {
+    const torso = this.links.get("torso_link");
+    if (!this.ready || !torso || !xyz || xyz.length < 3) return false;
+    const colors = new Float32Array(rgb.length);
+    for (let i = 0; i < rgb.length; i++) colors[i] = rgb[i] / 255;
+    if (!this.lidarPoints) {
+      const geo = new THREE.BufferGeometry();
+      const mat = new THREE.PointsMaterial({ size: 2.0, vertexColors: true, sizeAttenuation: false });
+      this.lidarPoints = new THREE.Points(geo, mat);
+      this.lidarPoints.userData.slot = "lidar";
+      torso.add(this.lidarPoints);
+    }
+    const geo = this.lidarPoints.geometry;
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(Float32Array.from(xyz), 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geo.computeBoundingSphere();
+    this.render();
+    return true;
+  },
+  clearLidarCloud() {
+    if (this.lidarPoints) {
+      this._disposePoints(this.lidarPoints);
+      this.lidarPoints = null;
+      this.render();
+    }
+    return true;
+  },
   optimizeClouds() {
     if (!this.ready) return { ok: false, error: "三维还没准备好" };
     const targets = [...this.cloudLayers];

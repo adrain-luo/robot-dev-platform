@@ -115,6 +115,21 @@ class CameraSpec:
     params: Dict[str, Any] = field(default_factory=dict)  # host、teleimager_path、ros_topics…
 
 
+LIDAR_TYPES = ("unitree_dds", "mock")
+
+
+@dataclass(frozen=True)
+class LidarSpec:
+    """机型上的一台雷达。type：unitree_dds（读宇树转发到 DDS 的 PointCloud2）/ mock；
+    link：URDF 里雷达坐标系的连杆名，点云据此换到 base_link。"""
+
+    id: str
+    label: str
+    type: str
+    link: str
+    params: Dict[str, Any] = field(default_factory=dict)  # topic …
+
+
 @dataclass(frozen=True)
 class RobotProfile:
     name: str
@@ -134,6 +149,8 @@ class RobotProfile:
     display_joints: Dict[int, str] = field(default_factory=dict)
     # 相机，按 robot.json 里的顺序；第一台是默认
     cameras: Dict[str, CameraSpec] = field(default_factory=dict)
+    # 雷达，按 robot.json 里的顺序；第一台是默认
+    lidars: Dict[str, LidarSpec] = field(default_factory=dict)
 
     @property
     def meshes_dir(self) -> Path:
@@ -236,7 +253,22 @@ def _parse(raw: Dict[str, Any], root: Path) -> RobotProfile:
         lift=lift,
         display_joints={int(k): str(v) for k, v in (raw.get("display_joints") or {}).items()},
         cameras=_parse_cameras(raw.get("cameras") or {}),
+        lidars=_parse_lidars(raw.get("lidars") or {}),
     )
+
+
+def _parse_lidars(raw: Dict[str, Any]) -> Dict[str, LidarSpec]:
+    out: Dict[str, LidarSpec] = {}
+    for lid, spec in raw.items():
+        ltype = str(spec.get("type") or "")
+        if ltype not in LIDAR_TYPES:
+            raise ValueError(f"雷达 {lid!r} 的 type {ltype!r} 不认识（可用：{', '.join(LIDAR_TYPES)}）")
+        if not spec.get("link"):
+            raise ValueError(f"雷达 {lid!r} 缺 link（URDF 里雷达坐标系的连杆名）")
+        params = {k: v for k, v in spec.items() if k not in ("type", "label", "link")}
+        out[str(lid)] = LidarSpec(id=str(lid), label=str(spec.get("label") or lid), type=ltype,
+                                  link=str(spec["link"]), params=params)
+    return out
 
 
 def _parse_cameras(raw: Dict[str, Any]) -> Dict[str, CameraSpec]:

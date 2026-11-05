@@ -3,7 +3,7 @@
 POST 的顺序有讲究，与拆分前一致：
 1. /api/runtime-config/* 先走（它自己管锁定，不受锁定拦截）；
 2. 配置锁定检查 runtime.guard_path；
-3. 手眼、负载两组（它们自带路由表）；
+3. 手眼、负载、雷达三组（它们自带路由表）；
 4. TCP、工作姿态、棋盘、识别定位、空间点、立柱；
 5. 其余都是臂控指令，要求开了 --allow-real-motion。
 
@@ -94,7 +94,7 @@ def handle_get(app, handler, parsed: ParseResult) -> None:
             return
         send_bytes(handler, 200, jpeg, "image/jpeg")
         return
-    for sub in (app.handeye, app.payload):
+    for sub in (app.handeye, app.payload, app.lidar):
         got = sub.handle_get(path, parsed.query)
         if got is not None:
             send_json(handler, 200, got)
@@ -122,6 +122,8 @@ def _handeye_payload(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     posted = app.handeye.handle_post(path, body)
     if posted is None:
         posted = app.payload.handle_post(path, body)
+    if posted is None:
+        posted = app.lidar.handle_post(path, body)
     if posted is None:
         return None
     if isinstance(posted, dict):

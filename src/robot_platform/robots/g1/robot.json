@@ -10,6 +10,14 @@
       "type": "ros_rgbd"
     }
   },
+  "lidars": {
+    "head": {
+      "label": "头部 MID-360（宇树 DDS 转发）",
+      "type": "unitree_dds",
+      "topic": "rt/utlidar/cloud_livox_mid360",
+      "link": "mid360_link"
+    }
+  },
   "control": {
     "backend": "unitree_arm_sdk",
     "state_topic": "rt/lowstate",

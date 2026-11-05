@@ -22,4 +22,6 @@ refreshPoseList().catch((e) => {
 
 setInterval(refreshCamPreview, 700);
 
+refreshLidarStatus();
+
 window.removeEventListener("error", showLoadError);
