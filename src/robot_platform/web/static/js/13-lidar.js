@@ -27,7 +27,8 @@ function renderLidarStatus(st) {
     }
   }
   if (document.activeElement !== sel) sel.value = st.lidar || "";
-  sel.disabled = (st.lidars || []).length <= 1;
+  // 只有一台时也保持可用（不灰掉）：选它就是它；只有机型没声明雷达时才禁用
+  sel.disabled = !(st.lidars || []).length;
   const none = !(st.lidars || []).length;
   ["btn-lidar-live", "btn-lidar-once"].forEach((id) => { if ($(id)) $(id).disabled = none; });
   if (none && $("lidar-note")) $("lidar-note").textContent = "这台机器的 robot.json 没有声明雷达（lidars）。";
