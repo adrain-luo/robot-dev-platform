@@ -94,7 +94,8 @@ def test_upload_list_delete_api(mock_server):
 
 
 def test_rgbd_cloud_with_selected_intrinsics():
-    from robot_platform.calib.handeye.service import HandEyeAPI, load_config
+    from robot_platform.calib.handeye.config import load_config
+    from robot_platform.calib.handeye.service import HandEyeAPI
 
     he_color_intr.save("t_cloud", DOC, force=True)
     api = HandEyeAPI(None)

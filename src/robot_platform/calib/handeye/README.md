@@ -12,12 +12,25 @@
 
 相机主机默认 `192.168.123.164`（请求口 60000 有响应）。本机 `127.0.0.1:60000` 没有相机进程。teleimager 不在 conda `abyss` 里，实例 `state/handeye.json` 的 `teleimager_path` 指向本机源码副本，可改。
 
+## 代码
+
+| 文件 | 作用 |
+|------|------|
+| `service.py` | `HandEyeAPI`：状态与路由，由下面几个 mixin 组成 |
+| `config.py` | 手眼 / 相机配置（实例 `state/handeye.json`） |
+| `capture_api.py` / `capture_task.py` | 采集接口；按姿态集走点存图的后台任务 |
+| `solve_api.py` / `solve_core.py` / `intrinsics.py` | 求解接口；手眼求解核心；双目内参估计 |
+| `session.py` / `results.py` / `detection.py` | 采集会话、命名结果、棋盘角点 |
+| `color_intrinsics.py` | RGB-D 自标彩色内参文件 |
+| `../../perception/cloud_api.py` | 相机、预览、双目匹配 / 深度点云（同属 `HandEyeAPI`） |
+| `../../perception/debug_port.py` | G1D 调试口（YOLO）取图与对比匹配（同属 `HandEyeAPI`） |
+
 ## 命令行
 
 在 `conda activate abyss` 之后：
 
 ```bash
-python solve_handeye.py --data ../instances/<实例>/data/handeye/会话名 --square-size 25
+python -m robot_platform.calib.handeye.solve_handeye --data instances/<实例>/data/handeye/会话名 --square-size 25
 ```
 
 不传 `--intrinsics` 时，先用该目录的左右图估计内参。`--urdf` 默认用 `robots/g1d/g1_d.urdf`。末端默认读会话里的 `tip_link`。

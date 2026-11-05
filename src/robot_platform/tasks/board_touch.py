@@ -146,7 +146,7 @@ class BoardTouch:
         self._log(f"日志 {path}")
 
     def look(self, board: str, ideal: bool) -> Dict[str, Any]:
-        from robot_platform.calib.handeye.service import load_config
+        from robot_platform.calib.handeye.config import load_config
         from robot_platform.calib.handeye.detection import parse_board_size
 
         if self.running:

@@ -80,7 +80,7 @@ class RuntimeConfig:
             if name and name in tcp_calib._read_active_map().values():
                 raise ConfigLockedError("配置已锁定，不能覆盖正在应用的 TCP；可以另存，或先解锁")
         if path == "/api/handeye/delete" and body:
-            from robot_platform.calib.handeye.service import load_config
+            from robot_platform.calib.handeye.config import load_config
             if load_config().get("active_result") == str(body.get("name") or ""):
                 raise ConfigLockedError("配置已锁定，不能删掉当前手眼结果")
 
@@ -113,7 +113,7 @@ class RuntimeConfig:
         }
 
     def snapshot(self) -> Dict[str, Any]:
-        from robot_platform.calib.handeye.service import load_config
+        from robot_platform.calib.handeye.config import load_config
         from robot_platform.calib.payload import identify as iden
 
         cfg = load_config()
@@ -196,7 +196,7 @@ class RuntimeConfig:
     def apply_stereo(self, *, active_result: Optional[str] = None, **_ignored) -> Dict[str, Any]:
         """只选手眼结果；自带双目 yaml 一并生效，忽略单独传的 intrinsics。"""
         self.require_unlocked()
-        from robot_platform.calib.handeye.service import load_config, save_config
+        from robot_platform.calib.handeye.config import load_config, save_config
         from robot_platform.calib.handeye import results as he_results
 
         if active_result is None:

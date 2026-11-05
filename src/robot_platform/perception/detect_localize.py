@@ -191,7 +191,8 @@ class DetectLocalize:
 
     def acquire_points(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """点位获取：YOLO 四边形 → 网格 → SGBM 深度 → 躯干坐标。"""
-        from robot_platform.calib.handeye.service import _http_body, _http_json, load_config
+        from robot_platform.calib.handeye.config import load_config
+        from robot_platform.perception.debug_port import _http_body, _http_json
 
         self.error = None
         self.center_torso = None
@@ -347,7 +348,7 @@ class DetectLocalize:
             right_flat = project(right[keep])
             keep_idx = np.flatnonzero(keep).astype(int)
 
-            from robot_platform.calib.handeye.service import load_config
+            from robot_platform.calib.handeye.config import load_config
             he = self.app.handeye
             cfg = load_config()
             T = he._left_cam_to_torso(cfg)
