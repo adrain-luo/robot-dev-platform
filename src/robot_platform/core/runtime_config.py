@@ -74,6 +74,12 @@ class RuntimeConfig:
             raise ConfigLockedError("配置已锁定，请到「控制 → 配置」解锁后再改")
         if path == "/api/handeye/config" and body and "active_result" in body:
             raise ConfigLockedError("配置已锁定，请到「控制 → 配置」解锁后再改")
+        if path == "/api/handeye/config" and body and any(k in body for k in ("camera", "camera_source", "color_intrinsics")):
+            raise ConfigLockedError("配置已锁定，不能换相机或彩色内参；请到「控制 → 配置」解锁后再改")
+        if path == "/api/handeye/color-intrinsics/delete" and body:
+            from robot_platform.calib.handeye.config import load_config
+            if load_config().get("cloud_color_intrinsics") == str(body.get("name") or ""):
+                raise ConfigLockedError("配置已锁定，不能删掉正在用的彩色内参")
         if path == "/api/tcp/edit-save" and body and str(body.get("mode") or "") == "overwrite":
             from robot_platform.calib import tcp as tcp_calib
             name = str(body.get("src") or "")

@@ -52,7 +52,7 @@ function applyCameraKind(st) {
   if (toggle) toggle.textContent = rgbd ? "相机（RGB-D）" : "双目";
   if ($("cam-preview")) $("cam-preview").alt = rgbd ? "彩色 / 深度" : "左右目";
   if ($("cam-disp")) $("cam-disp").alt = rgbd ? "深度" : "视差";
-  if ($("btn-cam-match")) $("btn-cam-match").textContent = rgbd ? "深度点云" : "匹配点云";
+  if ($("btn-cam-match")) $("btn-cam-match").textContent = "匹配点云";
   if ($("btn-cam-match-debug")) $("btn-cam-match-debug").style.display = rgbd ? "none" : "";
   if ($("cam-intr")) $("cam-intr").style.display = rgbd ? "" : "none";
   const host = $("he-host") && $("he-host").closest("label");
@@ -67,7 +67,7 @@ function applyCameraKind(st) {
   }
   if ($("he-intro")) {
     $("he-intro").textContent = rgbd
-      ? "用姿态集里已经记好的点。采集按限速走完每点停稳，存彩色图与深度图；求解用相机出厂内参，只算彩色相机到躯干外参。左右对称用姿态集「镜像到对侧」。画面在左侧「相机」。"
+      ? "用姿态集里已经记好的点。采集按限速走完每点停稳，存彩色图与深度图；求解用左侧相机卡片选定的彩色内参（未选为出厂），只算彩色相机到躯干外参。左右对称用姿态集「镜像到对侧」。画面在左侧「相机」。"
       : "用姿态集里已经记好的点。采集按限速走完每点停稳存图；求解先估内参再算相机到躯干外参。左右对称用姿态集「镜像到对侧」。画面在左侧「双目」。";
   }
 }
@@ -112,8 +112,8 @@ function renderCameraSelect(st) {
     extra.textContent = `实例配置：${st.camera_label || st.camera_source}`;
   }
   if (document.activeElement !== sel) sel.value = cur;
-  sel.disabled = st.cameras.length <= 1 && !!cur;
-  sel.title = `来源 ${st.camera_source}`;
+  sel.disabled = !!st.config_locked || (st.cameras.length <= 1 && !!cur);
+  sel.title = st.config_locked ? "配置已锁定" : `来源 ${st.camera_source}`;
 }
 
 if ($("cam-select")) {
@@ -134,14 +134,16 @@ if ($("cam-select")) {
   };
 }
 
-// RGB-D 彩色内参文件：出厂 / 自标定（上传到实例 calib/color_intrinsics）
-let camIntrInit = false;
+// RGB-D 彩色内参：出厂 / 自标定（上传到实例 calib/color_intrinsics）。
+// 选中即写入实例配置（cloud_color_intrinsics），相机卡片与渲染卡片的匹配点云、手眼求解都用它；配置锁定时不能改。
+let camIntrBusy = false;
 
 function renderColorIntr(st) {
   const sel = $("cam-intr-select");
-  if (!sel || !Array.isArray(st.color_intrinsics)) return;
+  if (!sel || !Array.isArray(st.color_intrinsics) || camIntrBusy) return;
   window.colorIntrFiles = st.color_intrinsics;
-  const want = camIntrInit ? sel.value : (st.cloud_color_intrinsics || "");
+  window.colorIntrLocked = !!st.config_locked;
+  const want = st.cloud_color_intrinsics || "";
   const sig = JSON.stringify(st.color_intrinsics.map((f) => [f.name, f.error || ""]));
   if (sel.dataset.sig !== sig) {
     sel.dataset.sig = sig;
@@ -154,8 +156,10 @@ function renderColorIntr(st) {
       sel.appendChild(o);
     }
   }
-  sel.value = [...sel.options].some((o) => o.value === want && !o.disabled) ? want : "";
-  camIntrInit = true;
+  if (document.activeElement !== sel) {
+    sel.value = [...sel.options].some((o) => o.value === want && !o.disabled) ? want : "";
+  }
+  sel.disabled = !!st.config_locked;
   showColorIntrInfo();
 }
 
@@ -164,21 +168,34 @@ function showColorIntrInfo() {
   const sel = $("cam-intr-select");
   if (!box || !sel) return;
   const f = (window.colorIntrFiles || []).find((x) => x.name === sel.value);
-  if ($("btn-cam-intr-delete")) $("btn-cam-intr-delete").disabled = !sel.value;
+  if ($("btn-cam-intr-delete")) $("btn-cam-intr-delete").disabled = !sel.value || !!window.colorIntrLocked;
+  const lock = window.colorIntrLocked ? "配置已锁定，内参不能改（到「控制 → 配置」解锁）。" : "";
   if (!f) {
-    box.textContent = "出厂内参：随 ROS camera_info 走，无畸变系数。";
+    box.textContent = lock + "出厂内参：随 ROS camera_info 走，无畸变系数。";
     return;
   }
   if (f.error) { box.textContent = `文件无效：${f.error}`; return; }
   const rms = f.rms_px == null ? "" : `，重投影 RMS ${Number(f.rms_px).toFixed(3)} px`;
-  box.textContent = `${f.size[0]}×${f.size[1]}：fx ${f.fx.toFixed(1)} fy ${f.fy.toFixed(1)} cx ${f.cx.toFixed(1)} cy ${f.cy.toFixed(1)}`
+  box.textContent = lock + `${f.size[0]}×${f.size[1]}：fx ${f.fx.toFixed(1)} fy ${f.fy.toFixed(1)} cx ${f.cx.toFixed(1)} cy ${f.cy.toFixed(1)}`
     + `，畸变 [${f.dist.map((v) => v.toFixed(3)).join(", ")}]${rms}。分辨率与当前画面不同时自动换算。只改点云取色位置，点的三维位置仍由深度决定。`;
 }
 
-if ($("cam-intr-select")) $("cam-intr-select").onchange = showColorIntrInfo;
+async function selectColorIntr(name) {
+  camIntrBusy = true;
+  try {
+    const d = await post("/api/handeye/config", { color_intrinsics: name });
+    camIntrBusy = false;
+    renderHe(d);
+    flash(name ? `彩色内参：${name}` : "彩色内参：出厂", true);
+  } catch (e) {
+    camIntrBusy = false;
+    flash(String(e.message || e), false);
+    refreshHandeye().catch(() => {});  // 退回服务端的选择
+  }
+}
 
-if ($("btn-cam-intr-match")) {
-  $("btn-cam-intr-match").onclick = () => matchCloud({ color_intrinsics: $("cam-intr-select").value }, "main");
+if ($("cam-intr-select")) {
+  $("cam-intr-select").onchange = () => { showColorIntrInfo(); selectColorIntr($("cam-intr-select").value); };
 }
 
 if ($("btn-cam-intr-upload")) $("btn-cam-intr-upload").onclick = () => $("cam-intr-file").click();
@@ -199,9 +216,8 @@ if ($("cam-intr-file")) {
       const d = await post("/api/handeye/color-intrinsics/upload", { name, doc: text, force: exists });
       $("cam-intr-select").dataset.sig = "";
       renderHe(d);
-      $("cam-intr-select").value = d.saved_name;
-      showColorIntrInfo();
       flash(d.message || "已上传", true);
+      if (!d.config_locked && confirm(`改用刚上传的「${d.saved_name}」？`)) await selectColorIntr(d.saved_name);
     } catch (e) {
       flash(String(e.message || e), false);
     }

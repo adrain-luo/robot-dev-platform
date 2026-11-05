@@ -9,6 +9,7 @@ import numpy as np
 
 from robot_platform.calib.handeye import session as he_session
 from robot_platform.calib.handeye.capture_task import CaptureTask
+from robot_platform.calib.handeye import color_intrinsics as he_color_intr
 from robot_platform.calib.handeye.config import camera_choices, load_config, save_config
 from robot_platform.calib.handeye.detection import parse_board_size
 from robot_platform.calib.payload import identify as iden, poses as posesets
@@ -24,6 +25,11 @@ class CaptureMixin:
                 cfg[key] = body[key]
         if body.get("camera_source"):
             cfg.pop("camera", None)  # 显式给了来源：不再按下拉框选的相机
+        if "color_intrinsics" in body:
+            name = str(body.get("color_intrinsics") or "")
+            if name:
+                he_color_intr.load(name)  # 不存在 / 无效直接报错
+            cfg["cloud_color_intrinsics"] = name
         if body.get("camera"):
             cid = str(body["camera"])
             if cid not in {c["id"] for c in camera_choices()}:

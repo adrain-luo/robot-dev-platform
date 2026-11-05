@@ -73,23 +73,22 @@
               <label class="field grow">相机
                 <select id="cam-select"></select>
               </label>
-              <p class="note">展开后才从相机取预览（约 0.7 s 一帧）；收起即停，不占带宽。</p>
-              <img id="cam-preview" alt="左右目" class="he-view">
-              <div class="cmds">
-                <button id="btn-cam-match" type="button">匹配点云</button>
-                <button id="btn-cam-match-debug" type="button">调试口匹配</button>
-              </div>
               <div id="cam-intr" style="display:none">
                 <label class="field grow">彩色内参
                   <select id="cam-intr-select"><option value="">出厂（camera_info）</option></select>
                 </label>
                 <div class="cmds">
-                  <button id="btn-cam-intr-match" type="button" class="primary">按所选内参匹配</button>
                   <button id="btn-cam-intr-upload" type="button">上传内参…</button>
                   <button id="btn-cam-intr-delete" type="button">删除</button>
                 </div>
                 <input id="cam-intr-file" type="file" accept=".json,application/json" hidden>
                 <div id="cam-intr-info" class="note"></div>
+              </div>
+              <p class="note">相机与内参选中即生效：这里和「渲染」卡片的匹配点云、手眼求解都用它们；配置锁定时不能改。展开后才从相机取预览（约 0.7 s 一帧）；收起即停，不占带宽。</p>
+              <img id="cam-preview" alt="左右目" class="he-view">
+              <div class="cmds">
+                <button id="btn-cam-match" type="button">匹配点云</button>
+                <button id="btn-cam-match-debug" type="button">调试口匹配</button>
               </div>
               <img id="cam-disp" alt="视差" class="he-view">
               <div id="cam-match" class="note"></div>

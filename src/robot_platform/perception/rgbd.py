@@ -121,9 +121,12 @@ def colorize_depth(depth: np.ndarray, scale_m: float = 0.001, far_m: float = 4.0
     return img
 
 
-def write_session_intrinsics(data_dir: Path, info: Dict[str, Any], square_size_mm: float, n_images: int
-                             ) -> Dict[str, Any]:
-    """RGB-D 会话：用出厂内参写成与双目标定同格式的 yaml（只有 left = 彩色），供求解与保存沿用。"""
+def write_session_intrinsics(data_dir: Path, info: Dict[str, Any], square_size_mm: float, n_images: int,
+                             source: str = "") -> Dict[str, Any]:
+    """RGB-D 会话：把彩色内参写成与双目标定同格式的 yaml（只有 left = 彩色），供求解与保存沿用。
+
+    source 为空表示 info 里是出厂 camera_info；否则是所用自标内参文件名（info 已替换好）。
+    """
     c = info["color"]
     K = _K(c)
     D = np.asarray(c.get("D") or [0.0] * 5, float).reshape(1, -1)
@@ -133,11 +136,11 @@ def write_session_intrinsics(data_dir: Path, info: Dict[str, Any], square_size_m
     fs.write("image_height", int(c["size"][1]))
     fs.write("left_camera_matrix", K)
     fs.write("left_dist_coeffs", D)
-    fs.write("source", "factory camera_info (RGB-D)")
+    fs.write("source", f"color intrinsics file {source} (RGB-D)" if source else "factory camera_info (RGB-D)")
     fs.release()
     fit = {
         "yaml": str(yaml_path),
-        "source": "factory",
+        "source": source or "factory",
         "camera": "rgbd",
         "num_pairs": int(n_images),
         "image_size": [int(c["size"][0]), int(c["size"][1])],
@@ -145,7 +148,8 @@ def write_session_intrinsics(data_dir: Path, info: Dict[str, Any], square_size_m
         "left_fx": float(K[0, 0]),
         "left_fy": float(K[1, 1]),
         "left_rms_px": None,
-        "note": "RGB-D 相机：内参用出厂 camera_info，未从图像重新标定",
+        "note": (f"RGB-D 相机：内参用自标定文件「{source}」（含畸变）" if source
+                 else "RGB-D 相机：内参用出厂 camera_info，未从图像重新标定"),
     }
     (data_dir / "intrinsics_fit.json").write_text(json.dumps(fit, indent=2, ensure_ascii=False), encoding="utf-8")
     return fit

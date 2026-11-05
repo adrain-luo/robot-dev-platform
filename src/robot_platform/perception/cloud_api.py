@@ -97,7 +97,8 @@ class CameraCloudMixin:
         if frame.depth is not None:
             if use_debug:
                 return {"ok": False, "error": "调试口匹配只适用于 G1D 的双目相机"}
-            return self._rgbd_cloud(frame, hand_T, str(body.get("color_intrinsics") or ""))
+            intr = body["color_intrinsics"] if "color_intrinsics" in body else cfg.get("cloud_color_intrinsics")
+            return self._rgbd_cloud(frame, hand_T, str(intr or ""))
         pair = (frame.color, frame.right)
         if use_debug:
             try:
@@ -160,7 +161,8 @@ class CameraCloudMixin:
         """RGB-D：深度直接给点，不做立体匹配；点在彩色光学系，乘手眼外参到躯干。
 
         intr_name 非空时，彩色内参换成自标定文件（换算到当前分辨率）；只影响点在彩色图上的取色位置，
-        点的三维位置仍由深度相机内参与深度到彩色外参决定。
+        点的三维位置仍由深度相机内参与深度到彩色外参决定。选哪份由相机卡片决定（实例配置
+        cloud_color_intrinsics），这里只用不改。
         """
         import base64
         if T is None:
@@ -183,10 +185,6 @@ class CameraCloudMixin:
                          f" cx {sm['cx']:.1f}（{sm['d_cx']:+.1f}） cy {sm['cy']:.1f}（{sm['d_cy']:+.1f}），含畸变。")
         else:
             intr_note = "彩色内参用出厂 camera_info。"
-        cfg = load_config()
-        if (cfg.get("cloud_color_intrinsics") or "") != intr_name:
-            cfg["cloud_color_intrinsics"] = intr_name
-            save_config(cfg)
         pts, cols = rgbd.depth_to_color_cloud(frame.depth, frame.color, info)
         n_valid = int(pts.shape[0])
         if n_valid < 50:

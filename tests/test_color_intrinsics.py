@@ -105,7 +105,84 @@ def test_rgbd_cloud_with_selected_intrinsics():
     d1 = api._rgbd_cloud(f, np.eye(4), "t_cloud")
     assert d1["ok"] and d1["color_intrinsics"]["name"] == "t_cloud"
     assert "1280×720 换算到 640×480" in d1["note"]
-    assert load_config()["cloud_color_intrinsics"] == "t_cloud"
+    assert not load_config().get("cloud_color_intrinsics"), "生成点云只用不改选择"
     bad = api._rgbd_cloud(f, np.eye(4), "no_such")
     assert bad["ok"] is False and "没有内参文件" in bad["error"]
     he_color_intr.delete("t_cloud")
+
+
+def test_selected_intrinsics_apply_everywhere_and_lock(mock_server):
+    """相机卡片选内参即写入实例；不带参数的匹配用它；配置锁定时不能改、不能删正在用的。"""
+    c = mock_server
+    c.post("/api/handeye/config", {"camera_source": "mock_rgbd"})
+    code, st = c.post("/api/handeye/color-intrinsics/upload", {"name": "sel", "doc": DOC, "force": True})
+    assert st["ok"]
+    code, st = c.post("/api/handeye/config", {"color_intrinsics": "sel"})
+    assert st["ok"] and st["cloud_color_intrinsics"] == "sel"
+    code, st = c.post("/api/handeye/config", {"color_intrinsics": "no_such"})
+    assert st["ok"] is False and "没有内参文件" in st["error"]
+
+    c.post("/api/runtime-config/lock", {"locked": True})
+    try:
+        st = c.get("/api/handeye")
+        assert st["config_locked"] is True
+        code, st = c.post("/api/handeye/config", {"color_intrinsics": ""})
+        assert st["ok"] is False and "锁定" in st["error"]
+        code, st = c.post("/api/handeye/config", {"camera": "head"})
+        assert st["ok"] is False and "锁定" in st["error"]
+        code, st = c.post("/api/handeye/color-intrinsics/delete", {"name": "sel"})
+        assert st["ok"] is False and "正在用" in st["error"]
+        code, st = c.post("/api/handeye/config", {"board_size": "11x8"})
+        assert st["ok"], "锁定只管相机与内参，别的手眼表单照常"
+    finally:
+        c.post("/api/runtime-config/lock", {"locked": False})
+    code, st = c.post("/api/handeye/config", {"color_intrinsics": ""})
+    assert st["ok"] and st["cloud_color_intrinsics"] == ""
+    c.post("/api/handeye/color-intrinsics/delete", {"name": "sel"})
+    c.post("/api/handeye/config", {"camera_source": "mock"})
+
+
+def test_session_intrinsics_from_selected_file(tmp_path):
+    """RGB-D 手眼求解写会话内参：选了自标内参就用它（含畸变），并记下来源。"""
+    import cv2
+
+    f = MockRgbdCamera().grab()
+    f.info["color"]["K"] = F480
+    he_color_intr.save("t_solve", DOC, force=True)
+    info = he_color_intr.apply_to_info(f.info, "t_solve")["info"]
+    fit = rgbd.write_session_intrinsics(tmp_path, info, 15.0, 3, source="t_solve")
+    assert fit["source"] == "t_solve" and "t_solve" in fit["note"]
+    fs = cv2.FileStorage(str(tmp_path / "stereo_calibration.yaml"), cv2.FILE_STORAGE_READ)
+    K = fs.getNode("left_camera_matrix").mat()
+    D = fs.getNode("left_dist_coeffs").mat().ravel()
+    fs.release()
+    assert K[0, 0] == pytest.approx(907.17 * 2 / 3, abs=0.01) and D[0] == pytest.approx(0.1349)
+    fit0 = rgbd.write_session_intrinsics(tmp_path, f.info, 15.0, 3)
+    assert fit0["source"] == "factory"
+    he_color_intr.delete("t_solve")
+
+
+def test_match_without_param_uses_selected(monkeypatch):
+    """渲染卡片 / 相机卡片的「匹配点云」不带参数：用实例里选定的相机与内参。"""
+    from robot_platform.calib.handeye import config as he_config
+    from robot_platform.calib.handeye.service import HandEyeAPI
+
+    he_color_intr.save("t_match", DOC, force=True)
+    cfg = he_config.load_config()
+    cfg.pop("camera", None)  # 别的测试可能选过机型相机；这里显式用仿真 RGB-D
+    cfg.update(camera_source="mock_rgbd", cloud_color_intrinsics="t_match")
+    he_config.save_config(cfg)
+    api = HandEyeAPI(None)
+    monkeypatch.setattr(api, "_left_cam_to_torso", lambda cfg: np.eye(4))
+    try:
+        d = api._match({})
+        assert d["ok"], d
+        assert d["color_intrinsics"]["name"] == "t_match"
+        d = api._match({"color_intrinsics": ""})  # 显式给出时按给的
+        assert d["ok"] and d["color_intrinsics"] is None
+    finally:
+        cfg.pop("cloud_color_intrinsics", None)
+        cfg.pop("camera_source", None)
+        he_config.save_config(cfg)
+        he_color_intr.delete("t_match")
+        api.close()

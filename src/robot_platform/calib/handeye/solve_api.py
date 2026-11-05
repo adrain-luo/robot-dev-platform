@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from robot_platform.calib.handeye import results as he_results, session as he_session
+from robot_platform.calib.handeye import color_intrinsics as he_color_intr
 from robot_platform.calib.handeye.config import load_config, save_config
 from robot_platform.calib.handeye.detection import parse_board_size
 from robot_platform.calib.handeye.solve_core import load_intrinsics, object_points_m, solve_eye, SolveOptions, stereo_cross_check
@@ -38,10 +39,14 @@ class SolveMixin:
         log: list = []
         cam_info = he_session.camera_info(data_dir)
         if cam_info is not None:
-            # RGB-D：只有彩色一路，内参用出厂 camera_info，不做双目标定
+            # RGB-D：只有彩色一路，不做双目标定；内参用相机卡片选定的（未选则出厂 camera_info）
             n_img = len(list((data_dir / "left").glob("*.jpg")))
-            fit = rgbd.write_session_intrinsics(data_dir, cam_info, float(square), n_img)
-            log.append(f"[内参] RGB-D 出厂内参 fx={fit['left_fx']:.1f} fy={fit['left_fy']:.1f}，{n_img} 张彩色图")
+            intr_name = str(cfg.get("cloud_color_intrinsics") or "")
+            if intr_name:
+                cam_info = he_color_intr.apply_to_info(cam_info, intr_name)["info"]
+            fit = rgbd.write_session_intrinsics(data_dir, cam_info, float(square), n_img, source=intr_name)
+            where = f"自标「{intr_name}」" if intr_name else "出厂"
+            log.append(f"[内参] RGB-D {where}内参 fx={fit['left_fx']:.1f} fy={fit['left_fy']:.1f}，{n_img} 张彩色图")
             eye = "left"
         else:
             from robot_platform.calib.handeye.intrinsics import calibrate_session

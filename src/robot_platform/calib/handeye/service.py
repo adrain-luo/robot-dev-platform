@@ -72,6 +72,7 @@ class HandEyeAPI(CameraCloudMixin, DebugPortMixin, CaptureMixin, SolveMixin):
             "saved": he_results.list_saved(),
             "active_result": cfg.get("active_result") or "",
             "color_intrinsics": he_color_intr.list_files(),
+            "config_locked": bool(getattr(getattr(self.app, "runtime", None), "locked", False)),
             "cloud_color_intrinsics": cfg.get("cloud_color_intrinsics") or "",
             "running": running,
             "phase": phase,
