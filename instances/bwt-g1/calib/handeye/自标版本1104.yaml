@@ -1,0 +1,18 @@
+%YAML:1.0
+---
+image_width: 640
+image_height: 480
+left_camera_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 604.77985183633325, 0., 328.66724857913249, 0.,
+       604.26461775188045, 247.26104203820398, 0., 0., 1. ]
+left_dist_coeffs: !!opencv-matrix
+   rows: 1
+   cols: 5
+   dt: d
+   data: [ 0.13490438689791456, -0.31720476655943691,
+       -0.0016962227687465255, -0.00056315953560885396,
+       0.1063603598287314 ]
+source: color intrinsics file head_camera_intrinsics (RGB-D)

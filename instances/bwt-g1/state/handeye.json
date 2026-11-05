@@ -1,11 +1,12 @@
 {
-  "camera_source": "ros_rgbd",
-  "camera_host": "192.168.123.164",
-  "teleimager_path": "/home/robot/yx/teleimager_src_copy",
-  "intrinsics": "calib/handeye/g1标定.yaml",
+  "intrinsics": "calib/handeye/自标版本1104.yaml",
   "board_size": "11x8",
   "square_size_mm": 15.0,
   "session": "20261104_163027_right",
   "eye": "left",
-  "active_result": "g1标定"
+  "camera_source": "ros_rgbd",
+  "camera_host": "192.168.123.164",
+  "teleimager_path": "/home/robot/yx/teleimager_src_copy",
+  "active_result": "自标版本1104",
+  "cloud_color_intrinsics": "head_camera_intrinsics"
 }

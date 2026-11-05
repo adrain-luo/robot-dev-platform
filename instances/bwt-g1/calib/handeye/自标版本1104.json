@@ -1,0 +1,141 @@
+{
+  "name": "自标版本1104",
+  "saved_at": "2026-11-05T11:47:55",
+  "session": "20261104_163027_right",
+  "arm": "right",
+  "tip_link": "right_wrist_yaw_link",
+  "base_link": "torso_link",
+  "poseset": "g1-rgbd标定-右手",
+  "board_size": "11x8",
+  "square_size_mm": 15.0,
+  "intrinsics_yaml": "calib/handeye/自标版本1104.yaml",
+  "intrinsics_fit": {
+    "yaml": "/home/unitree/abyss/project/robot-dev-platform/instances/bwt-g1/data/handeye/20261104_163027_right/stereo_calibration.yaml",
+    "source": "head_camera_intrinsics",
+    "camera": "rgbd",
+    "num_pairs": 31,
+    "image_size": [
+      640,
+      480
+    ],
+    "square_size_mm": 15.0,
+    "left_fx": 604.7798518363333,
+    "left_fy": 604.2646177518805,
+    "left_rms_px": null,
+    "note": "RGB-D 相机：内参用自标定文件「head_camera_intrinsics」（含畸变）"
+  },
+  "result": {
+    "left": {
+      "eye": "left",
+      "base_link": "torso_link",
+      "tip_link": "right_wrist_yaw_link",
+      "method": "park",
+      "num_samples": 30,
+      "num_inliers": 30,
+      "inlier_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29
+      ],
+      "board_size": [
+        11,
+        8
+      ],
+      "square_size_mm": 15.0,
+      "intrinsics_yaml": "/home/unitree/abyss/project/robot-dev-platform/instances/bwt-g1/data/handeye/20261104_163027_right/stereo_calibration.yaml",
+      "T_cam2base": [
+        [
+          0.016447729411963985,
+          -0.7331118623707583,
+          0.6799091626448852,
+          0.03671172746878639
+        ],
+        [
+          -0.9998630835540387,
+          -0.010826745607480042,
+          0.012513821373572672,
+          0.02984601553003251
+        ],
+        [
+          -0.0018128273524160709,
+          -0.6800218958466124,
+          -0.733189562682238,
+          0.435320628880551
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "R_cam2base": [
+        [
+          0.016447729411963985,
+          -0.7331118623707583,
+          0.6799091626448852
+        ],
+        [
+          -0.9998630835540387,
+          -0.010826745607480042,
+          0.012513821373572672
+        ],
+        [
+          -0.0018128273524160709,
+          -0.6800218958466124,
+          -0.733189562682238
+        ]
+      ],
+      "t_cam2base_m": [
+        0.03671172746878639,
+        0.02984601553003251,
+        0.435320628880551
+      ],
+      "rpy_rad": [
+        -2.393798631591098,
+        0.0018128283453462803,
+        -1.5543478286677916
+      ],
+      "rpy_deg": [
+        -137.15455859436173,
+        0.10386741317002633,
+        -89.05757047798805
+      ],
+      "residual_translation_mm": {
+        "mean": 2.7789276641165093,
+        "max": 6.8385002791312886
+      },
+      "residual_rotation_deg": {
+        "mean": 0.5526491021040003,
+        "max": 1.047648560147118
+      }
+    }
+  }
+}
