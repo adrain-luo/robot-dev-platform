@@ -3,6 +3,7 @@
 只调不落盘的接口（不存 TCP / 负载 / 零位），跑完不改仓库里的数据文件。
 """
 
+import time
 import math
 
 
@@ -132,3 +133,47 @@ def test_app_js_is_bundle_of_parts(mock_server):
     pos = [text.index(f"// {p.name} ——") for p in parts]
     assert pos == sorted(pos), "拼接顺序应与文件名顺序一致"
     assert "try {\n$(\"arm-select\")" not in text, "顶层 try 已去掉"
+
+
+def test_hold_stops_multi_pose_tasks(mock_server):
+    """急停要停掉连续走点的任务（负载测量 / 到位对比 / 手眼采集），不能只停当前这一段。"""
+    c = mock_server
+    st = c.get("/api/scene")
+    if st["ctrl"].get("engaged"):
+        c.post("/api/release")
+        c.wait(lambda s: not s["ctrl"]["engaged"] and not s["ctrl"].get("transition"))
+    assert c.post("/api/control-arm", {"arm": "right"})[0] == 200
+    assert c.post("/api/engage")[0] == 200
+    assert c.post("/api/speed", {"max_speed_rad_s": 0.4})[0] == 200
+    name = "estop_test_set"
+    c.post("/api/posesets/delete", {"name": name})
+    assert c.post("/api/posesets/create", {"name": name, "arm": "right"})[0] == 200
+    q0 = [j["q_rad"] for j in c.get("/api/scene")["arms"]["right"]["joints"]]
+    for d in (0.0, 0.5, -0.5, 0.5):
+        tgt = list(q0)
+        tgt[3] += d
+        c.post("/api/target", {"q": tgt})
+        c.wait(lambda s: abs(s["arms"]["right"]["joints"][3]["q_rad"] - tgt[3]) < 0.01, timeout_s=10)
+        assert c.post("/api/posesets/record", {"name": name})[0] == 200
+    c.post("/api/target", {"q": q0})
+    c.wait(lambda s: abs(s["arms"]["right"]["joints"][3]["q_rad"] - q0[3]) < 0.01, timeout_s=10)
+
+    code, d = c.post("/api/identify/measure", {"name": name})
+    assert code == 200 and d["identify"]["running"], d
+    # 等它开始走（desired 离开起点）再急停
+    try:
+        c.wait(lambda s: abs(s["ctrl"]["desired_rad"][3] - q0[3]) > 0.1, timeout_s=30)
+    except AssertionError:
+        raise AssertionError(str(c.get("/api/scene")["identify"]))
+    time.sleep(0.3)
+    assert c.post("/api/hold")[0] == 200
+    t0 = time.monotonic()
+    while c.get("/api/scene")["identify"]["running"]:
+        assert time.monotonic() - t0 < 5, "急停后负载测量还在跑"
+        time.sleep(0.1)
+    d1 = c.get("/api/scene")["ctrl"]["desired_rad"]
+    time.sleep(2.0)
+    d2 = c.get("/api/scene")["ctrl"]["desired_rad"]
+    assert d1 == d2, "急停后手臂又被发了新目标"
+    c.post("/api/posesets/delete", {"name": name})
+    c.post("/api/release")

@@ -209,6 +209,9 @@ $("btn-release").onclick = async () => {
 };
 
 $("btn-hold").onclick = async () => {
+  // 工作流在两步之间（例如正在识别、手臂没动）时，后端没有可停的运动：前端也要让它别再走下一步
+  const wf = window.wfDetectGoto;
+  if (wf && wf.busy) wf.abort = true;
   try { await post("/api/hold", {}); flash("急停：退出拖拽，保持当前角", true); } catch (e) { flash(String(e), false); }
 };
 

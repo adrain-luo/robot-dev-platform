@@ -61,6 +61,13 @@ class PayloadAPI:
         saved["live"] = live
         return saved
 
+    def stop_tasks(self) -> None:
+        """急停用：叫停正在跑的负载测量 / 到位对比（它们会在下一次检查时抛「已停止」，不再发新目标）。"""
+        with self._id_lock:
+            task = self._id_task
+        if task is not None:
+            task.stop.set()
+
     def identify_status(self) -> Dict[str, Any]:
         with self._id_lock:
             st = {

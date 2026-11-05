@@ -220,12 +220,23 @@ def _waist_step(app, loop, body: Dict[str, Any]) -> None:
 
 
 def _hold(app, loop, body: Dict[str, Any]) -> None:
-    app.motion_stop.set()
-    app.board.request_stop()
-    try:
-        app.lift_post("/api/lift/stop", {})
-    except Exception:
-        traceback.print_exc()
+    """急停：先叫停所有会连续发目标的任务，再把手臂 / 腰锁在当前实测角。
+
+    任务只是被通知停止，线程要等下一次检查才退出；所以先置停止标志、最后才锁目标，
+    避免任务在锁目标之后又发出下一个点。各项互不影响：某项出错也继续往下停。
+    """
+    app.motion_stop.set()  # 空间点碰点、工作姿态调用
+    stoppers = (
+        app.board.request_stop,          # 棋盘触摸
+        app.payload.stop_tasks,          # 负载测量、到位对比
+        app.handeye.stop_capture,        # 手眼采集
+        lambda: app.lift_post("/api/lift/stop", {}),
+    )
+    for stop in stoppers:
+        try:
+            stop()
+        except Exception:
+            traceback.print_exc()
     loop.estop_hold()
 
 

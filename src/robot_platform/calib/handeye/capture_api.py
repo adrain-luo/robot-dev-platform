@@ -145,10 +145,14 @@ class CaptureMixin:
         threading.Thread(target=task.run, name="handeye-capture", daemon=True).start()
         return self.status()
 
-    def _stop(self) -> Dict[str, Any]:
+    def stop_capture(self) -> None:
+        """急停用：叫停正在走点的手眼采集。"""
         task = self._task
         if task is not None:
             task.stop.set()
+
+    def _stop(self) -> Dict[str, Any]:
+        self.stop_capture()
         return self.status()
 
     @staticmethod
