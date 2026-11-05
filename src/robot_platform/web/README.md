@@ -54,7 +54,11 @@ python serve.py --allow-real-motion --max-speed 0.2    # 真机
 
 | 路径 | 作用 |
 |------|------|
-| `web/server.py` | HTTP + 汇总各模块 API |
+| `web/server.py` | 入口：参数、实例 / 后端选择、起 HTTP 服务、收尾释放 |
+| `web/routes.py` | 路由：GET（页面、静态、URDF、状态）与按功能分组的 POST，组的先后顺序见文件开头 |
+| `web/app.py` | `App` 本体：设置、后端、控制循环、各功能会话 |
+| `web/api/` | `App` 按功能拆开的接口方法：`state`（状态 / 场景）、`lift`、`tcp`、`work_pose`、`points`、`runtime` |
+| `web/page.py` / `web/http_util.py` | 首页下拉框预填；HTTP 收发小工具 |
 | `web/static/` | 唯一前端 |
 | `control/arm_loop.py` | `ArmLoop` 限速、接管、腰保持、拼指令帧 |
 | `hw/backends/` | 硬件后端：`unitree_lowcmd`（G1D）、`unitree_arm_sdk`（G1）、`mock`（仿真） |

@@ -1,0 +1,294 @@
+"""HTTP 路由：GET（页面、静态文件、URDF、状态）与 POST（按功能分组，按顺序尝试）。
+
+POST 的顺序有讲究，与拆分前一致：
+1. /api/runtime-config/* 先走（它自己管锁定，不受锁定拦截）；
+2. 配置锁定检查 runtime.guard_path；
+3. 手眼、负载两组（它们自带路由表）；
+4. TCP、工作姿态、棋盘、识别定位、空间点、立柱；
+5. 其余都是臂控指令，要求开了 --allow-real-motion。
+
+每个分组函数返回 (状态码, JSON) 表示已处理，返回 None 表示不归它管。
+"""
+
+from __future__ import annotations
+
+import math
+import traceback
+from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import ParseResult, parse_qs
+
+from robot_platform.control.arm_loop import PermissionErrorMotion
+from robot_platform.core.runtime_config import ConfigLockedError
+from robot_platform.paths import STATIC_DIR
+from robot_platform.web.http_util import safe_under, send_bytes, send_file, send_json
+from robot_platform.web.page import page_html
+
+Reply = Tuple[int, Dict[str, Any]]
+NOT_FOUND: Reply = (404, {})  # 交给 send_error(404)
+
+STATIC_FILES = {
+    "/static/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/static/viewer.js": ("viewer.js", "text/javascript; charset=utf-8"),
+}
+
+
+# ---------------------------------------------------------------- GET
+
+def handle_get(app, handler, parsed: ParseResult) -> None:
+    path = parsed.path
+    if path in ("/", "/index.html"):
+        send_bytes(handler, 200, page_html().encode("utf-8"), "text/html; charset=utf-8")
+        return
+    if path in ("/rail-preview", "/rail-preview.html"):
+        send_file(handler, STATIC_DIR / "rail_preview.html", "text/html; charset=utf-8")
+        return
+    if path in STATIC_FILES:
+        name, ctype = STATIC_FILES[path]
+        send_file(handler, STATIC_DIR / name, ctype)
+        return
+    if path.startswith("/static/vendor/"):
+        vendor = safe_under(STATIC_DIR / "vendor", path.split("/")[-1])
+        if vendor is None:
+            handler.send_error(404)
+            return
+        send_file(handler, vendor, "text/javascript; charset=utf-8")
+        return
+    if path in ("/urdf/robot.urdf", f"/urdf/{app.profile.urdf.name}"):
+        send_file(handler, app.profile.urdf, "application/xml")
+        return
+    if path.startswith("/urdf/meshes/"):
+        mesh = safe_under(app.profile.meshes_dir, path.split("/")[-1])
+        if mesh is None:
+            handler.send_error(404)
+            return
+        send_file(handler, mesh, "application/octet-stream")
+        return
+    if path == "/api/robot":
+        send_json(handler, 200, app.robot_caps())
+        return
+    if path == "/api/runtime-config":
+        send_json(handler, 200, app.runtime.snapshot())
+        return
+    if path == "/api/status":
+        q = parse_qs(parsed.query)
+        arm = (q.get("arm") or ["right"])[0]
+        send_json(handler, 200, app.snapshot(arm))
+        return
+    if path == "/api/scene":
+        send_json(handler, 200, app.both_scenes())
+        return
+    if path == "/api/handeye/preview.jpg":
+        jpeg, err = app.handeye.preview_jpeg()
+        if not jpeg:
+            send_json(handler, 503, {"ok": False, "error": err or "没有画面"})
+            return
+        send_bytes(handler, 200, jpeg, "image/jpeg")
+        return
+    for sub in (app.handeye, app.payload):
+        got = sub.handle_get(path, parsed.query)
+        if got is not None:
+            send_json(handler, 200, got)
+            return
+    handler.send_error(404)
+
+
+# ---------------------------------------------------------------- POST 分组
+
+def _runtime(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if path.startswith("/api/runtime-config"):
+        return 200, app.runtime_post(path, body)
+    return None
+
+
+def _locked(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    try:
+        app.runtime.guard_path(path, body)
+    except ConfigLockedError as exc:
+        return 200, {"ok": False, "error": str(exc), "runtime": app.runtime.snapshot()}
+    return None
+
+
+def _handeye_payload(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    posted = app.handeye.handle_post(path, body)
+    if posted is None:
+        posted = app.payload.handle_post(path, body)
+    if posted is None:
+        return None
+    if isinstance(posted, dict):
+        posted.setdefault("runtime", app.runtime.snapshot())
+    return 200, posted
+
+
+def _tcp(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if not path.startswith("/api/tcp/"):
+        return None
+    out = app.tcp_post(path, body)
+    if isinstance(out, dict):
+        out.setdefault("runtime", app.runtime.snapshot())
+        out.setdefault("work_pose", app.work_pose.status(app.tcp.active_name or ""))
+    return 200, out
+
+
+def _work_pose(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if not path.startswith("/api/work-pose/"):
+        return None
+    out = app.work_pose_post(path, body)
+    if isinstance(out, dict):
+        out.setdefault("runtime", app.runtime.snapshot())
+    return 200, out
+
+
+def _board(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if not path.startswith("/api/board/"):
+        return None
+    if path == "/api/board/look":
+        return 200, app.board.look(str(body.get("board") or "9x6"), bool(body.get("ideal")))
+    if path == "/api/board/start":
+        return 200, app.board.start(
+            float(body.get("above_cm") or 5.0) / 100.0,
+            float(body.get("down_cm") or 4.0) / 100.0,
+            float(body.get("up_cm") or 4.0) / 100.0,
+        )
+    if path == "/api/board/stop":
+        app.board.request_stop()
+        if app.loop is not None and app.loop.status().get("engaged"):
+            app.loop.estop_hold()
+        return 200, app.board.status()
+    return 200, {"ok": False, "error": "没有这个棋盘接口"}
+
+
+def _detect(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    # /api/detect/grab 归手眼（取图），已在前面处理
+    if not path.startswith("/api/detect/") or path == "/api/detect/grab":
+        return None
+    actions = {
+        "/api/detect/points": lambda: app.detect.acquire_points(body),
+        "/api/detect/calibrate": app.detect.calibrate,
+        "/api/detect/center": app.detect.extract_center,
+        "/api/detect/clear": app.detect.clear,
+    }
+    fn = actions.get(path)
+    return 200, (fn() if fn else {"ok": False, "error": "没有这个识别定位接口"})
+
+
+def _points(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if not path.startswith("/api/points/"):
+        return None
+    if path == "/api/points/goto":
+        return 200, app.point_goto(body, app.require_loop())
+    if path == "/api/points/goto-xyz":
+        return 200, app.point_goto_xyz(body, app.require_loop())
+    return 200, app.point_post(path, body)
+
+
+def _lift(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if not path.startswith("/api/lift/"):
+        return None
+    return 200, app.lift_post(path, body)
+
+
+# ---------------------------------------------------------------- 臂控指令
+
+def _waist_step(app, loop, body: Dict[str, Any]) -> None:
+    """相对当前目标（或实测）步进；与立柱 step 同思路。"""
+    spec = app.profile.waist
+    if spec is None:
+        raise PermissionErrorMotion(f"{app.profile.name} 没有可控的腰")
+    m_yaw = spec.joint("yaw").motor
+    m_pitch = spec.joint("pitch").motor
+    st_w = app.reader().read_motor_states(spec.read_motors)
+    tgt = (app.ctrl_status() or {}).get("waist_target_rad") or {}
+    base_yaw = float(tgt.get(str(m_yaw), st_w[m_yaw]["q"]))
+    base_pitch = float(tgt.get(str(m_pitch), st_w[m_pitch]["q"]))
+    dy = body.get("delta_yaw_deg")
+    dp = body.get("delta_pitch_deg")
+    new_yaw = base_yaw if dy in (None, "") else base_yaw + math.radians(float(dy))
+    new_pitch = base_pitch if dp in (None, "") else base_pitch + math.radians(float(dp))
+    loop.set_waist(new_yaw, new_pitch)
+
+
+def _hold(app, loop, body: Dict[str, Any]) -> None:
+    app.motion_stop.set()
+    app.board.request_stop()
+    try:
+        app.lift_post("/api/lift/stop", {})
+    except Exception:
+        traceback.print_exc()
+    loop.estop_hold()
+
+
+def _teach(app, loop, body: Dict[str, Any]) -> None:
+    if bool(body.get("enabled", True)):
+        app.unlock_work_pose("teach")
+        loop.enable_teach()
+    else:
+        loop.disable_teach()
+
+
+def _speed(app, loop, body: Dict[str, Any]) -> None:
+    loop.set_max_speed(float(body["max_speed_rad_s"]))
+    app.settings.max_speed_rad_s = loop.max_speed
+
+
+def _target(app, loop, body: Dict[str, Any]) -> None:
+    if not app._work_pose_motion:
+        app.unlock_work_pose("arm_control")
+    loop.set_target(body["q"])
+
+
+def _waist(app, loop, body: Dict[str, Any]) -> None:
+    yaw = body.get("yaw_deg")
+    pitch = body.get("pitch_deg")
+    loop.set_waist(
+        None if yaw in (None, "") else math.radians(float(yaw)),
+        None if pitch in (None, "") else math.radians(float(pitch)),
+    )
+
+
+def _control_arm(app, loop, body: Dict[str, Any]) -> None:
+    loop.set_arm(str(body["arm"]))
+    app.payload.restore(loop)
+    app.tcp.restore_for_arm(loop.arm)
+    app.work_pose.unlock_if_tcp_mismatch(app.tcp.active_name or "")
+
+
+ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], None]] = {
+    "/api/engage": lambda app, loop, body: loop.engage(),
+    "/api/release": lambda app, loop, body: loop.release(),
+    "/api/hold": _hold,
+    "/api/teach": _teach,
+    "/api/gravity": lambda app, loop, body: loop.set_gravity_ff(bool(body.get("enabled", True))),
+    "/api/speed": _speed,
+    "/api/target": _target,
+    "/api/waist": _waist,
+    "/api/waist/step": _waist_step,
+    "/api/waist/stop": lambda app, loop, body: loop.hold_waist(),
+    "/api/control-arm": _control_arm,
+}
+
+
+def _arm(app, path: str, body: Dict[str, Any]) -> Reply:
+    loop = app.require_loop()
+    fn = ARM_COMMANDS.get(path)
+    if fn is None:
+        return NOT_FOUND
+    fn(app, loop, body)
+    return 200, {
+        "ok": True,
+        "ctrl": app.ctrl_status(),
+        "work_pose": app.work_pose.status(app.tcp.active_name or ""),
+    }
+
+
+POST_GROUPS: List[Callable[[Any, str, Dict[str, Any]], Optional[Reply]]] = [
+    _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _lift,
+]
+
+
+def handle_post(app, path: str, body: Dict[str, Any]) -> Reply:
+    for group in POST_GROUPS:
+        reply = group(app, path, body)
+        if reply is not None:
+            return reply
+    return _arm(app, path, body)

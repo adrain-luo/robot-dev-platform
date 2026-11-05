@@ -1,0 +1,56 @@
+"""运行配置：/api/runtime-config/*（手眼、重力、TCP、工作姿态成套调用与锁定）。"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+import json
+
+from robot_platform.control.arm_loop import PermissionErrorMotion
+from robot_platform.core.runtime_config import ConfigLockedError
+
+
+class RuntimeMixin:
+    def runtime_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            if path == "/api/runtime-config/lock":
+                return self.runtime.set_locked(bool(body.get("locked")))
+            if path == "/api/runtime-config/stereo":
+                return self.runtime.apply_stereo(active_result=body.get("active_result"))
+            if path == "/api/runtime-config/gravity":
+                return self.runtime.apply_gravity(str(body.get("arm") or "right"), str(body.get("name") or ""))
+            if path == "/api/runtime-config/tcp":
+                out = self.runtime.apply_tcp(
+                    str(body.get("name") or ""),
+                    arm=body.get("arm"),
+                )
+                self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
+                return out
+            if path == "/api/runtime-config/work-pose":
+                # 不受配置锁定限制：确认后到位并锁定工作姿态
+                return self.work_pose_load(
+                    str(body.get("tcp_name") or self.tcp.active_name or ""),
+                    str(body.get("name") or ""),
+                )
+            if path == "/api/runtime-config/pose-ik-mode":
+                # 不受配置锁定：随时切换锁定姿态下的 IK 策略
+                out = self.work_pose.set_ik_mode(str(body.get("mode") or ""))
+                snap = self.runtime.snapshot()
+                snap["work_pose"] = out
+                snap["ok"] = True
+                snap["message"] = (
+                    "已切到多初值（新）" if out.get("ik_mode") == "robust" else "已切到单次局部 IK（旧）"
+                )
+                return snap
+            if path == "/api/runtime-config":
+                return self.runtime.snapshot()
+            return {"ok": False, "error": "没有这个配置接口"}
+        except ConfigLockedError as exc:
+            out = self.runtime.snapshot()
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out
+        except (ValueError, FileNotFoundError, OSError, KeyError, json.JSONDecodeError, PermissionErrorMotion, RuntimeError) as exc:
+            out = self.runtime.snapshot()
+            out["ok"] = False
+            out["error"] = str(exc)
+            return out

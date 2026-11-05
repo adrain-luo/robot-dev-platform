@@ -1,0 +1,255 @@
+"""状态与场景：控制状态、单臂快照、机型能力、整机场景（前端轮询的 /api/scene）。"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+import math
+
+from robot_platform.calib import lift as lift_calib
+from robot_platform.calib.payload import identify as iden
+from robot_platform.core import instance as instances
+from robot_platform.core.layout import get_arm, short_joint_label
+
+
+class StateMixin:
+    def ctrl_status(self) -> Dict[str, Any]:
+        base = {
+            "allow_real_motion": self.allow_real_motion,
+            "engaged": False,
+            "float": False,
+            "gravity_ff": True,
+            "arm": self.loop.arm if self.loop else "right",
+            "max_speed_rad_s": self.settings.max_speed_rad_s,
+        }
+        if self.loop is None:
+            return base
+        base.update(self.loop.status())
+        th = base.get("payload_theta")
+        if th:
+            m, com = iden.theta_to_payload(th)
+            base["payload_mass_kg"] = m
+            base["payload_com_m"] = com
+        return base
+
+    def _urdf(self):
+        return self.settings.urdf, self.settings.base_link
+
+    def snapshot(self, arm: str) -> Dict[str, Any]:
+        layout = get_arm(arm)
+        r = self.reader()
+        st = r.read_arm(layout)
+        age = r.age_s()
+        scene = self.kin.arm_scene(arm, st.q)
+        ctrl = self.ctrl_status()
+        if self.loop is not None and self.loop.arm == arm and ctrl.get("engaged"):
+            scene["cmd_links"] = self.kin.arm_scene(arm, ctrl["cmd_rad"])["links"]
+            scene["target_links"] = self.kin.arm_scene(arm, ctrl["desired_rad"])["links"]
+        if self.loop is not None and self.loop.arm == arm and ctrl.get("payload_theta"):
+            com = ctrl.get("payload_com_m")
+            mass = ctrl.get("payload_mass_kg")
+            if com is None:
+                mass, com = iden.theta_to_payload(ctrl["payload_theta"])
+            T = scene["wrist_T"]
+            o = [T[i][3] for i in range(3)]
+            scene["payload_point"] = [
+                o[0] + T[0][0] * com[0] + T[0][1] * com[1] + T[0][2] * com[2],
+                o[1] + T[1][0] * com[0] + T[1][1] * com[1] + T[1][2] * com[2],
+                o[2] + T[2][0] * com[0] + T[2][1] * com[1] + T[2][2] * com[2],
+            ]
+            scene["payload_mass"] = float(mass or 0.0)
+            scene["payload_name"] = ctrl.get("payload_name")
+            scene["payload_com_m"] = [float(v) for v in com]
+        try:
+            lim = self.kin.arms[layout.name].model.joint_limits()
+        except Exception:
+            lim = None
+        joints = []
+        for i, name in enumerate(layout.joint_names):
+            tau = st.tau_est[i]
+            row = {
+                "name": name,
+                "label": short_joint_label(name),
+                "motor": layout.motor_indices[i],
+                "q_rad": st.q[i],
+                "q_deg": math.degrees(st.q[i]),
+                "dq": st.dq[i],
+                "tau_est": None if tau is None else float(tau),
+            }
+            if lim is not None:
+                row["limit_rad"] = [float(lim[i, 0]), float(lim[i, 1])]
+                row["limit_deg"] = [math.degrees(float(lim[i, 0])), math.degrees(float(lim[i, 1]))]
+            joints.append(row)
+        return {
+            "ok": True,
+            "mode": "real" if self.allow_real_motion else "readonly",
+            "robot": self.settings.robot,
+            "backend": self.backend.name,
+            "instance": instances.active().name,
+            "arm": arm,
+            "iface": self.settings.network_interface,
+            "topic": self.settings.state_topic,
+            "command_topic": self.settings.command_topic,
+            "mode_machine": st.mode_machine,
+            "age_s": age,
+            "fresh": age < 0.5,
+            "joints": joints,
+            "scene": scene,
+            "ctrl": ctrl,
+        }
+
+    def robot_caps(self) -> Dict[str, Any]:
+        """给前端的机型能力：决定显示哪些控件。"""
+        p = self.profile
+        w = p.waist
+        return {
+            "ok": True,
+            "name": p.name,
+            "label": p.name.upper(),
+            "display_name": p.display_name,
+            "backend": self.backend.name,
+            "instance": instances.active().name,
+            "arms": list(p.arms),
+            "waist": None if w is None else {
+                "movable": w.movable,
+                "joints": [
+                    {"role": j.role, "name": j.urdf_joint, "motor": j.motor,
+                     "limit_deg": [math.degrees(j.limit_rad[0]), math.degrees(j.limit_rad[1])]}
+                    for j in w.joints
+                ],
+            },
+            "lift": None if p.lift is None else {"stroke_max_mm": p.lift.stroke_max_m * 1000.0},
+            # 接管 / 释放有过渡（arm_sdk）：页面显示进度，过渡中不能走点
+            "transitions": self.backend.name == "unitree_arm_sdk",
+            # 腿式机型：三维里根在骨盆，要按腿部实测贴地
+            "legged": bool(p.display_joints),
+        }
+
+    def body_joints(self) -> Dict[str, float]:
+        """只用于三维显示的其它关节（如 G1 的腿）。"""
+        disp = self.profile.display_joints
+        if not disp:
+            return {}
+        try:
+            st = self.reader().read_motor_states(list(disp))
+        except Exception:
+            return {}
+        return {name: st[i]["q"] for i, name in disp.items()}
+
+    def both_scenes(self) -> Dict[str, Any]:
+        self.reader()
+        arms = {}
+        err = None
+        for name in self.profile.arms:
+            try:
+                arms[name] = self.snapshot(name)
+            except Exception as e:
+                err = f"{type(e).__name__}: {e}"
+                arms[name] = None
+        waist = {}
+        lift = {}
+        spec = self.profile.waist
+        try:
+            if spec is None:
+                raise LookupError("no waist")
+            st_w = self.reader().read_motor_states(spec.read_motors)
+            def _tau(v: float):
+                return None if v != v else float(v)  # NaN → None
+            waist = {"limits_deg": {}, "joints": []}
+            for j in spec.joints:
+                s = st_w[j.motor]
+                waist[j.urdf_joint] = s["q"]
+                waist[f"{j.role}_deg"] = math.degrees(s["q"])
+                waist["limits_deg"][j.role] = [math.degrees(j.limit_rad[0]), math.degrees(j.limit_rad[1])]
+                waist["joints"].append({
+                    "name": j.urdf_joint,
+                    "label": f"waist_{j.role}",
+                    "motor": j.motor,
+                    "q_rad": s["q"],
+                    "q_deg": math.degrees(s["q"]),
+                    "dq": s["dq"],
+                    "tau_est": _tau(s["tau_est"]),
+                })
+        except Exception:
+            waist = {}
+        lift_spec = self.profile.lift
+        # 官方：rt/hispeed_state Point32.y=高度 .z=速度（不在 lowstate）
+        try:
+            if lift_spec is None:
+                raise LookupError("no lift")
+            topic = lift_spec.state_topic
+            hs = self.hispeed()
+            st = hs.latest()
+            age = hs.age_s()
+            calib = lift_calib.status()
+            zero_m = float(calib["height_zero_m"])
+            if st is None:
+                lift = {
+                    "available": False,
+                    "topic": topic,
+                    "height_m": None,
+                    "velocity_mps": None,
+                    "age_s": None,
+                    "joints": {n: 0.0 for n in lift_spec.urdf_joints},
+                    "joints_urdf": list(lift_spec.urdf_joints),
+                    "calib": calib,
+                    "note": f"等待 {topic}（Point32.y 高度 / .z 速度）。升降不在 rt/lowstate。",
+                }
+            else:
+                joints = lift_spec.height_to_joints(st.height_m, zero_m=zero_m)
+                stroke = sum(joints.values())
+                lift = {
+                    "available": True,
+                    "topic": topic,
+                    "height_m": st.height_m,
+                    "height_mm": st.height_m * 1000.0,
+                    "stroke_m": stroke,
+                    "stroke_mm": stroke * 1000.0,
+                    "velocity_mps": st.velocity_mps,
+                    "velocity_mms": st.velocity_mps * 1000.0,
+                    "x": st.x,
+                    "age_s": age,
+                    "joints": joints,
+                    "joints_urdf": list(lift_spec.urdf_joints),
+                    "calib": calib,
+                    "note": f"来自 {topic}；已映射到 {' / '.join(n.removesuffix('_Joint') for n in lift_spec.urdf_joints)} 驱动三维",
+                }
+        except Exception as e:
+            if lift_spec is None:
+                lift = {}
+            else:
+                lift = {
+                    "available": False,
+                    "topic": lift_spec.state_topic,
+                    "error": f"{type(e).__name__}: {e}",
+                    "calib": lift_calib.status(),
+                    "note": f"订阅 {lift_spec.state_topic} 失败",
+                }
+        if self._lift_ctrl is not None:
+            try:
+                lift = {**lift, "ctrl": self._lift_ctrl.status()}
+            except Exception:
+                pass
+        return {
+            "ok": err is None,
+            "error": err,
+            "mode": "real" if self.allow_real_motion else "readonly",
+            "robot": self.settings.robot,
+            "backend": self.backend.name,
+            "instance": instances.active().name,
+            "iface": self.settings.network_interface,
+            "topic": self.settings.state_topic,
+            "command_topic": self.settings.command_topic,
+            "ctrl": self.ctrl_status(),
+            "identify": self.payload.identify_status(),
+            "handeye": self.handeye.status(),
+            "waist": waist,
+            "body": self.body_joints(),
+            "lift": lift,
+            "tcp": self.tcp.status(),
+            "spatial": self.points.status(),
+            "work_pose": self.work_pose.status(self.tcp.active_name or ""),
+            "board": self.board.status(),
+            "detect": self.detect.status(),
+            "runtime": self.runtime.snapshot(),
+            "arms": arms,
+        }
