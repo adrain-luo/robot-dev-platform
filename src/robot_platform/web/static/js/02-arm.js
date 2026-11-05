@@ -120,7 +120,17 @@ let speedDirty = false;
 
 window.speedDirty = false;
 
-document.getElementById("speed").addEventListener("input", () => { window.speedDirty = true; });
+// 限速滑条：拖动时只改显示，松手才发给后端
+function showSpeed(v) {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return;
+  if ($("speed-val")) $("speed-val").textContent = x.toFixed(2);
+  if ($("speed-deg")) $("speed-deg").textContent = (x * 180 / Math.PI).toFixed(1);
+}
+document.getElementById("speed").addEventListener("input", () => {
+  window.speedDirty = true;
+  showSpeed($("speed").value);
+});
 
 function applyCtrl(ctrl) {
   if (!ctrl) return;
@@ -131,7 +141,7 @@ function applyCtrl(ctrl) {
   const settling = !!(ctrl.engaged && ctrl.ready === false);
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-speed", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-he-run"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-he-run"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
   const mirror = $("btn-poseset-mirror");
@@ -174,6 +184,7 @@ function applyCtrl(ctrl) {
   if (ctrl.max_speed_rad_s != null && document.activeElement !== sp && !window.speedDirty) {
     const v = Number(ctrl.max_speed_rad_s);
     if (Number(sp.value) !== v) sp.value = v;
+    showSpeed(v);
   }
   if (ctrl.arm) $("control-arm").value = ctrl.arm;
 }
@@ -217,17 +228,14 @@ $("grav-on").onchange = async () => {
   } catch (e) { flash(String(e), false); $("grav-on").checked = !$("grav-on").checked; }
 };
 
-$("speed").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); $("btn-speed").click(); }
-});
-
-$("btn-speed").onclick = async () => {
+$("speed").addEventListener("change", async () => {
+  const v = parseFloat($("speed").value);
   try {
-    await post("/api/speed", { max_speed_rad_s: parseFloat($("speed").value) });
+    await post("/api/speed", { max_speed_rad_s: v });
     window.speedDirty = false;
-    flash("已设限速", true);
-  } catch (e) { flash(String(e), false); }
-};
+    flash(`限速 ${v.toFixed(2)} rad/s（${(v * 180 / Math.PI).toFixed(1)}°/s）`, true);
+  } catch (e) { flash(String(e), false); window.speedDirty = false; }
+});
 
 $("control-arm").onchange = async () => {
   try { await post("/api/control-arm", { arm: $("control-arm").value }); flash("控制臂已切换", true); }

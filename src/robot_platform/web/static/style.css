@@ -576,6 +576,8 @@ input[type="range"] {
   background: transparent;
 }
 .field.slim { min-width: 84px; width: 92px; }
+.field.speed { width: 210px; min-width: 180px; }
+.field.speed b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .field.tiny { width: 64px; min-width: 64px; }
 .dock .field { color: #5c564e; }
 .switch {
