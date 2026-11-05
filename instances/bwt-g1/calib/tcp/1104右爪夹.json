@@ -1,0 +1,67 @@
+{
+  "name": "1104右爪夹",
+  "saved_at": "2026-11-04T17:56:22",
+  "arm": "right",
+  "tip_link": "right_wrist_yaw_link",
+  "base_link": "torso_link",
+  "note": "腕末端中心（偏置 0），待修正",
+  "n": 0,
+  "samples": [],
+  "result": {
+    "tcp_m": [
+      0.13,
+      0.0,
+      0.0
+    ],
+    "tcp_mm": [
+      130.0,
+      0.0,
+      0.0
+    ],
+    "fixed_point_m": null,
+    "fixed_mm": null,
+    "residual_mm": null,
+    "wrist_spread_deg": null,
+    "warning": "",
+    "manual": true
+  },
+  "source": "flange",
+  "edits": [
+    {
+      "at": "2026-11-04T17:55:02",
+      "from_mm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "to_mm": [
+        100.0,
+        0.0,
+        0.0
+      ],
+      "delta_mm": [
+        100.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "at": "2026-11-04T17:56:22",
+      "from_mm": [
+        100.0,
+        0.0,
+        0.0
+      ],
+      "to_mm": [
+        130.0,
+        0.0,
+        0.0
+      ],
+      "delta_mm": [
+        30.0,
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+%YAML:1.0
+---
+image_width: 640
+image_height: 480
+left_camera_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 607.454345703125, 0., 326.82797241210938, 0.,
+       606.94049072265625, 247.33689880371094, 0., 0., 1. ]
+left_dist_coeffs: !!opencv-matrix
+   rows: 1
+   cols: 5
+   dt: d
+   data: [ 0., 0., 0., 0., 0. ]
+source: factory camera_info (RGB-D)
