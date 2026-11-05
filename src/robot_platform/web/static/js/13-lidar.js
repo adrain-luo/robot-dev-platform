@@ -76,11 +76,9 @@ async function lidarFetchOnce() {
   }
 }
 
+// 点云画在中央三维里，与卡片展开与否无关：卡片收起 / 书合上照常刷新，
+// 只在整个浏览器标签页切到后台（看不到画面）时暂停，切回来自动继续。
 function lidarWanted() {
-  const card = $("panel-lidar");
-  if (!card || !card.classList.contains("open")) return false;
-  const book = card.closest(".book");
-  if (book && !book.classList.contains("open")) return false;
   return !document.hidden;
 }
 
@@ -90,7 +88,6 @@ function setLidarLive(on) {
   if (lidarTimer) { clearInterval(lidarTimer); lidarTimer = null; }
   if (lidarLive) {
     lidarFetchOnce();
-    // 卡片收起 / 书合上 / 页面切走时暂停取数，展开回来自动继续
     lidarTimer = setInterval(() => { if (lidarWanted()) lidarFetchOnce(); }, LIDAR_LIVE_MS);
   }
 }
