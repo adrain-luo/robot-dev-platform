@@ -275,7 +275,11 @@ function renderHe(st) {
   const fit = st.intrinsics_fit;
   if (fit && fit.camera === "rgbd") {
     const n = fit.num_pairs != null ? ` · ${fit.num_pairs} 张` : "";
-    lines.push(`<div class="stat"><em>本次内参${n}</em><strong>出厂 fx ${Number(fit.left_fx).toFixed(1)} · fy ${Number(fit.left_fy).toFixed(1)}</strong><span class="note">RGB-D 相机，未从图像重新标定</span></div>`);
+    // source：factory = 出厂 camera_info；否则是相机卡片选定的自标内参文件名
+    const own = fit.source && fit.source !== "factory";
+    const label = own ? `自标「${escapeHtml(fit.source)}」` : "出厂";
+    const note = own ? "RGB-D 相机，用相机卡片选定的自标内参（含畸变）" : "RGB-D 相机，出厂 camera_info，未从图像重新标定";
+    lines.push(`<div class="stat"><em>本次内参${n}</em><strong>${label} fx ${Number(fit.left_fx).toFixed(1)} · fy ${Number(fit.left_fy).toFixed(1)}</strong><span class="note">${note}</span></div>`);
   } else if (fit && fit.left_fx != null) {
     const rms = fit.left_rms_px != null
       ? `<span class="note">重投影 左 ${Number(fit.left_rms_px).toFixed(3)} / 右 ${Number(fit.right_rms_px).toFixed(3)} / 双目 ${Number(fit.stereo_rms_px).toFixed(3)} px · 基线 ${Number(fit.baseline_mm).toFixed(1)} mm</span>`
