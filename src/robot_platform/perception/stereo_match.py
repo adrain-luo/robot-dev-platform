@@ -111,15 +111,22 @@ def colorize_disp(disp: np.ndarray) -> np.ndarray:
 
 def write_ply(path: Path, points: np.ndarray, colors: np.ndarray) -> int:
     """points、colors 已是有效点，Nx3。颜色是 BGR uint8。"""
+    # 二进制小端（每点 15 字节），numpy 一次写出：12 万点约几十毫秒；
+    # 原来逐点写 ASCII 在服务进程里要 1–3 s。CloudCompare / Open3D / MeshLab 都能直接打开。
     path.parent.mkdir(parents=True, exist_ok=True)
     n = int(points.shape[0])
-    rgb = colors[:, ::-1]
-    with path.open("w", encoding="utf-8") as f:
-        f.write("ply\nformat ascii 1.0\n")
-        f.write(f"element vertex {n}\n")
-        f.write("property float x\nproperty float y\nproperty float z\n")
-        f.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
-        f.write("end_header\n")
-        for p, c in zip(points, rgb):
-            f.write(f"{p[0]:.5f} {p[1]:.5f} {p[2]:.5f} {int(c[0])} {int(c[1])} {int(c[2])}\n")
+    rec = np.empty(n, dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"),
+                             ("red", "u1"), ("green", "u1"), ("blue", "u1")])
+    p = np.asarray(points, dtype=np.float32).reshape(n, 3)
+    c = np.asarray(colors).reshape(n, 3)[:, ::-1].astype(np.uint8)  # BGR → RGB
+    rec["x"], rec["y"], rec["z"] = p[:, 0], p[:, 1], p[:, 2]
+    rec["red"], rec["green"], rec["blue"] = c[:, 0], c[:, 1], c[:, 2]
+    header = ("ply\nformat binary_little_endian 1.0\n"
+              f"element vertex {n}\n"
+              "property float x\nproperty float y\nproperty float z\n"
+              "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+              "end_header\n")
+    with path.open("wb") as f:
+        f.write(header.encode("ascii"))
+        f.write(rec.tobytes())
     return n
