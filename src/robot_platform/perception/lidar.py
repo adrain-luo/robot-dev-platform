@@ -110,17 +110,23 @@ class DdsLidar:
         self._t = 0.0
         self._rate = _RateMeter()
         self._sub = None
+        self._closed = False
         try:
             from robot_platform.hw.dds.sdk import init_channel
             init_channel(dds_domain, network_interface, sdk_path)
             from unitree_sdk2py.core.channel import ChannelSubscriber
             from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_
             self._sub = ChannelSubscriber(topic, PointCloud2_)
-            self._sub.Init(self._on_msg, 2)
+            # queueLen=0：回调直接在 DDS 监听线程里跑（只存引用，很快）。
+            # 不用 SDK 的队列线程：它的 Close() 会 join 那个线程，而 SDK 的退出通知有竞态，
+            # 偶尔丢唤醒，join 就永远等下去（G1 上实测卡死过整个雷达接口）。
+            self._sub.Init(self._on_msg, 0)
         except Exception as exc:  # noqa: BLE001  DDS / SDK 不可用时只报错，不影响别的功能
             self.last_error = f"订阅 {topic} 失败：{exc}"
 
     def _on_msg(self, msg) -> None:
+        if self._closed:
+            return
         with self._lock:
             self._msg = msg
             self._t = time.monotonic()
@@ -142,12 +148,21 @@ class DdsLidar:
                 "stamp": float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9}
 
     def close(self) -> None:
-        if self._sub is not None:
+        """断开订阅。不阻塞调用方：SDK 的 Close() 放到后台线程里做，万一卡住也只卡那个线程。"""
+        self._closed = True
+        sub, self._sub = self._sub, None
+        with self._lock:
+            self._msg = None
+        if sub is None:
+            return
+
+        def _close() -> None:
             try:
-                self._sub.Close()
+                sub.Close()
             except Exception:  # noqa: BLE001
                 pass
-            self._sub = None
+
+        threading.Thread(target=_close, name="lidar-close", daemon=True).start()
 
 
 class MockLidar:

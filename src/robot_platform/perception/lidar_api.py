@@ -79,38 +79,46 @@ class LidarAPI:
             raise LookupError(f"机型 {active_profile().name} 没有在 robot.json 里声明雷达")
         mock = self._is_mock() or spec.type == "mock"
         key = f"{spec.id}|{spec.type}|{json.dumps(spec.params, sort_keys=True)}|{mock}"
-        with self._lock:
-            self._last_use = time.monotonic()
-            if self._dev is not None and key == self._dev_key:
-                return spec, self._dev
-            if self._dev is not None:
-                self._dev.close()
-                self._dev = None
-            settings = self.app.settings
-            self._T = link_transform(settings.urdf, settings.base_link, spec.link)
-            if mock:
-                self._dev = MockLidar(self._T)
-            else:
-                self._dev = DdsLidar(str(spec.params.get("topic") or ""), settings.dds_domain,
-                                     settings.network_interface, settings.unitree_sdk_path)
-            self._dev_key = key
-            return spec, self._dev
+        old = None
+        try:
+            with self._lock:
+                self._last_use = time.monotonic()
+                if self._dev is not None and key == self._dev_key:
+                    return spec, self._dev
+                old, self._dev, self._dev_key = self._dev, None, ""
+                return spec, self._open(spec, mock, key)
+        finally:
+            # 旧订阅在锁外断开：断开再慢也不会堵住别的雷达请求
+            if old is not None:
+                old.close()
+
+    def _open(self, spec, mock: bool, key: str):
+        """建新订阅（调用方持锁）。"""
+        settings = self.app.settings
+        self._T = link_transform(settings.urdf, settings.base_link, spec.link)
+        if mock:
+            self._dev = MockLidar(self._T)
+        else:
+            self._dev = DdsLidar(str(spec.params.get("topic") or ""), settings.dds_domain,
+                                 settings.network_interface, settings.unitree_sdk_path)
+        self._dev_key = key
+        return self._dev
 
     def _idle_loop(self) -> None:
         while True:
             time.sleep(2.0)
+            old = None
             with self._lock:
                 if self._dev is not None and time.monotonic() - self._last_use > IDLE_CLOSE_S:
-                    self._dev.close()
-                    self._dev = None
-                    self._dev_key = ""
+                    old, self._dev, self._dev_key = self._dev, None, ""
+            if old is not None:
+                old.close()
 
     def close(self) -> None:
         with self._lock:
-            if self._dev is not None:
-                self._dev.close()
-            self._dev = None
-            self._dev_key = ""
+            old, self._dev, self._dev_key = self._dev, None, ""
+        if old is not None:
+            old.close()
 
     # ------------------------------------------------------------ 接口
     def status(self) -> Dict[str, Any]:

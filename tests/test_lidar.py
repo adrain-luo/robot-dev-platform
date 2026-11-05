@@ -87,3 +87,32 @@ def test_api_without_lidar(mock_server):
     assert st["ok"] and st["lidars"] == [] and st["lidar"] is None
     d = mock_server.get("/api/lidar/cloud")
     assert d["ok"] is False and "没有在 robot.json 里声明雷达" in d["error"]
+
+
+def test_stuck_close_does_not_block_lidar_api(g1_lidar_api, monkeypatch):
+    """宇树 SDK 的 Close() 偶尔会永远卡住：断开订阅不能堵住后续的雷达请求。"""
+    import threading
+    import time
+
+    from robot_platform.perception import lidar_api as mod
+
+    api = g1_lidar_api
+    assert api.cloud("max_points=500")["ok"]
+    never = threading.Event()
+    monkeypatch.setattr(api._dev, "close", lambda: never.wait())  # 模拟卡死的断开
+    monkeypatch.setattr(mod, "IDLE_CLOSE_S", 0.0)  # 让空闲看门狗马上去断开
+    api._last_use = 0.0
+
+    done = {}
+
+    def probe():
+        time.sleep(2.5)  # 等看门狗（2 s 一轮）去断开、卡在 close 里
+        done["status"] = api.status()
+        done["cloud"] = api.cloud("max_points=500")
+
+    t = threading.Thread(target=probe, daemon=True)
+    t.start()
+    t.join(6.0)
+    never.set()
+    assert not t.is_alive(), "雷达接口被卡住的断开堵住了"
+    assert done["status"]["ok"] and done["cloud"]["ok"]
