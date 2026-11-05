@@ -65,7 +65,7 @@ async function lidarFetchOnce() {
       ? window.RobotView.setLidarCloud(d.xyz, d.rgb) : false;
     const rng = d.range_m ? `距离 ${d.range_m.near.toFixed(2)}–${d.range_m.far.toFixed(1)} m（中位 ${d.range_m.median.toFixed(2)}）` : "";
     if (note) {
-      note.textContent = `${d.hz} Hz · 每帧 ${d.n_raw} 点，范围内 ${d.n_valid}，显示 ${d.n_sent}。${rng}`
+      note.textContent = `${d.hz > 0 ? d.hz + " Hz" : "测速中"} · 每帧 ${d.n_raw} 点，范围内 ${d.n_valid}，显示 ${d.n_sent}。${rng}`
         + (drawn ? "" : " 三维画面还没准备好。") + (lidarLive ? " 实时中。" : "");
     }
   } catch (e) {
