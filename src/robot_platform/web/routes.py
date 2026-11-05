@@ -28,9 +28,15 @@ NOT_FOUND: Reply = (404, {})  # 交给 send_error(404)
 
 STATIC_FILES = {
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
-    "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/static/viewer.js": ("viewer.js", "text/javascript; charset=utf-8"),
 }
+APP_JS_DIR = STATIC_DIR / "js"
+
+
+def app_js_bundle() -> bytes:
+    """前端主脚本：static/js/ 下各文件按文件名顺序拼成一个脚本（共用一个作用域，函数互相可见）。"""
+    parts = sorted(APP_JS_DIR.glob("*.js"))
+    return "\n".join(f.read_text(encoding="utf-8") for f in parts).encode("utf-8")
 
 
 # ---------------------------------------------------------------- GET
@@ -42,6 +48,9 @@ def handle_get(app, handler, parsed: ParseResult) -> None:
         return
     if path in ("/rail-preview", "/rail-preview.html"):
         send_file(handler, STATIC_DIR / "rail_preview.html", "text/html; charset=utf-8")
+        return
+    if path == "/static/app.js":
+        send_bytes(handler, 200, app_js_bundle(), "application/javascript; charset=utf-8")
         return
     if path in STATIC_FILES:
         name, ctype = STATIC_FILES[path]

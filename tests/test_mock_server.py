@@ -117,3 +117,18 @@ def test_robot_caps(mock_server):
     assert [j["motor"] for j in c["waist"]["joints"]] == [12, 14]
     assert c["legged"] is False and c["transitions"] is False
     assert mock_server.get("/api/scene")["body"] == {}
+
+
+def test_app_js_is_bundle_of_parts(mock_server):
+    """/static/app.js 由 web/static/js/ 下各文件按文件名顺序拼成，启动文件在最后。"""
+    import urllib.request
+    from robot_platform.paths import STATIC_DIR
+
+    with urllib.request.urlopen(mock_server.base + "/static/app.js", timeout=10) as r:
+        assert r.status == 200 and "javascript" in r.headers.get("Content-Type")
+        text = r.read().decode("utf-8")
+    parts = sorted((STATIC_DIR / "js").glob("*.js"))
+    assert parts[0].name == "00-util.js" and parts[-1].name == "99-main.js"
+    pos = [text.index(f"// {p.name} ——") for p in parts]
+    assert pos == sorted(pos), "拼接顺序应与文件名顺序一致"
+    assert "try {\n$(\"arm-select\")" not in text, "顶层 try 已去掉"

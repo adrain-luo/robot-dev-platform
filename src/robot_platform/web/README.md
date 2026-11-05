@@ -59,7 +59,8 @@ python serve.py --allow-real-motion --max-speed 0.2    # 真机
 | `web/app.py` | `App` 本体：设置、后端、控制循环、各功能会话 |
 | `web/api/` | `App` 按功能拆开的接口方法：`state`（状态 / 场景）、`lift`、`tcp`、`work_pose`、`points`、`runtime` |
 | `web/page.py` / `web/http_util.py` | 首页下拉框预填；HTTP 收发小工具 |
-| `web/static/` | 唯一前端 |
+| `web/static/` | 唯一前端：`index.html`、`style.css`、三维 `viewer.js`（ES 模块） |
+| `web/static/js/` | 页面脚本按功能分文件：`00-util`、`01-robot`、`02-arm`、`03-body`、`04-ui`、`05-payload`、`06-runtime`、`07-tcp`、`08-spatial`、`09-camera-handeye`、`10-render`、`11-detect`、`12-workflow`、`99-main`（启动，放最后）。服务端按文件名顺序拼成 `/static/app.js`，共用一个脚本作用域；新文件按编号插进去即可 |
 | `control/arm_loop.py` | `ArmLoop` 限速、接管、腰保持、拼指令帧 |
 | `hw/backends/` | 硬件后端：`unitree_lowcmd`（G1D）、`unitree_arm_sdk`（G1）、`mock`（仿真） |
 | `hw/dds/` | Unitree DDS：`lowstate`、立柱 `hispeed`、Agv |
