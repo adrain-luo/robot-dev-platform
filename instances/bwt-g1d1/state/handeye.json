@@ -5,7 +5,7 @@
   "intrinsics": "calib/handeye/1029手眼.yaml",
   "board_size": "11x8",
   "square_size_mm": 15.0,
-  "session": "20261029_100052_left",
+  "session": "20261104_150244_right",
   "eye": "both",
   "active_result": "1029手眼"
 }
