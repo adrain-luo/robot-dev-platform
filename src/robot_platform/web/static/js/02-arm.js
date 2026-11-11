@@ -182,6 +182,20 @@ function applyCtrl(ctrl) {
     btn.textContent = `${a.float ? "结束" : "拖"}${ARM_SIDE[btn.dataset.arm]}`;
   });
   $("grav-on").checked = ctrl.gravity_ff !== false;
+  const gd = ctrl.gravity_dir || {};
+  if ($("grav-imu-wrap")) {
+    $("grav-imu-wrap").hidden = !gd.available;
+    $("grav-imu").checked = !!gd.enabled;
+    $("grav-imu").disabled = !allow;
+  }
+  // 重力方向：开了 IMU 就显示前馈实际用的躯干倾角，读数不可信时显示原因
+  const tiltText = (t) => {
+    const p = Number(t?.pitch_deg || 0), r = Number(t?.roll_deg || 0);
+    return `${p >= 0 ? "前倾" : "后仰"} ${Math.abs(p).toFixed(1)}° ${r >= 0 ? "右倾" : "左倾"} ${Math.abs(r).toFixed(1)}°`;
+  };
+  const gravText = gd.enabled
+    ? (gd.error ? ` · 重力 IMU：${gd.error}` : ` · 重力按 IMU（躯干${tiltText(gd.used)}）`)
+    : "";
   // 每只手一段：受控 / 拖拽中 / 被某任务占用 / 在走；前馈带上负载名
   const armText = (name) => {
     const a = arms[name] || {};
@@ -192,8 +206,8 @@ function applyCtrl(ctrl) {
   $("engage-state").textContent = allow
     ? (ctrl.transition ? `过渡中 · ${ctrl.transition}` : ctrl.engaged
         ? `已接管 · ${["left", "right"].filter((n) => arms[n]).map(armText).join(" ")}${
-            ctrl.waist_locked ? " · 腰保持" : ""}${ctrl.loop_hz ? ` · ${Math.round(ctrl.loop_hz)} Hz` : ""}`
-        : "未接管")
+            ctrl.waist_locked ? " · 腰保持" : ""}${gravText}${ctrl.loop_hz ? ` · ${Math.round(ctrl.loop_hz)} Hz` : ""}`
+        : `未接管${gravText}`)
     : "只读（加 --allow-real-motion 后可接管）";
   const motionArm = arms[armPick("motion")] || {};
   document.querySelectorAll(".g-q, .g-slider").forEach((el) => {
@@ -276,6 +290,22 @@ $("grav-on").onchange = async () => {
     flash($("grav-on").checked ? "重力前馈开（α=1）" : "重力前馈关", true);
   } catch (e) { flash(String(e), false); $("grav-on").checked = !$("grav-on").checked; }
 };
+
+if ($("grav-imu")) {
+  $("grav-imu").onchange = async () => {
+    const on = $("grav-imu").checked;
+    if (window.lastCtrl?.engaged && !confirm(on
+      ? "重力前馈改按躯干 IMU 的重力方向算，约 0.5 s 平滑过渡，手臂可能轻微动一下。扶住、守急停。继续？"
+      : "重力前馈改回按躯干竖直算，约 0.5 s 平滑过渡。继续？")) {
+      $("grav-imu").checked = !on;
+      return;
+    }
+    try {
+      await post("/api/gravity-imu", { enabled: on });
+      flash(on ? "重力前馈按躯干 IMU 算" : "重力前馈按躯干竖直算", true);
+    } catch (e) { flash(String(e), false); $("grav-imu").checked = !on; }
+  };
+}
 
 $("speed").addEventListener("change", async () => {
   const v = parseFloat($("speed").value);

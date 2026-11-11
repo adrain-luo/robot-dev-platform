@@ -25,6 +25,7 @@ from robot_platform.hw.backends.base import (
     LiftState,
     MotorSnapshot,
     StateSource,
+    TorsoImu,
 )
 from robot_platform.core.robot_profile import ArmLayout, RobotProfile
 from robot_platform.hw.cmd_monitor import CmdMonitor
@@ -201,6 +202,28 @@ class MockLiftDriver(LiftDriver):
         return 0
 
 
+class MockTorsoImu(TorsoImu):
+    """仿真躯干 IMU：按设定的俯仰 / 横滚（度）给四元数；stale=True 模拟断流。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.pitch_deg = 0.0
+        self.roll_deg = 0.0
+        self.stale = False
+
+    def set_tilt(self, pitch_deg: float = 0.0, roll_deg: float = 0.0) -> None:
+        with self._lock:
+            self.pitch_deg, self.roll_deg = float(pitch_deg), float(roll_deg)
+
+    def latest(self):
+        with self._lock:
+            p, r, stale = math.radians(self.pitch_deg), math.radians(self.roll_deg), self.stale
+        # R = Ry(p)·Rx(r) 的四元数
+        cp, sp, cr, sr = math.cos(p / 2), math.sin(p / 2), math.cos(r / 2), math.sin(r / 2)
+        q = (cp * cr, cp * sr, sp * cr, -sp * sr)
+        return q, time.monotonic() - (10.0 if stale else 0.0)
+
+
 class MockBackend(Backend):
     name = "mock"
 
@@ -211,6 +234,10 @@ class MockBackend(Backend):
         self._monitor = CmdMonitor(profile.control.command_topic, hints=())
         self._commander = MockCommander(self.robot, self._monitor)
         self._foreign_stop: Optional[threading.Event] = None
+        self._torso_imu = MockTorsoImu() if profile.torso_imu is not None else None
+
+    def torso_imu(self):
+        return self._torso_imu
 
     def state(self) -> StateSource:
         return self._state

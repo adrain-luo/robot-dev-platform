@@ -18,6 +18,7 @@ import numpy as np
 # PermissionErrorMotion 定义在后端接口里（后端安全检查也抛它），其它模块仍从这里导入
 from robot_platform.hw.backends.base import Commander, PermissionErrorMotion, StateSource  # noqa: F401
 from robot_platform.control.arm_gravity import ArmGravity
+from robot_platform.control.gravity_dir import GravityDirection
 from robot_platform.control.fk_scene import RobotKinematics
 from robot_platform.core.layout import ArmLayout
 from robot_platform.core.robot_profile import active as active_profile
@@ -68,6 +69,7 @@ class ArmLoop:
         rate_hz: float = 100.0,
         urdf_path: Optional[Path] = None,
         base_link: str = "torso_link",
+        torso_imu=None,
     ) -> None:
         self.reader = reader
         self._commander = commander
@@ -82,6 +84,8 @@ class ArmLoop:
         self._waist_motors = self._waist.hold_motors if self._waist else ()
         urdf = Path(urdf_path) if urdf_path is not None else self.kin.urdf_path
         self._grav_on = True
+        # 重力方向：默认躯干竖直；机型有躯干 IMU 时可按实测（见 control/gravity_dir.py）
+        self.gravity = GravityDirection(torso_imu, self.profile.torso_imu)
         self._waist_cmd: Optional[dict] = None
         self._waist_target: Optional[dict] = None
         self._lock = threading.Lock()
@@ -283,6 +287,10 @@ class ArmLoop:
     def set_gravity_ff(self, on: bool) -> None:
         self._grav_on = bool(on)
 
+    def set_gravity_imu(self, on: bool) -> None:
+        """重力前馈按躯干 IMU 的重力方向算（开）或按躯干竖直算（关）；切换在约 0.5 s 内平滑过渡。"""
+        self.gravity.set_enabled(on)
+
     def arm_gains(self, arm: str) -> tuple:
         idx = self._arm(arm).layout.motor_indices
         return [float(self.kp_body[i]) for i in idx], [float(self.kd_body[i]) for i in idx]
@@ -310,6 +318,7 @@ class ArmLoop:
             cmd = a.cmd_q.copy()
             tau_ff = a.last_tau_ff.copy()
         tau_est = [None if t is None else float(t) for t in st.tau_est]
+        g = self.gravity.g_vec()
         return {
             "arm": a.layout.name,
             "q_meas": [float(v) for v in st.q],
@@ -319,6 +328,8 @@ class ArmLoop:
             "tau_ff_sent": tau_ff.tolist(),
             "kp": kp,
             "kd": kd,
+            # 这一刻前馈用的重力向量（base_link 系）；负载辨识按它解，换了重力方向也对得上
+            "g_torso": [float(v) for v in g],
         }
 
     def set_target(self, q: Sequence[float], *, arm: str, owner: Optional[str] = None) -> None:
@@ -377,6 +388,7 @@ class ArmLoop:
             "engaged": engaged,
             "float": any(v["float"] for v in arms.values()),
             "gravity_ff": grav_on,
+            "gravity_dir": self.gravity.status(),
             "arms": arms,
             "waist_locked": waist_cmd is not None,
             "waist_hold_rad": waist_cmd,
@@ -412,6 +424,7 @@ class ArmLoop:
             plan = [(a, a.float, a.cmd_q.copy(),
                      None if a.payload_theta is None else a.payload_theta.copy())
                     for a in self._arms.values()]
+        g = self.gravity.g_vec()
         # 腰按保持角锁住；两只手都按各自指令角（拖拽中的手跟实测、刚度 0），都叠重力前馈
         if waist_hold:
             for idx, q_w in waist_hold.items():
@@ -424,9 +437,9 @@ class ArmLoop:
             q_arm = q_meas if floating else cmd_q
             tau_arm = np.zeros(a.layout.n)
             if grav_on:
-                tau_arm = a.grav.tau_arm(q_meas)
+                tau_arm = a.grav.tau_arm(q_meas, g)
                 if th is not None:
-                    tau_arm = tau_arm + a.grav.tau_payload(q_meas, th)
+                    tau_arm = tau_arm + a.grav.tau_payload(q_meas, th, g)
                 tau_arm = np.clip(tau_arm, -TAU_FF_LIMIT, TAU_FF_LIMIT)
             a.last_tau_ff = np.asarray(tau_arm, float)
             for name, qv, t in zip(a.layout.joint_names, q_arm, tau_arm):
@@ -448,6 +461,10 @@ class ArmLoop:
             last = now
             if dt > 0:
                 self._loop_period = 0.95 * self._loop_period + 0.05 * dt
+            try:
+                self.gravity.update(dt)
+            except Exception as e:  # noqa: BLE001  IMU 出错只影响重力方向（保持上一次的），不能停掉控制循环
+                self._last_err = f"重力方向：{type(e).__name__}: {e}"
             try:
                 engaged = self._engaged
                 # 释放过渡中（arm_sdk）仍要发帧，按最后的指令角保持

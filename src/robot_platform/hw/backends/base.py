@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
@@ -121,6 +122,20 @@ class Commander(ABC):
         return ""
 
 
+class TorsoImu(ABC):
+    """躯干 IMU（只读）。latest() 返回 (四元数 [w, x, y, z]：IMU 系 → 世界系, 收到时刻 monotonic)。"""
+
+    @abstractmethod
+    def latest(self) -> Optional[Tuple[Tuple[float, float, float, float], float]]: ...
+
+    def age_s(self) -> float:
+        got = self.latest()
+        return float("inf") if got is None else time.monotonic() - got[1]
+
+    def close(self) -> None:
+        pass
+
+
 class LiftReader(ABC):
     @abstractmethod
     def latest(self) -> Optional[LiftState]: ...
@@ -155,6 +170,10 @@ class Backend(ABC):
 
     def lift_reader(self) -> LiftReader:
         raise NotImplementedError(f"{self.name} 后端没有立柱")
+
+    def torso_imu(self) -> Optional[TorsoImu]:
+        """机型声明了躯干 IMU 才有；没有返回 None（重力前馈就按躯干竖直算）。"""
+        return None
 
     def lift_driver(self) -> LiftDriver:
         raise NotImplementedError(f"{self.name} 后端没有立柱")

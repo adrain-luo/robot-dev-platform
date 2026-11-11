@@ -71,6 +71,11 @@ class App(StateMixin, LiftMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMi
                 except Exception:  # noqa: BLE001  检测起不来不影响读状态；接管时 commander 还会再建
                     traceback.print_exc()
                 if self.allow_real_motion:
+                    torso_imu = None
+                    try:
+                        torso_imu = self.backend.torso_imu()
+                    except Exception:  # noqa: BLE001  IMU 起不来：前馈照旧按躯干竖直算
+                        traceback.print_exc()
                     self.loop = ArmLoop(
                         reader=self._reader,
                         commander=self.backend.commander(),
@@ -78,6 +83,7 @@ class App(StateMixin, LiftMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMi
                         max_speed_rad_s=self.settings.max_speed_rad_s,
                         urdf_path=self.settings.urdf,
                         base_link=self.settings.base_link,
+                        torso_imu=torso_imu,
                     )
                     self.payload.restore(self.loop)
             return self._reader

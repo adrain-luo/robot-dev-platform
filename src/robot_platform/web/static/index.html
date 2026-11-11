@@ -35,6 +35,7 @@
 
 <nav class="dock" id="ctrl-group">
   <label class="switch"><input id="grav-on" type="checkbox" checked><span>重力前馈</span></label>
+  <label class="switch" id="grav-imu-wrap" hidden title="重力前馈按躯干 IMU 测到的重力方向算（不依赖腰关节读数；底盘在坡上也算进去）。关掉就按躯干竖直算。切换约 0.5 s 平滑过渡"><input id="grav-imu" type="checkbox"><span>IMU 重力</span></label>
   <button id="btn-engage" class="primary">接管</button>
   <button id="btn-teach-left" class="btn-teach" data-arm="left" title="左手卸力拖拽（右手照常受控）">拖左</button>
   <button id="btn-teach-right" class="btn-teach" data-arm="right" title="右手卸力拖拽（左手照常受控）">拖右</button>

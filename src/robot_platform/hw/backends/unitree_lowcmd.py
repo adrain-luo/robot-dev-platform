@@ -166,6 +166,22 @@ class UnitreeLowCmdBackend(Backend):
                 )
             return self._lift_reader
 
+    def torso_imu(self):
+        if self.profile.torso_imu is None:
+            return None
+        self.state()  # 先起 lowstate（ChannelFactory）
+        with self._lock:
+            if getattr(self, "_torso_imu", None) is None:
+                from robot_platform.hw.dds.torso_imu import TorsoImuReader
+
+                self._torso_imu = TorsoImuReader(
+                    topic=self.profile.torso_imu.topic,
+                    network_interface=self._iface,
+                    dds_domain=self._domain,
+                    sdk_path=self._sdk,
+                )
+            return self._torso_imu
+
     def lift_driver(self) -> LiftDriver:
         if self.profile.lift is None:
             return super().lift_driver()

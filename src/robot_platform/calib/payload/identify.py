@@ -211,6 +211,8 @@ def average_samples(loop, n: int, stop: threading.Event) -> Dict:
         raise RuntimeError("采不到 tau_est")
     out = {k: (acc[k] / got).tolist() for k in keys}
     out["kp"], out["kd"] = s["kp"], s["kd"]
+    if s.get("g_torso") is not None:
+        out["g_torso"] = s["g_torso"]  # 采样时前馈用的重力向量（平滑过，静止时一拍就够）
     out["n_avg"] = got
     return out
 
@@ -297,8 +299,9 @@ def solve_payload(samples: List[Dict], arm: str, urdf_path: Path, base_link: str
         if any(v is None for v in tau_true):
             continue
         q = np.asarray(s["q_meas"], float)
-        Y = grav.payload_regressor(q)
-        ta = grav.tau_arm(q)
+        g = s.get("g_torso")  # 老样本没有：当时就是按躯干竖直算的
+        Y = grav.payload_regressor(q, g)
+        ta = grav.tau_arm(q, g)
         rows_A.append(Y)
         rows_b.append(np.asarray(tau_true, float))
         rows_arm.append(ta)

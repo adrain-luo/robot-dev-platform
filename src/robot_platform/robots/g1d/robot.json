@@ -22,6 +22,13 @@
       "mount_note": "头部与 G1 相同，安装位置照搬 G1 的 mid360_joint，姿态只保留倒装（宇树转发的点云已补偿 URDF 的 2.93° 俯仰，同 G1）。"
     }
   },
+  "torso_imu": {
+    "topic": "rt/secondary_imu",
+    "mount_rpy": [0.0, 0.0, 0.0],
+    "max_tilt_deg": 20.0,
+    "gravity_default": false,
+    "note": "宇树躯干 IMU（unitree_hg IMUState，约 1 kHz），坐标系与 torso_link 一致（同 G1 URDF 的 imu_in_torso，rpy 0）。2026-11-11 实测：四元数给的躯干倾角与雷达拟合地面差约 0.15°；原始加速度计有约 2° 零偏，不用。"
+  },
   "control": {
     "backend": "unitree_lowcmd",
     "state_topic": "rt/lowstate",

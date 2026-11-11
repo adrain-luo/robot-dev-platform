@@ -1,6 +1,9 @@
 """URDF arm gravity torque (alpha=1). Numpy only.
 
 tau_i = -sum_j m_j * g · (z_i × (p_cj - p_i)) in torso_link.
+
+g 默认是 base_link 系里的正下方 (0, 0, -9.81)，即假设躯干竖直；躯干倾了（腰俯仰、底盘在坡上）
+就传实测的重力向量（control/gravity_dir.py 由躯干 IMU 给出）。
 """
 
 from __future__ import annotations
@@ -16,6 +19,16 @@ from robot_platform.core.layout import get_arm
 from robot_platform.control.urdf_fk import URDFRobotModel, axis_angle_to_matrix, make_transform
 
 G_ACCEL = 9.81
+G_DOWN = np.array([0.0, 0.0, -G_ACCEL])
+
+
+def _g_vec(g) -> np.ndarray:
+    if g is None:
+        return G_DOWN
+    v = np.asarray(g, float).reshape(3)
+    if not np.all(np.isfinite(v)):
+        raise ValueError("重力向量必须是有限数")
+    return v
 
 
 @dataclass
@@ -143,11 +156,11 @@ class ArmGravity:
                 stack.append(j.child)
         return out
 
-    def tau_arm(self, q) -> np.ndarray:
+    def tau_arm(self, q, g=None) -> np.ndarray:
         q = np.asarray(q, float).reshape(-1)
         if q.size != self.n:
             raise ValueError(f"需要 {self.n} 个关节角")
-        g = np.array([0.0, 0.0, -G_ACCEL])
+        g = _g_vec(g)
         fk = self._fk(q)
         coms = {ln: fk[ln][:3, :3] @ com + fk[ln][:3, 3] for ln, (m, com) in self.bodies.items()}
         zs, ps = [], []
@@ -163,9 +176,9 @@ class ArmGravity:
             tau[i] = -tot
         return tau
 
-    def payload_regressor(self, q) -> np.ndarray:
+    def payload_regressor(self, q, g=None) -> np.ndarray:
         q = np.asarray(q, float).reshape(-1)
-        g = np.array([0.0, 0.0, -G_ACCEL])
+        g = _g_vec(g)
         fk = self._fk(q)
         zs, ps = [], []
         for j in self._chain:
@@ -184,6 +197,6 @@ class ArmGravity:
     def tip_T(self, q) -> np.ndarray:
         return self.model.fk_T(q)
 
-    def tau_payload(self, q, theta) -> np.ndarray:
+    def tau_payload(self, q, theta, g=None) -> np.ndarray:
         th = np.asarray(theta, float).reshape(4)
-        return self.payload_regressor(q) @ th
+        return self.payload_regressor(q, g) @ th

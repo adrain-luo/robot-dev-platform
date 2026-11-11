@@ -131,6 +131,18 @@ class LidarSpec:
 
 
 @dataclass(frozen=True)
+class TorsoImuSpec:
+    """装在躯干上的 IMU（G1D：宇树 rt/secondary_imu）。重力前馈可以按它测到的重力方向算，
+    不依赖腰关节读数。mount_rpy：IMU 坐标系相对 base_link 的姿态（rad）。"""
+
+    topic: str
+    mount_rpy: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    max_tilt_deg: float = 20.0  # 躯干倾角超过这个就当读数不可信，保持上一次的重力方向
+    gravity_default: bool = False  # 服务启动时重力前馈是否就按 IMU 算
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class RobotProfile:
     name: str
     display_name: str
@@ -151,6 +163,7 @@ class RobotProfile:
     cameras: Dict[str, CameraSpec] = field(default_factory=dict)
     # 雷达，按 robot.json 里的顺序；第一台是默认
     lidars: Dict[str, LidarSpec] = field(default_factory=dict)
+    torso_imu: Optional[TorsoImuSpec] = None
 
     @property
     def meshes_dir(self) -> Path:
@@ -254,6 +267,22 @@ def _parse(raw: Dict[str, Any], root: Path) -> RobotProfile:
         display_joints={int(k): str(v) for k, v in (raw.get("display_joints") or {}).items()},
         cameras=_parse_cameras(raw.get("cameras") or {}),
         lidars=_parse_lidars(raw.get("lidars") or {}),
+        torso_imu=_parse_torso_imu(raw.get("torso_imu")),
+    )
+
+
+def _parse_torso_imu(raw: Optional[Dict[str, Any]]) -> Optional[TorsoImuSpec]:
+    if not raw:
+        return None
+    rpy = tuple(float(v) for v in raw.get("mount_rpy") or (0.0, 0.0, 0.0))
+    if len(rpy) != 3:
+        raise ValueError("torso_imu.mount_rpy 需要 3 个数")
+    return TorsoImuSpec(
+        topic=str(raw["topic"]),
+        mount_rpy=rpy,
+        max_tilt_deg=float(raw.get("max_tilt_deg", 20.0)),
+        gravity_default=bool(raw.get("gravity_default", False)),
+        note=str(raw.get("note") or ""),
     )
 
 

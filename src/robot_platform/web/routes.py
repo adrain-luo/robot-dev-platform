@@ -284,6 +284,7 @@ ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], None]] = {
     "/api/hold": _hold,
     "/api/teach": _teach,
     "/api/gravity": lambda app, loop, body: loop.set_gravity_ff(bool(body.get("enabled", True))),
+    "/api/gravity-imu": lambda app, loop, body: loop.set_gravity_imu(bool(body.get("enabled", True))),
     "/api/speed": _speed,
     "/api/target": _target,
     "/api/waist": _waist,
