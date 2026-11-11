@@ -212,16 +212,16 @@
       标定<span class="count">6</span>
     </button>
     <button type="button" class="bookmark" data-page="control" aria-pressed="false">
-      控制<span class="count">7</span>
+      控制<span class="count">6</span>
     </button>
     <button type="button" class="bookmark" data-page="workflow" aria-pressed="false">
-      工作流<span class="count">1</span>
+      工作流<span class="count">2</span>
     </button>
   </nav>
   <div class="pages">
     <div class="page" data-page="calib">
       <div class="page-sheet">
-        <div class="page-head"><strong>标定</strong><span>6 张卡片</span></div><!-- 姿态集/负载/对比/手眼/TCP/工作姿态；棋盘触摸已迁控制 -->
+        <div class="page-head"><strong>标定</strong><span>6 张卡片</span></div><!-- 姿态集/负载/对比/手眼/TCP/工作姿态；棋盘触摸已迁工作流 -->
         <div class="page-cards">
           <article class="float" id="panel-poses">
             <button type="button" class="float-toggle">姿态集 <span id="pose-cond" class="aside"></span></button>
@@ -550,7 +550,7 @@
 
     <div class="page" data-page="control">
       <div class="page-sheet">
-        <div class="page-head"><strong>控制</strong><span>7 张卡片</span></div>
+        <div class="page-head"><strong>控制</strong><span>6 张卡片</span></div>
         <div class="page-cards">
           <article class="float" id="panel-config">
             <button type="button" class="float-toggle">配置 <span id="cfg-lock-badge" class="aside"></span></button>
@@ -761,34 +761,6 @@
             </div>
           </article>
 
-          <article class="float" id="panel-board">
-            <button type="button" class="float-toggle">棋盘触摸</button>
-            <div class="float-body">
-              <p class="note">先看一眼 9×6 内角点，角点会画在中央画面上，绿点是第一下。每个点先到上方 5 cm，垂直下降 4 cm，再垂直抬升 4 cm，然后下一个点。若已锁定工作姿态，全程保持该方向。急停会中止。</p>
-              <div class="fields">
-                <label class="field">内角
-                  <input id="board-size" value="9x6" maxlength="8">
-                </label>
-                <label class="field">上方 cm
-                  <input id="board-above" type="number" min="1" max="15" step="0.5" value="5">
-                </label>
-                <label class="field">下降 cm
-                  <input id="board-down" type="number" min="0.5" max="14" step="0.5" value="4">
-                </label>
-                <label class="field">抬升 cm
-                  <input id="board-up" type="number" min="0.5" max="14" step="0.5" value="4">
-                </label>
-                <label class="switch"><input id="board-ideal" type="checkbox"><span>理想对齐</span></label>
-              </div>
-              <div class="cmds">
-                <button id="btn-board-look" type="button">看一眼</button>
-                <button id="btn-board-start" class="primary" type="button">开始触摸</button>
-                <button id="btn-board-stop" class="danger" type="button">停止</button>
-              </div>
-              <div id="board-log" class="note"></div>
-            </div>
-          </article>
-
           <article class="float" id="panel-point">
             <button type="button" class="float-toggle">空间点</button>
             <div class="float-body">
@@ -843,7 +815,7 @@
 
     <div class="page" data-page="workflow">
       <div class="page-sheet">
-        <div class="page-head"><strong>工作流</strong><span>1 张卡片</span></div>
+        <div class="page-head"><strong>工作流</strong><span>2 张卡片</span></div>
         <div class="page-cards">
           <article class="float" id="panel-wf-detect-goto">
             <button type="button" class="float-toggle">识别-末端到位 <span id="wf-dg-phase" class="aside">待开始</span></button>
@@ -881,6 +853,34 @@
                 <button id="btn-wf-dg-stop" class="danger" type="button" disabled>停止</button>
               </div>
               <p class="note" id="wf-dg-note">还没跑过</p>
+            </div>
+          </article>
+
+          <article class="float" id="panel-board">
+            <button type="button" class="float-toggle">棋盘触摸</button>
+            <div class="float-body">
+              <p class="note">先看一眼 9×6 内角点，角点会画在中央画面上，绿点是第一下。每个点先到上方 5 cm，垂直下降 4 cm，再垂直抬升 4 cm，然后下一个点。若已锁定工作姿态，全程保持该方向。急停会中止。</p>
+              <div class="fields">
+                <label class="field">内角
+                  <input id="board-size" value="9x6" maxlength="8">
+                </label>
+                <label class="field">上方 cm
+                  <input id="board-above" type="number" min="1" max="15" step="0.5" value="5">
+                </label>
+                <label class="field">下降 cm
+                  <input id="board-down" type="number" min="0.5" max="14" step="0.5" value="4">
+                </label>
+                <label class="field">抬升 cm
+                  <input id="board-up" type="number" min="0.5" max="14" step="0.5" value="4">
+                </label>
+                <label class="switch"><input id="board-ideal" type="checkbox"><span>理想对齐</span></label>
+              </div>
+              <div class="cmds">
+                <button id="btn-board-look" type="button">看一眼</button>
+                <button id="btn-board-start" class="primary" type="button">开始触摸</button>
+                <button id="btn-board-stop" class="danger" type="button">停止</button>
+              </div>
+              <div id="board-log" class="note"></div>
             </div>
           </article>
         </div>
