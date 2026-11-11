@@ -15,7 +15,13 @@ def test_profile_declares_lidar():
     assert list(g1) == ["head"]
     assert g1["head"].type == "unitree_dds" and g1["head"].link == "mid360_link"
     assert g1["head"].params["topic"] == "rt/utlidar/cloud_livox_mid360"
-    assert load_profile("g1d").lidars == {}
+    # G1D 头部与 G1 相同：同一台 MID-360、同一个话题、同样的安装位姿
+    g1d = load_profile("g1d").lidars
+    assert list(g1d) == ["head"]
+    assert g1d["head"].link == "mid360_link" and g1d["head"].params == g1["head"].params | {
+        "mount_note": g1d["head"].params["mount_note"]}
+    assert np.allclose(link_transform(load_profile("g1d").urdf, "torso_link", "mid360_link"),
+                       link_transform(load_profile("g1").urdf, "torso_link", "mid360_link"))
 
 
 def test_mid360_mount_is_upside_down_on_torso():
@@ -82,10 +88,21 @@ def test_api_mock_cloud_in_torso_frame(g1_lidar_api):
     assert api.handle_post("/api/lidar/stop", {})["running"] is False
 
 
-def test_api_without_lidar(mock_server):
-    st = mock_server.get("/api/lidar")  # mock 默认机型 g1d，没有声明雷达
+def test_api_g1d_mock_lidar(mock_server):
+    st = mock_server.get("/api/lidar")  # mock 默认机型 g1d
+    assert st["ok"] and [l["id"] for l in st["lidars"]] == ["head"] and st["lidar"] == "head"
+    d = mock_server.get("/api/lidar/cloud?max_points=500")
+    assert d["ok"], d
+    assert 0 < d["n_sent"] <= 500
+
+
+def test_api_without_lidar(g1_lidar_api):
+    from dataclasses import replace
+    activate(replace(active(), lidars={}))  # 没声明雷达的机型；fixture 收尾时换回原机型
+    api = g1_lidar_api
+    st = api.status()
     assert st["ok"] and st["lidars"] == [] and st["lidar"] is None
-    d = mock_server.get("/api/lidar/cloud")
+    d = api.cloud("")
     assert d["ok"] is False and "没有在 robot.json 里声明雷达" in d["error"]
 
 

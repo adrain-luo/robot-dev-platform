@@ -330,6 +330,14 @@
     <child link="d435_link"/>
   </joint>
 
+  <!-- mid360：头部与 G1 同一套，照搬 G1 URDF 的 mid360_joint -->
+  <link name="mid360_link"></link>
+  <joint name="mid360_joint" type="fixed">
+    <origin xyz="0.0002835 0.00003 0.428434" rpy="3.141592653589793 0.05112069379091391 0"/>
+    <parent link="torso_link"/>
+    <child link="mid360_link"/>
+  </joint>
+
   <!-- Arm -->
   <link name="left_shoulder_pitch_link">
     <inertial>

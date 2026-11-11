@@ -12,6 +12,16 @@
       "teleimager_path": "/home/robot/yx/teleimager_src_copy"
     }
   },
+  "lidars": {
+    "head": {
+      "label": "头部 MID-360（宇树 DDS 转发）",
+      "type": "unitree_dds",
+      "topic": "rt/utlidar/cloud_livox_mid360",
+      "link": "mid360_link",
+      "mount_rpy": [3.141592653589793, 0.0, 0.0],
+      "mount_note": "头部与 G1 相同，安装位置照搬 G1 的 mid360_joint，姿态只保留倒装（宇树转发的点云已补偿 URDF 的 2.93° 俯仰，同 G1）。"
+    }
+  },
   "control": {
     "backend": "unitree_lowcmd",
     "state_topic": "rt/lowstate",
