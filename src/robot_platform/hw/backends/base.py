@@ -149,6 +149,10 @@ class Backend(ABC):
     @abstractmethod
     def commander(self) -> Commander: ...
 
+    def cmd_monitor(self):
+        """指令话题占用检测（hw/cmd_monitor.CmdMonitor）；不支持的后端返回 None。"""
+        return None
+
     def lift_reader(self) -> LiftReader:
         raise NotImplementedError(f"{self.name} 后端没有立柱")
 

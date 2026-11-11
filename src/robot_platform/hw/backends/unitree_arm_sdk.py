@@ -1,7 +1,7 @@
 """unitree_arm_sdk：运控保持开启（机器人自己站稳），本程序只经 rt/arm_sdk 接管腰与双臂（G1）。
 
 与 unitree_lowcmd 的区别：
-- 绝不调用 ReleaseMode；接管前要求运控正在运行，且没有别的程序在发 rt/arm_sdk。
+- 绝不调用 ReleaseMode；接管前要求运控正在运行，且没有别的程序在发 rt/arm_sdk（hw/cmd_monitor.py）。
 - 第 29 号槽位的 q 是“权重”：0 = 运控完全控制，1 = 完全听本程序。
 - 接管：权重 0→1（此时增益与运控一致），再把增益从运控原值过渡到本程序的值；
   释放：先把增益过渡回运控原值，再把权重降到 0，之后才停发。任何一刻都不突变。
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from robot_platform.hw.backends.base import Backend, Commander, PermissionErrorMotion, StateSource
+from robot_platform.hw.cmd_monitor import CmdMonitor, hints_for
 from robot_platform.hw.dds.sdk import init_channel
 from robot_platform.core.robot_profile import RobotProfile
 
@@ -109,7 +110,7 @@ def blend_frame(q: Sequence[float], kp: Sequence[float], kd: Sequence[float], ta
 
 
 class ArmSdkCommander(Commander):
-    def __init__(self, *, profile: RobotProfile, dds_domain: int, network_interface: str,
+    def __init__(self, *, profile: RobotProfile, monitor: CmdMonitor, dds_domain: int, network_interface: str,
                  sdk_path: Optional[Path]) -> None:
         opt = profile.control.options
         self.motors = tuple(int(i) for i in opt["command_motors"])
@@ -125,24 +126,17 @@ class ArmSdkCommander(Commander):
             raise ValueError(f"unitree_arm_sdk 只发 rt/arm_sdk，配置里是 {topic}")
 
         init_channel(dds_domain, network_interface, sdk_path)
-        from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
+        from unitree_sdk2py.core.channel import ChannelPublisher
         from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
         from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
         from unitree_sdk2py.utils.crc import CRC
 
         self._crc = CRC()
         self._cmd = unitree_hg_msg_dds__LowCmd_()
-        # 先订阅再发布：接管前用它确认没有别的程序在发 rt/arm_sdk
-        self._others_t = 0.0
-        self._sending = False
-        self._sub = ChannelSubscriber(topic, LowCmd_)
-        self._sub.Init(self._on_other, 10)
+        # 占用检测在服务启动时就开始听（见 backend.cmd_monitor），这里只用它判定、登记自己发的帧
+        self._monitor = monitor
         self._pub = ChannelPublisher(topic, LowCmd_)
         self._pub.Init()
-
-    def _on_other(self, _msg) -> None:
-        if not self._sending:
-            self._others_t = time.monotonic()
 
     def _motion_mode(self) -> str:
         from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
@@ -161,15 +155,11 @@ class ArmSdkCommander(Commander):
         mode = self._motion_mode()
         if not mode:
             raise PermissionErrorMotion("运控没有在运行：arm_sdk 依赖运控保持站立，不接管")
-        time.sleep(0.3)
-        if time.monotonic() - self._others_t < 0.5:
-            raise PermissionErrorMotion("已有别的程序在发 rt/arm_sdk（例如另一套臂控），不接管")
+        self._monitor.check_free()
         self.schedule.start()
-        self._sending = True
 
     def write(self, q, kp, kd, tau, *, mode_machine: Optional[int] = None) -> None:
         if not self.schedule.busy():
-            self._sending = False
             return
         weight, gain = self.schedule.step()
         self._cmd.mode_pr = 0
@@ -184,6 +174,7 @@ class ArmSdkCommander(Commander):
             slot.tau = ti
         self._cmd.motor_cmd[self.weight_motor].q = float(weight)
         self._cmd.crc = self._crc.Crc(self._cmd)
+        self._monitor.note_own(self._cmd.crc)
         self._pub.Write(self._cmd)
 
     def release(self) -> None:
@@ -219,6 +210,21 @@ class UnitreeArmSdkBackend(Backend):
         self._lock = threading.Lock()
         self._state = None
         self._commander = None
+        self._monitor = None
+        self._cmd_sub = None
+
+    def cmd_monitor(self) -> CmdMonitor:
+        self.state()
+        with self._lock:
+            if self._monitor is None:
+                from robot_platform.hw.dds.cmd_sub import CmdSubscriber
+
+                opt = self.profile.control.options
+                self._monitor = CmdMonitor(self.profile.control.command_topic, hints=hints_for(self.profile))
+                self._cmd_sub = CmdSubscriber(
+                    self._monitor, watch_motors=opt["command_motors"], weight_motor=int(opt.get("weight_motor", 29)),
+                    dds_domain=self._domain, network_interface=self._iface, sdk_path=self._sdk)
+            return self._monitor
 
     def state(self) -> StateSource:
         with self._lock:
@@ -235,11 +241,12 @@ class UnitreeArmSdkBackend(Backend):
             return self._state
 
     def commander(self) -> Commander:
-        self.state()
+        monitor = self.cmd_monitor()
         with self._lock:
             if self._commander is None:
                 self._commander = ArmSdkCommander(
                     profile=self.profile,
+                    monitor=monitor,
                     dds_domain=self._domain,
                     network_interface=self._iface,
                     sdk_path=self._sdk,

@@ -132,8 +132,35 @@ document.getElementById("speed").addEventListener("input", () => {
   showSpeed($("speed").value);
 });
 
+// 指令话题占用：有没有别的程序在往 rt/lowcmd / rt/arm_sdk 发令（hw/cmd_monitor.py）
+function applyCmdBus(bus, engaged) {
+  const el = $("bus-pill");
+  if (!el) return;
+  if (!bus) { el.hidden = true; return; }
+  el.hidden = false;
+  const topic = bus.topic || "指令话题";
+  if (bus.foreign) {
+    el.textContent = `${topic} 有别人在发 ${Math.round(bus.foreign_hz)} Hz`;
+    el.className = "pill bad";
+  } else {
+    el.textContent = engaged ? `${topic} 仅本程序` : `${topic} 空闲`;
+    el.className = "pill ok";
+  }
+  const lines = [`${topic}：本程序 ${bus.own_hz} Hz，别人 ${bus.foreign_hz} Hz`];
+  if (bus.last_foreign_age_s != null) {
+    let s = `最近一次别人的指令：${bus.last_foreign_age_s} s 前`;
+    if (bus.last_kp_max != null) s += ` · kp 最大 ${Number(bus.last_kp_max).toFixed(0)}`;
+    if (bus.last_weight != null) s += ` · 权重 ${Number(bus.last_weight).toFixed(2)}`;
+    lines.push(s);
+  }
+  for (const h of bus.local_hints || []) lines.push(`本机疑似：${h.pid} ${h.cmd}`);
+  if (bus.foreign) lines.push(engaged ? "接管中仍有别人发令：两边会打架，先停掉对方或急停释放" : "有别人在发令时不能接管");
+  el.title = lines.join(String.fromCharCode(10));
+}
+
 function applyCtrl(ctrl) {
   if (!ctrl) return;
+  applyCmdBus(ctrl.cmd_bus, !!ctrl.engaged);
   lastCtrl = ctrl;
   window.lastCtrl = ctrl;
   const allow = !!ctrl.allow_real_motion;

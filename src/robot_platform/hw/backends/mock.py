@@ -4,6 +4,8 @@
   刚度为 0（拖拽）时停在原处；指令超过 0.5 s 不来就保持当前角。
 - 力矩估计：kp·(q_cmd − q) − kd·dq + τ_ff，只是给页面一个合理的数。
 - 立柱：HeightAdjust 的 vz 乘官方满速 76.5 mm/s 积分，夹在零位到最大行程之间。
+- 指令话题占用检测：本程序发的帧回环给 CmdMonitor（和真机 DDS 一样自己也收得到）；
+  `simulate_foreign(hz)` 模拟另一个程序在发令，测试接管拒绝与页面标红。
 - 初始姿态：两臂取 robot.json 的 home_q，腰 0，立柱在行程中段；有腿的机型摆成屈膝站姿。
 """
 
@@ -25,6 +27,7 @@ from robot_platform.hw.backends.base import (
     StateSource,
 )
 from robot_platform.core.robot_profile import ArmLayout, RobotProfile
+from robot_platform.hw.cmd_monitor import CmdMonitor
 
 SIM_DT_S = 0.005
 TRACK_TAU_S = 0.04
@@ -162,14 +165,20 @@ class MockState(StateSource):
 
 
 class MockCommander(Commander):
-    def __init__(self, robot: MockRobot) -> None:
+    def __init__(self, robot: MockRobot, monitor: CmdMonitor) -> None:
         self._robot = robot
+        self._monitor = monitor
+        self._seq = 0
 
     def prepare(self) -> None:
-        return None
+        self._monitor.check_free()
 
     def write(self, q, kp, kd, tau, *, mode_machine: Optional[int] = None) -> None:
+        self._seq += 1
+        crc = (self._seq * 2654435761) & 0xFFFFFFFF   # 假 CRC：每帧不同即可
+        self._monitor.note_own(crc)
         self._robot.command(q, kp, kd, tau)
+        self._monitor.on_message(crc)                   # DDS 回环：自己发的自己也收到
 
 
 class MockLiftReader(LiftReader):
@@ -199,13 +208,36 @@ class MockBackend(Backend):
         self.profile = profile
         self.robot = MockRobot(profile)
         self._state = MockState(self.robot)
-        self._commander = MockCommander(self.robot)
+        self._monitor = CmdMonitor(profile.control.command_topic, hints=())
+        self._commander = MockCommander(self.robot, self._monitor)
+        self._foreign_stop: Optional[threading.Event] = None
 
     def state(self) -> StateSource:
         return self._state
 
     def commander(self) -> Commander:
         return self._commander
+
+    def cmd_monitor(self) -> CmdMonitor:
+        return self._monitor
+
+    def simulate_foreign(self, rate_hz: float = 0.0, *, kp: float = 80.0, weight: float = 1.0) -> None:
+        """模拟另一个程序以 rate_hz 往指令话题发令；0 = 停。"""
+        if self._foreign_stop is not None:
+            self._foreign_stop.set()
+            self._foreign_stop = None
+        if rate_hz <= 0:
+            return
+        stop = threading.Event()
+        self._foreign_stop = stop
+
+        def _run() -> None:
+            k = 0
+            while not stop.wait(1.0 / rate_hz):
+                k += 1
+                self._monitor.on_message(0x5A5A0000 + k, weight=weight, kp_max=kp)
+
+        threading.Thread(target=_run, name="mock-foreign", daemon=True).start()
 
     def lift_reader(self) -> LiftReader:
         if self.profile.lift is None:
@@ -218,4 +250,5 @@ class MockBackend(Backend):
         return MockLiftDriver(self.robot)
 
     def close(self) -> None:
+        self.simulate_foreign(0.0)
         self.robot.close()

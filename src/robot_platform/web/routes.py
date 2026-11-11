@@ -303,8 +303,20 @@ def _arm(app, path: str, body: Dict[str, Any]) -> Reply:
     }
 
 
+def _mock(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    """仿真专用：模拟另一个程序往指令话题发令（测试占用检测）。真机后端没有这个接口。"""
+    if path != "/api/mock/foreign":
+        return None
+    sim = getattr(app.backend, "simulate_foreign", None)
+    if sim is None:
+        return NOT_FOUND
+    hz = float(body.get("hz") or 0.0)
+    sim(hz)
+    return 200, {"ok": True, "hz": hz}
+
+
 POST_GROUPS: List[Callable[[Any, str, Dict[str, Any]], Optional[Reply]]] = [
-    _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _lift,
+    _mock, _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _lift,
 ]
 
 

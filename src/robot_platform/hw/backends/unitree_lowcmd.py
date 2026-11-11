@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from robot_platform.hw.backends.base import Backend, Commander, LiftDriver, LiftReader, StateSource, check_idle_motors
+from robot_platform.hw.cmd_monitor import CmdMonitor, hints_for
 from robot_platform.hw.dds.sdk import init_channel
 from robot_platform.core.robot_profile import RobotProfile
 
 
 class LowCmdCommander(Commander):
-    def __init__(self, *, reader: StateSource, idle_motors: Sequence[int], command_topic: str, release_motion_mode: bool,
+    def __init__(self, *, reader: StateSource, monitor: CmdMonitor, idle_motors: Sequence[int], command_topic: str, release_motion_mode: bool,
                  dds_domain: int, network_interface: str, sdk_path: Optional[Path]) -> None:
         if command_topic != "rt/lowcmd":
             raise ValueError(f"Only rt/lowcmd is implemented, got {command_topic}")
@@ -27,6 +28,7 @@ class LowCmdCommander(Commander):
         from unitree_sdk2py.utils.crc import CRC
 
         self._reader = reader
+        self._monitor = monitor
         self._idle_motors = tuple(idle_motors)
         self._release = bool(release_motion_mode)
         self._released_mode = False
@@ -38,9 +40,9 @@ class LowCmdCommander(Commander):
     def prepare(self) -> None:
         # 每次接管都查：机器人可能在两次接管之间换过状态
         check_idle_motors(self._reader, self._idle_motors)
-        if self._released_mode:
-            return
-        if not self._release:
+        if self._released_mode or not self._release:
+            # 运控已退出（或本机型不需要退出）：此时 rt/lowcmd 上不该有任何别人
+            self._monitor.check_free()
             self._released_mode = True
             return
         try:
@@ -49,6 +51,7 @@ class LowCmdCommander(Commander):
             )
         except ImportError:
             print("[arm_loop] MotionSwitcherClient missing; skip ReleaseMode")
+            self._monitor.check_free()
             self._released_mode = True
             return
         switcher = MotionSwitcherClient()
@@ -61,6 +64,8 @@ class LowCmdCommander(Commander):
             time.sleep(1.0)
             _, result = switcher.CheckMode()
         self._released_mode = True
+        # 运控在时它自己可能也发 rt/lowcmd，分不清；退出之后重新听，还有人发就是别的程序
+        self._monitor.check_free(fresh=True)
 
     def write(self, q: Sequence[float], kp: Sequence[float], kd: Sequence[float], tau: Sequence[float],
               *, mode_machine: Optional[int] = None) -> None:
@@ -76,6 +81,7 @@ class LowCmdCommander(Commander):
             slot.kd = float(kd[i])
             slot.tau = float(tau[i])
         self._cmd.crc = self._crc.Crc(self._cmd)
+        self._monitor.note_own(self._cmd.crc)
         self._pub.Write(self._cmd)
 
 
@@ -92,6 +98,8 @@ class UnitreeLowCmdBackend(Backend):
         self._lock = threading.Lock()
         self._state = None
         self._commander = None
+        self._monitor = None
+        self._cmd_sub = None
         self._lift_reader = None
         self._lift_driver = None
 
@@ -109,12 +117,27 @@ class UnitreeLowCmdBackend(Backend):
                 )
             return self._state
 
+    def cmd_monitor(self) -> CmdMonitor:
+        self.state()
+        with self._lock:
+            if self._monitor is None:
+                from robot_platform.hw.dds.cmd_sub import CmdSubscriber
+
+                arm_motors = [i for a in self.profile.arms.values() for i in a.motor_indices]
+                self._monitor = CmdMonitor(self.profile.control.command_topic, hints=hints_for(self.profile))
+                self._cmd_sub = CmdSubscriber(
+                    self._monitor, watch_motors=arm_motors, weight_motor=None,
+                    dds_domain=self._domain, network_interface=self._iface, sdk_path=self._sdk)
+            return self._monitor
+
     def commander(self) -> Commander:
         reader = self.state()
+        monitor = self.cmd_monitor()
         with self._lock:
             if self._commander is None:
                 self._commander = LowCmdCommander(
                     reader=reader,
+                    monitor=monitor,
                     idle_motors=self.profile.control.idle_motors,
                     command_topic=self.profile.control.command_topic,
                     release_motion_mode=self.profile.control.release_motion_mode,

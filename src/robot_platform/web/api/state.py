@@ -21,6 +21,9 @@ class StateMixin:
             "arm": self.loop.arm if self.loop else "right",
             "max_speed_rad_s": self.settings.max_speed_rad_s,
         }
+        mon = getattr(self, "cmd_monitor", None)
+        if mon is not None:
+            base["cmd_bus"] = mon.report()
         if self.loop is None:
             return base
         base.update(self.loop.status())

@@ -40,6 +40,7 @@ class App(StateMixin, LiftMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMi
         self._agv: Optional[LiftDriver] = None
         self._lift_ctrl: Optional[LiftController] = None
         self.loop: Optional[ArmLoop] = None
+        self.cmd_monitor = None
         self._lock = threading.Lock()
         self.payload = PayloadAPI(self)
         self.tcp = TcpSession()
@@ -64,6 +65,11 @@ class App(StateMixin, LiftMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMi
         with self._lock:
             if self._reader is None:
                 self._reader = self.backend.state()
+                # 指令话题占用检测：只读模式也开始听，页面一直显示有没有别的程序在发令
+                try:
+                    self.cmd_monitor = self.backend.cmd_monitor()
+                except Exception:  # noqa: BLE001  检测起不来不影响读状态；接管时 commander 还会再建
+                    traceback.print_exc()
                 if self.allow_real_motion:
                     self.loop = ArmLoop(
                         reader=self._reader,

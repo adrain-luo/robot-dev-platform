@@ -113,6 +113,7 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
 .pill.ok { color: var(--ok); }
 .pill.bad { color: var(--danger); }
 .pill.warn { color: var(--warn); }
+.pill[hidden] { display: none; }
 
 .dock {
   left: 14px; right: 14px; bottom: 14px;
