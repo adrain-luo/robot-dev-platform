@@ -26,7 +26,7 @@ def test_scene_shape(mock_server):
     s = mock_server.get("/api/scene")
     assert s["ok"] and s["backend"] == "mock" and s["robot"] == "g1d"
     assert set(s["arms"]) == {"right", "left"}
-    assert [j["motor"] for j in s["waist"]["joints"]] == [12, 14]
+    assert [j["motor"] for j in s["waist"]["joints"]] == [12]  # G1D 没有腰俯仰
     assert s["lift"]["available"] is True
     assert len(s["arms"]["right"]["joints"]) == 7
 
@@ -91,12 +91,13 @@ def test_waist_step_and_limits(mock_server):
     yaw0 = c.get("/api/scene")["waist"]["yaw_deg"]
     assert c.post("/api/waist/step", {"delta_yaw_deg": 5})[0] == 200
     c.wait(lambda s: abs(s["waist"]["yaw_deg"] - (yaw0 + 5)) < 0.2)
-    # 俯仰下限约 -2.5°
-    c.post("/api/waist", {"pitch_deg": -30})
-    s = c.wait(lambda s: abs(s["waist"]["pitch_deg"] - math.degrees(-0.04363)) < 0.2)
-    assert s["waist"]["pitch_deg"] > -3
+    # G1D 没有腰俯仰：给俯仰报错，三维 / 状态里也没有俯仰
+    assert c.post("/api/waist", {"pitch_deg": -30})[0] != 200
+    assert c.post("/api/waist/step", {"delta_pitch_deg": 5})[0] != 200
+    assert "pitch_deg" not in c.get("/api/scene")["waist"]
+    assert [j["role"] for j in c.get("/api/robot")["waist"]["joints"]] == ["yaw"]
     assert c.post("/api/waist/stop")[0] == 200
-    c.post("/api/waist", {"yaw_deg": yaw0, "pitch_deg": 0})
+    c.post("/api/waist", {"yaw_deg": yaw0})
     c.wait(lambda s: abs(s["waist"]["yaw_deg"] - yaw0) < 0.2)
     c.post("/api/release")
 
@@ -130,7 +131,7 @@ def test_robot_caps(mock_server):
     c = mock_server.get("/api/robot")
     assert c["name"] == "g1d" and c["label"] == "G1D" and c["backend"] == "mock"
     assert c["lift"]["stroke_max_mm"] == 420 and c["waist"]["movable"] is True
-    assert [j["motor"] for j in c["waist"]["joints"]] == [12, 14]
+    assert [j["motor"] for j in c["waist"]["joints"]] == [12]  # G1D 没有腰俯仰
     assert c["legged"] is False and c["transitions"] is False
     assert mock_server.get("/api/scene")["body"] == {}
 

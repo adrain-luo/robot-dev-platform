@@ -256,10 +256,20 @@ def test_estop_hold_stops_both_arms_and_teach(rig):
 def test_waist_target_clamped_to_profile_limits(rig):
     profile, _, rec, loop = rig
     loop.engage()
-    loop.set_waist(yaw_rad=10.0, pitch_rad=-1.0)
+    loop.set_waist(yaw_rad=10.0)
     tgt = loop.status()["waist_target_rad"]
     assert float(tgt[str(profile.waist.joint("yaw").motor)]) == profile.waist.joint("yaw").limit_rad[1]
-    assert float(tgt[str(profile.waist.joint("pitch").motor)]) == profile.waist.joint("pitch").limit_rad[0]
+
+
+def test_g1d_has_no_waist_pitch(rig):
+    """G1D 实物没有腰俯仰电机：配置里没有这根轴，给俯仰目标直接报错，不会往电机 14 发目标。"""
+    profile, _, rec, loop = rig
+    assert profile.name == "g1d"
+    assert not profile.waist.has("pitch") and 14 not in profile.waist.hold_motors
+    loop.engage()
+    with pytest.raises(ValueError, match="俯仰"):
+        loop.set_waist(pitch_rad=0.1)
+    assert "14" not in loop.status()["waist_target_rad"]
 
 
 def test_idle_motor_guard_blocks_legged_robot():

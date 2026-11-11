@@ -26,6 +26,12 @@ function applyRobotCaps(caps) {
       $("waist-note").textContent = `腰：接管后与手臂共用限速。${lim}。条形拖到目标松手后走。`;
     }
   }
+  const hasPitch = !!(w && w.joints.some((j) => j.role === "pitch"));
+  for (const id of ["waist-pitch-slider", "waist-pitch", "btn-waist-pitch-m", "btn-waist-pitch-p"]) {
+    const el = $(id);
+    const box = el && (el.closest("label") || el);
+    if (box) box.style.display = hasPitch ? "" : "none";
+  }
   if (w) {
     for (const j of w.joints) {
       for (const id of [`waist-${j.role}-slider`, `waist-${j.role}`]) {

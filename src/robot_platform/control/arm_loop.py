@@ -243,6 +243,8 @@ class ArmLoop:
             for role, value in (("yaw", yaw_rad), ("pitch", pitch_rad)):
                 if value is None:
                     continue
+                if not self._waist.has(role):
+                    raise ValueError(f"{self.profile.name} 的腰没有{'俯仰' if role == 'pitch' else role}轴")
                 j = self._waist.joint(role)
                 self._waist_target[j.motor] = _clamp_span(float(value), j.limit_rad)
 

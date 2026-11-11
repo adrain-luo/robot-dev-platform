@@ -208,17 +208,18 @@ def _waist_step(app, loop, body: Dict[str, Any]) -> None:
     spec = app.profile.waist
     if spec is None:
         raise PermissionErrorMotion(f"{app.profile.name} 没有可控的腰")
-    m_yaw = spec.joint("yaw").motor
-    m_pitch = spec.joint("pitch").motor
     st_w = app.reader().read_motor_states(spec.read_motors)
     tgt = (app.ctrl_status() or {}).get("waist_target_rad") or {}
-    base_yaw = float(tgt.get(str(m_yaw), st_w[m_yaw]["q"]))
-    base_pitch = float(tgt.get(str(m_pitch), st_w[m_pitch]["q"]))
-    dy = body.get("delta_yaw_deg")
-    dp = body.get("delta_pitch_deg")
-    new_yaw = base_yaw if dy in (None, "") else base_yaw + math.radians(float(dy))
-    new_pitch = base_pitch if dp in (None, "") else base_pitch + math.radians(float(dp))
-    loop.set_waist(new_yaw, new_pitch)
+    new = {}
+    for role in ("yaw", "pitch"):
+        d = body.get(f"delta_{role}_deg")
+        if d in (None, ""):
+            continue  # 只动给了步长的轴（G1D 没有俯仰轴）
+        if not spec.has(role):
+            raise ValueError(f"{app.profile.name} 的腰没有{'俯仰' if role == 'pitch' else role}轴")
+        m = spec.joint(role).motor
+        new[role] = float(tgt.get(str(m), st_w[m]["q"])) + math.radians(float(d))
+    loop.set_waist(new.get("yaw"), new.get("pitch"))
 
 
 def _hold(app, loop, body: Dict[str, Any]) -> None:

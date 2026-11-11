@@ -85,10 +85,10 @@
   "mirror_q_sign": [1, -1, -1, 1, -1, 1, -1],
   "waist": {
     "joints": [
-      {"role": "yaw", "urdf_joint": "torso_Joint", "motor": 12, "limit_rad": [-2.7053, 2.7053]},
-      {"role": "pitch", "urdf_joint": "Yaw_Joint", "motor": 14, "limit_rad": [-0.04363, 2.3562]}
+      {"role": "yaw", "urdf_joint": "torso_Joint", "motor": 12, "limit_rad": [-2.7053, 2.7053]}
     ],
-    "hold_motors": [12, 13, 14],
+    "no_pitch_note": "G1D 实物没有腰俯仰电机（URDF 的 Yaw_Joint 只是模型里的轴，三维按 0 画；电机 14 读数恒 0）。躯干倾角看躯干 IMU（torso_imu）。",
+    "hold_motors": [12, 13],
     "lock_kp": 200.0,
     "lock_kd": 4.0
   },

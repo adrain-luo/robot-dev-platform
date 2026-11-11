@@ -59,6 +59,9 @@ class WaistSpec:
     # False：接管时只保持当前角，不接受腰部目标（如站立的 G1，转腰会影响平衡）
     movable: bool = True
 
+    def has(self, role: str) -> bool:
+        return any(j.role == role for j in self.joints)
+
     def joint(self, role: str) -> WaistJoint:
         for j in self.joints:
             if j.role == role:

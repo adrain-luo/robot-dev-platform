@@ -187,14 +187,20 @@ function syncWaistSlidersFromInputs() {
   window.waistTargetDirty = true;
 }
 
+function waistHasPitch() {
+  return !!(window.ROBOT?.waist?.joints || []).some((j) => j.role === "pitch");
+}
+
 async function waistGotoFromUi(confirmGo) {
+  const hasPitch = waistHasPitch();
   const yaw = parseFloat($("waist-yaw")?.value);
-  const pitch = parseFloat($("waist-pitch")?.value);
-  if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) { flash("腰目标无效", false); return; }
-  if (confirmGo && !confirm(`腰将限速转到旋转 ${yaw}°、俯仰 ${pitch}°。扶住、守急停。继续？`)) return;
+  const pitch = hasPitch ? parseFloat($("waist-pitch")?.value) : null;
+  if (!Number.isFinite(yaw) || (hasPitch && !Number.isFinite(pitch))) { flash("腰目标无效", false); return; }
+  const desc = hasPitch ? `旋转 ${yaw}° · 俯仰 ${pitch}°` : `旋转 ${yaw}°`;
+  if (confirmGo && !confirm(`腰将限速转到${desc}。扶住、守急停。继续？`)) return;
   try {
-    await post("/api/waist", { yaw_deg: yaw, pitch_deg: pitch });
-    flash(`腰前往 旋转 ${yaw}° · 俯仰 ${pitch}°`, true);
+    await post("/api/waist", hasPitch ? { yaw_deg: yaw, pitch_deg: pitch } : { yaw_deg: yaw });
+    flash(`腰前往 ${desc}`, true);
     window.waistTargetDirty = false;
     poll();
   } catch (e) { flash(String(e), false); }
@@ -234,12 +240,13 @@ async function waistStep(axis, sign) {
 
 $("btn-waist-fill").onclick = () => {
   const w = window.lastWaist || {};
-  if (!Number.isFinite(w.torso_Joint) || !Number.isFinite(w.Yaw_Joint)) {
+  const yaw = Number(w.yaw_deg), pitch = Number(w.pitch_deg);
+  if (!Number.isFinite(yaw) || (waistHasPitch() && !Number.isFinite(pitch))) {
     flash("还没有腰部读数", false);
     return;
   }
-  $("waist-yaw").value = (w.torso_Joint * 180 / Math.PI).toFixed(2);
-  $("waist-pitch").value = (w.Yaw_Joint * 180 / Math.PI).toFixed(2);
+  $("waist-yaw").value = yaw.toFixed(2);
+  if (waistHasPitch()) $("waist-pitch").value = pitch.toFixed(2);
   syncWaistSlidersFromInputs();
   window.waistTargetDirty = true;
 };
