@@ -30,3 +30,26 @@ def test_write_ply_empty(tmp_path):
     path = tmp_path / "e.ply"
     assert write_ply(path, np.zeros((0, 3)), np.zeros((0, 3), np.uint8)) == 0
     assert _read_binary_ply(path)[1] == 0
+
+
+def test_save_cloud_only_on_request(tmp_path, monkeypatch):
+    """匹配只留在内存；点「保存点云」才写相机系 / 躯干系两份二进制 PLY。"""
+    from robot_platform.perception import cloud_api
+
+    monkeypatch.setattr(cloud_api.instances, "path", lambda key: tmp_path / key)
+    api = cloud_api.CameraCloudMixin()
+    assert api._save_cloud()["ok"] is False
+    pts = np.random.default_rng(1).normal(size=(500, 3))
+    bgr = np.zeros((500, 3), np.uint8)
+    api._last_cloud = (pts, pts + 1.0, bgr)
+    d = api._save_cloud()
+    assert d["ok"] and d["saved"] == 500
+    files = sorted(p.name for p in (tmp_path / "clouds").iterdir())
+    assert len(files) == 2 and files[0].endswith("_cam.ply") and files[1].endswith("_torso.ply")
+    _, n, rec = _read_binary_ply(tmp_path / "clouds" / files[1])
+    assert n == 500 and np.allclose(rec["x"], (pts[:, 0] + 1.0).astype(np.float32))
+
+
+def test_cloud_save_endpoint_before_match(mock_server):
+    code, d = mock_server.post("/api/handeye/cloud-save", {})
+    assert code == 200 and d["ok"] is False and "先匹配" in d["error"]

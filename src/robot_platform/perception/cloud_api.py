@@ -129,14 +129,11 @@ class CameraCloudMixin:
         if use_debug:
             tint = np.array([255, 120, 20], dtype=np.float32)
             cols = np.clip(0.35 * cols.astype(np.float32) + 0.65 * tint, 0, 255).astype(np.uint8)
-        cloud_dir = instances.path("clouds")
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        ply = cloud_dir / f"{stamp}_cam.ply"
-        n_ply = write_ply(ply, pts, cols[:, ::-1])
+        n_ply = int(pts.shape[0])
         homo = np.concatenate([pts, np.ones((pts.shape[0], 1))], axis=1)
         pts_t = (T @ homo.T).T[:, :3]
-        torso_ply = cloud_dir / f"{stamp}_torso.ply"
-        write_ply(torso_ply, pts_t, cols[:, ::-1])
+        # 不自动写盘：页面点「保存点云」才存（见 _save_cloud）
+        self._last_cloud = (pts, pts_t, np.ascontiguousarray(cols[:, ::-1]))
         cloud = {
             "xyz": np.round(pts_t, 4).reshape(-1).tolist(),
             "rgb": cols.reshape(-1).astype(int).tolist(),
@@ -150,12 +147,25 @@ class CameraCloudMixin:
             "valid": n_valid,
             "saved": n_ply,
             "depth_m": {"median": float(np.median(zz)), "near": float(zz.min()), "far": float(np.percentile(zz, 95))},
-            "ply_cam": str(ply),
-            "ply_torso": None if torso_ply is None else str(torso_ply),
             "cloud": cloud,
             "disparity_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
             "note": note,
         }
+
+    def _save_cloud(self) -> Dict[str, Any]:
+        """把最近一次匹配的点云存成二进制 PLY：相机系 _cam、躯干系 _torso 各一份。"""
+        last = getattr(self, "_last_cloud", None)
+        if last is None:
+            return {"ok": False, "error": "还没有点云，先匹配一次"}
+        pts, pts_t, bgr = last
+        cloud_dir = instances.path("clouds")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cam = cloud_dir / f"{stamp}_cam.ply"
+        torso = cloud_dir / f"{stamp}_torso.ply"
+        n = write_ply(cam, pts, bgr)
+        write_ply(torso, pts_t, bgr)
+        mb = (cam.stat().st_size + torso.stat().st_size) / 1e6
+        return {"ok": True, "saved": n, "ply_cam": str(cam), "ply_torso": str(torso), "size_mb": round(mb, 1)}
 
     def _rgbd_cloud(self, frame, T: Optional[np.ndarray], intr_name: str = "") -> Dict[str, Any]:
         """RGB-D：深度直接给点，不做立体匹配；点在彩色光学系，乘手眼外参到躯干。
@@ -191,14 +201,11 @@ class CameraCloudMixin:
             return {"ok": False, "error": f"有效深度点只有 {n_valid}，看相机前方是否太近（<0.15 m）或被遮挡"}
         zz = pts[:, 2]
         cols = np.ascontiguousarray(cols[:, ::-1])  # BGR → RGB
-        cloud_dir = instances.path("clouds")
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        ply = cloud_dir / f"{stamp}_cam.ply"
-        n_ply = write_ply(ply, pts, cols[:, ::-1])
+        n_ply = int(pts.shape[0])
         homo = np.concatenate([pts, np.ones((pts.shape[0], 1))], axis=1)
         pts_t = (T @ homo.T).T[:, :3]
-        torso_ply = cloud_dir / f"{stamp}_torso.ply"
-        write_ply(torso_ply, pts_t, cols[:, ::-1])
+        # 不自动写盘：页面点「保存点云」才存（见 _save_cloud）
+        self._last_cloud = (pts, pts_t, np.ascontiguousarray(cols[:, ::-1]))
         vis = rgbd.colorize_depth(frame.depth, float(frame.info.get("depth_scale_m", 0.001)))
         ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         if not ok:
@@ -212,8 +219,6 @@ class CameraCloudMixin:
             "valid": n_valid,
             "saved": n_ply,
             "depth_m": {"median": float(np.median(zz)), "near": float(zz.min()), "far": float(np.percentile(zz, 95))},
-            "ply_cam": str(ply),
-            "ply_torso": str(torso_ply),
             "cloud": {"xyz": np.round(pts_t, 4).reshape(-1).tolist(), "rgb": cols.reshape(-1).astype(int).tolist()},
             "disparity_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
             "color_intrinsics": intr_summary,

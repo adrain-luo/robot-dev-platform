@@ -107,6 +107,8 @@ class HandEyeAPI(CameraCloudMixin, DebugPortMixin, CaptureMixin, SolveMixin):
             return self._delete_named(body)
         if path == "/api/handeye/match":
             return self._match(body)
+        if path == "/api/handeye/cloud-save":
+            return self._save_cloud()
         if path == "/api/handeye/color-intrinsics/upload":
             return self._color_intr_upload(body)
         if path == "/api/handeye/color-intrinsics/delete":

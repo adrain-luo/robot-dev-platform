@@ -130,3 +130,17 @@ $("btn-cam-match").onclick = () => matchCloud({}, "main");
 $("btn-cam-match-debug").onclick = () => matchCloud({ source: "debug" }, "compare");
 
 if ($("btn-render-match")) $("btn-render-match").onclick = () => matchCloud({}, "main");
+
+// 匹配不再自动存盘；要留档时点「保存点云」，存的是最近一次匹配的结果
+document.querySelectorAll(".btn-cloud-save").forEach((btn) => {
+  btn.onclick = async () => {
+    try {
+      const d = await post("/api/handeye/cloud-save", {});
+      if (!d.ok) { flash(d.error || "保存失败", false); return; }
+      const name = String(d.ply_cam).split(/[\\/]/).pop().replace(/_cam\.ply$/, "");
+      flash(`点云已保存：${name}（${d.saved} 点，${d.size_mb} MB）`, true);
+    } catch (e) {
+      flash(String(e), false);
+    }
+  };
+});
