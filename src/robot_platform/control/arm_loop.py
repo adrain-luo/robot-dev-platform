@@ -1,11 +1,17 @@
-"""50–100 Hz hold + rate-limited set_target. 接管后经后端 Commander 周期发指令。"""
+"""双臂控制循环：50–100 Hz 保持 + 限速逼近目标，接管后经后端 Commander 周期发整机指令。
+
+两只手各有一套状态（目标角、指令角、拖拽、负载补偿、占用者），互不等待：
+一只手拖拽时另一只照常受控，一只手在走时可以给另一只发新目标。
+接管 / 释放 / 急停 / 腰仍是整机的（arm_sdk 的权重、lowcmd 的整帧都是整机共用）。
+"""
 
 from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Dict, Iterator, List, Optional, Sequence
 
 import numpy as np
 
@@ -13,7 +19,7 @@ import numpy as np
 from robot_platform.hw.backends.base import Commander, PermissionErrorMotion, StateSource  # noqa: F401
 from robot_platform.control.arm_gravity import ArmGravity
 from robot_platform.control.fk_scene import RobotKinematics
-from robot_platform.core.layout import ArmLayout, get_arm
+from robot_platform.core.layout import ArmLayout
 from robot_platform.core.robot_profile import active as active_profile
 
 TAU_FF_LIMIT = 8.0
@@ -27,6 +33,30 @@ def _clamp_span(value: float, span: tuple) -> float:
     return float(min(hi, max(lo, value)))
 
 
+def side_label(arm: str) -> str:
+    return "左" if arm == "left" else "右"
+
+
+class _ArmState:
+    """一只手的控制状态（读写都在 ArmLoop._lock 里）。"""
+
+    def __init__(self, layout: ArmLayout, limits: np.ndarray, grav: ArmGravity, q0: np.ndarray) -> None:
+        self.layout = layout
+        self.limits = limits
+        self.grav = grav
+        self.cmd_q = q0.copy()
+        self.desired_q = q0.copy()
+        self.float = False
+        self.payload_theta: Optional[np.ndarray] = None
+        self.payload_name: Optional[str] = None
+        self.last_tau_ff = np.zeros(layout.n)
+        self.owner: Optional[str] = None
+
+    def clamp(self, q: np.ndarray) -> np.ndarray:
+        lo, hi = self.limits[:, 0], self.limits[:, 1]
+        return np.minimum(np.maximum(q, lo), hi)
+
+
 class ArmLoop:
     def __init__(
         self,
@@ -34,7 +64,6 @@ class ArmLoop:
         reader: StateSource,
         commander: Commander,
         kin: RobotKinematics,
-        arm: str = "right",
         max_speed_rad_s: float = 0.2,
         rate_hz: float = 100.0,
         urdf_path: Optional[Path] = None,
@@ -44,65 +73,75 @@ class ArmLoop:
         self._commander = commander
         self.kin = kin
         self.profile = active_profile()
-        self.layout: ArmLayout = get_arm(arm)
         self.max_speed = float(np.clip(max_speed_rad_s, 0.02, 1.0))
         self._dt = 1.0 / float(rate_hz)
         self._loop_period = self._dt  # 实测循环周期（指数平均），给页面看实际频率
-        self.limits = self.kin.arms[self.layout.name].model.joint_limits()
         self.kp_body = list(self.profile.kp)
         self.kd_body = list(self.profile.kd)
         self._waist = self.profile.waist
         self._waist_motors = self._waist.hold_motors if self._waist else ()
         urdf = Path(urdf_path) if urdf_path is not None else self.kin.urdf_path
-        self._grav = ArmGravity(self.layout.name, urdf, base_link)
         self._grav_on = True
-        self._float = False
         self._waist_cmd: Optional[dict] = None
         self._waist_target: Optional[dict] = None
-
-        n = self.layout.n
-        q0 = np.asarray(reader.read_arm(self.layout).q, dtype=float)
         self._lock = threading.Lock()
-        self._cmd_q = q0.copy()
-        self._desired_q = q0.copy()
+        self._arms: Dict[str, _ArmState] = {}
+        for layout in self.profile.arms.values():
+            q0 = np.asarray(reader.read_arm(layout).q, dtype=float)
+            limits = self.kin.arms[layout.name].model.joint_limits()
+            self._arms[layout.name] = _ArmState(layout, limits, ArmGravity(layout.name, urdf, base_link), q0)
         self._engaged = False
         self._stop = threading.Event()
         self._last_err: Optional[str] = None
-        self._payload_theta: Optional[np.ndarray] = None
-        self._payload_name: Optional[str] = None
-        self._last_tau_ff = np.zeros(n)
         self._thread = threading.Thread(target=self._loop, name="arm-loop", daemon=True)
         self._thread.start()
 
+    # ------------------------------------------------------------ 手臂
     @property
-    def arm(self) -> str:
-        return self.layout.name
+    def arm_names(self) -> List[str]:
+        return list(self._arms)
 
-    def set_arm(self, name: str) -> None:
-        if self._engaged:
-            raise RuntimeError("释放后再切换控制臂")
-        layout = get_arm(name)
-        q0 = np.asarray(self.reader.read_arm(layout).q, dtype=float)
-        with self._lock:
-            self.layout = layout
-            self.limits = self.kin.arms[layout.name].model.joint_limits()
-            self._grav = ArmGravity(layout.name, self._grav.model.urdf_path, self._grav.base_link)
-            self._float = False
-            self._payload_theta = None
-            self._payload_name = None
-            self._cmd_q = q0.copy()
-            self._desired_q = q0.copy()
+    def _arm(self, arm: str) -> _ArmState:
+        a = self._arms.get(str(arm))
+        if a is None:
+            raise ValueError(f"没有 {arm!r} 臂（可选 {', '.join(self._arms)}）")
+        return a
+
+    def layout(self, arm: str) -> ArmLayout:
+        return self._arm(arm).layout
+
+    def limits(self, arm: str) -> np.ndarray:
+        return self._arm(arm).limits
+
+    def _measured(self, a: _ArmState) -> np.ndarray:
+        return np.asarray(self.reader.read_arm(a.layout).q, dtype=float)
 
     def set_max_speed(self, v: float) -> None:
         self.max_speed = float(np.clip(v, 0.02, 1.0))
 
-    def _clamp(self, q: np.ndarray) -> np.ndarray:
-        lo, hi = self.limits[:, 0], self.limits[:, 1]
-        return np.minimum(np.maximum(q, lo), hi)
+    # ------------------------------------------------------------ 占用
+    def owner(self, arm: str) -> Optional[str]:
+        with self._lock:
+            return self._arm(arm).owner
 
-    def _measured(self) -> np.ndarray:
-        return np.asarray(self.reader.read_arm(self.layout).q, dtype=float)
+    @contextmanager
+    def claim(self, arm: str, owner: str) -> Iterator[None]:
+        """任务独占一只手：期间别的来源给这只手设目标会被拒绝；退出时自动归还。"""
+        a = self._arm(arm)
+        with self._lock:
+            if a.owner is not None and a.owner != owner:
+                raise PermissionErrorMotion(f"{side_label(arm)}臂正被「{a.owner}」使用，等它结束或先急停")
+            if a.float:
+                raise PermissionErrorMotion(f"{side_label(arm)}臂在拖拽，先退出拖拽")
+            a.owner = owner
+        try:
+            yield
+        finally:
+            with self._lock:
+                if a.owner == owner:
+                    a.owner = None
 
+    # ------------------------------------------------------------ 腰
     def _read_waist(self) -> dict:
         q = self.reader.snapshot().q
         return {idx: float(q[idx]) for idx in self._waist_motors}
@@ -120,28 +159,34 @@ class ArmLoop:
             else:
                 self._waist_cmd[idx] = cur + (step if d > 0 else -step)
 
+    # ------------------------------------------------------------ 整机：接管 / 释放 / 急停
     def engage(self) -> None:
+        """两只手一起接管：都锁在当前实测角（叠重力前馈），腰锁在当前角。"""
         if self._commander.busy() and not self._engaged:
             raise PermissionErrorMotion("上次释放还在过渡，稍等再接管")
         self._commander.prepare()
-        q = self._clamp(self._measured())
+        qs = {name: a.clamp(self._measured(a)) for name, a in self._arms.items()}
         waist_now = self._read_waist()
         with self._lock:
-            self._cmd_q = q.copy()
-            self._desired_q = q.copy()
-            self._float = False
+            for name, a in self._arms.items():
+                a.cmd_q = qs[name].copy()
+                a.desired_q = qs[name].copy()
+                a.float = False
+                a.owner = None
             self._waist_cmd = waist_now
             self._waist_target = dict(waist_now)
             self._engaged = True
 
     def release(self) -> None:
-        # 拖拽中释放：先把指令角对齐实测，过渡期间按它保持，避免跳回拖拽前的旧指令
-        q = self._clamp(self._measured()) if self._float else None
+        # 拖拽中的手：先把指令角对齐实测，过渡期间按它保持，避免跳回拖拽前的旧指令
+        qs = {name: a.clamp(self._measured(a)) for name, a in self._arms.items() if a.float}
         with self._lock:
-            if q is not None:
-                self._cmd_q = q.copy()
-                self._desired_q = q.copy()
-            self._float = False
+            for name, a in self._arms.items():
+                if name in qs:
+                    a.cmd_q = qs[name].copy()
+                    a.desired_q = qs[name].copy()
+                a.float = False
+                a.owner = None
             self._engaged = False
         self._commander.release()
         # 需要过渡的后端（arm_sdk）在过渡期间继续按最后的腰 / 臂角保持，结束后再清
@@ -158,15 +203,27 @@ class ArmLoop:
             raise PermissionErrorMotion(f"接管过渡中（{self._commander.phase()}），等完成再{what}")
 
     def estop_hold(self) -> None:
-        q = self._clamp(self._measured())
+        """两只手都退出拖拽、锁在当前实测角；腰也锁住。"""
+        qs = {name: a.clamp(self._measured(a)) for name, a in self._arms.items()}
         waist_now = self._read_waist()
         with self._lock:
-            self._float = False
-            self._cmd_q = q.copy()
-            self._desired_q = q.copy()
+            for name, a in self._arms.items():
+                a.float = False
+                a.cmd_q = qs[name].copy()
+                a.desired_q = qs[name].copy()
             if self._waist_cmd is not None:
                 self._waist_cmd = waist_now
                 self._waist_target = dict(waist_now)
+
+    def hold_arm(self, arm: str) -> None:
+        """只停这一只手：锁在当前实测角（另一只手、腰、拖拽状态都不动）。任务自己中止时用。"""
+        a = self._arm(arm)
+        q = a.clamp(self._measured(a))
+        with self._lock:
+            if a.float:
+                return
+            a.cmd_q = q.copy()
+            a.desired_q = q.copy()
 
     def set_waist(self, yaw_rad: Optional[float] = None, pitch_rad: Optional[float] = None) -> None:
         if self._waist is None:
@@ -177,8 +234,8 @@ class ArmLoop:
         with self._lock:
             if not self._engaged or self._waist_target is None:
                 raise PermissionErrorMotion("先接管再动腰")
-            if self._float:
-                raise PermissionErrorMotion("先急停退出拖拽，再动腰")
+            if any(a.float for a in self._arms.values()):
+                raise PermissionErrorMotion("先退出拖拽，再动腰")
             for role, value in (("yaw", yaw_rad), ("pitch", pitch_rad)):
                 if value is None:
                     continue
@@ -194,49 +251,67 @@ class ArmLoop:
             self._waist_cmd = waist_now
             self._waist_target = dict(waist_now)
 
-    def enable_teach(self) -> None:
+    # ------------------------------------------------------------ 单臂：拖拽 / 前馈 / 目标
+    def _pick(self, arm: Optional[str]) -> List[_ArmState]:
+        return list(self._arms.values()) if arm in (None, "", "both") else [self._arm(arm)]
+
+    def enable_teach(self, arm: Optional[str] = None) -> None:
+        """拖拽这只手（None = 两只都拖）：刚度 0 + 重力前馈；另一只手不受影响。"""
         self._require_ready("拖拽")
+        picked = self._pick(arm)
         with self._lock:
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再拖拽")
-            self._float = True
+            for a in picked:
+                if a.owner is not None:
+                    raise PermissionErrorMotion(f"{side_label(a.layout.name)}臂正被「{a.owner}」使用，先急停再拖拽")
+            for a in picked:
+                a.float = True
 
-    def disable_teach(self) -> None:
-        q = self._clamp(self._measured())
+    def disable_teach(self, arm: Optional[str] = None) -> None:
+        """退出拖拽：锁在当前实测角。"""
+        picked = self._pick(arm)
+        qs = {a.layout.name: a.clamp(self._measured(a)) for a in picked}
         with self._lock:
-            self._float = False
-            self._cmd_q = q.copy()
-            self._desired_q = q.copy()
+            for a in picked:
+                if not a.float:
+                    continue
+                a.float = False
+                a.cmd_q = qs[a.layout.name].copy()
+                a.desired_q = qs[a.layout.name].copy()
 
     def set_gravity_ff(self, on: bool) -> None:
         self._grav_on = bool(on)
 
-    def arm_gains(self) -> tuple:
-        idx = self.layout.motor_indices
+    def arm_gains(self, arm: str) -> tuple:
+        idx = self._arm(arm).layout.motor_indices
         return [float(self.kp_body[i]) for i in idx], [float(self.kd_body[i]) for i in idx]
 
-    def set_payload_theta(self, theta, name: Optional[str] = None) -> None:
+    def set_payload_theta(self, theta, name: Optional[str] = None, *, arm: str) -> None:
+        a = self._arm(arm)
         with self._lock:
             if theta is None:
-                self._payload_theta = None
-                self._payload_name = None
+                a.payload_theta = None
+                a.payload_name = None
             else:
-                self._payload_theta = np.asarray(theta, float).reshape(4)
-                self._payload_name = name
+                a.payload_theta = np.asarray(theta, float).reshape(4)
+                a.payload_name = name
 
-    def payload_theta(self) -> Optional[list]:
-        if self._payload_theta is None:
-            return None
-        return self._payload_theta.tolist()
-
-    def arm_sample(self, wait: bool = False) -> dict:
-        st = self.reader.read_arm(self.layout, wait=wait)
-        kp, kd = self.arm_gains()
+    def payload_theta(self, arm: str) -> Optional[list]:
+        a = self._arm(arm)
         with self._lock:
-            cmd = self._cmd_q.copy()
-            tau_ff = self._last_tau_ff.copy()
+            return None if a.payload_theta is None else a.payload_theta.tolist()
+
+    def arm_sample(self, arm: str, wait: bool = False) -> dict:
+        a = self._arm(arm)
+        st = self.reader.read_arm(a.layout, wait=wait)
+        kp, kd = self.arm_gains(arm)
+        with self._lock:
+            cmd = a.cmd_q.copy()
+            tau_ff = a.last_tau_ff.copy()
         tau_est = [None if t is None else float(t) for t in st.tau_est]
         return {
+            "arm": a.layout.name,
             "q_meas": [float(v) for v in st.q],
             "dq": [float(v) for v in st.dq],
             "tau_est": tau_est,
@@ -246,101 +321,121 @@ class ArmLoop:
             "kd": kd,
         }
 
-    def set_target(self, q: Sequence[float]) -> None:
+    def set_target(self, q: Sequence[float], *, arm: str, owner: Optional[str] = None) -> None:
+        """给一只手设目标，另一只手不受影响。owner 是占用这只手的任务名（手动来源为 None）。"""
+        a = self._arm(arm)
         arr = np.asarray(q, dtype=float).reshape(-1)
-        if arr.size != self.layout.n or not np.all(np.isfinite(arr)):
-            raise ValueError(f"需要 {self.layout.n} 个有限关节角")
+        if arr.size != a.layout.n or not np.all(np.isfinite(arr)):
+            raise ValueError(f"需要 {a.layout.n} 个有限关节角")
         if self._engaged:
             self._require_ready("走点")
         with self._lock:
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再设目标")
-            if self._float:
-                raise PermissionErrorMotion("先急停退出拖拽，再走点")
-            self._desired_q = self._clamp(arr)
+            if a.float:
+                raise PermissionErrorMotion(f"{side_label(arm)}臂在拖拽，先退出拖拽再走点")
+            if a.owner is not None and a.owner != owner:
+                raise PermissionErrorMotion(f"{side_label(arm)}臂正被「{a.owner}」使用，等它结束或先急停")
+            a.desired_q = a.clamp(arr)
+
+    def view(self, arm: str, owner: Optional[str] = None) -> "ArmView":
+        """给只管一只手的流程（负载测量、到位对比、手眼采集、棋盘触摸……）用的单臂接口。"""
+        self._arm(arm)
+        return ArmView(self, arm, owner)
+
+    # ------------------------------------------------------------ 状态
+    def arm_status(self, arm: str) -> dict:
+        a = self._arm(arm)
+        with self._lock:
+            return self._arm_status_locked(a)
+
+    def _arm_status_locked(self, a: _ArmState) -> dict:
+        cmd = a.cmd_q
+        moving = bool(cmd.size and float(np.max(np.abs(a.desired_q - cmd))) > 1e-4)
+        return {
+            "arm": a.layout.name,
+            "float": a.float,
+            "owner": a.owner,
+            "moving": moving,
+            "cmd_rad": cmd.tolist(),
+            "desired_rad": a.desired_q.tolist(),
+            "payload_theta": None if a.payload_theta is None else a.payload_theta.tolist(),
+            "payload_name": a.payload_name,
+            "gravity_mass_kg": a.grav.moving_mass_kg,
+            "kp_vec": [float(self.kp_body[i]) for i in a.layout.motor_indices],
+            "joint_names": list(a.layout.joint_names),
+        }
 
     def status(self) -> dict:
         with self._lock:
             engaged = self._engaged
-            floating = self._float
             grav_on = self._grav_on
             waist_cmd = dict(self._waist_cmd) if self._waist_cmd else None
             waist_target = {str(i): float(v) for i, v in self._waist_target.items()} if self._waist_target else None
-            cmd = self._cmd_q.tolist()
-            desired = self._desired_q.tolist()
-            theta = None if self._payload_theta is None else self._payload_theta.tolist()
-            pname = self._payload_name
+            arms = {name: self._arm_status_locked(a) for name, a in self._arms.items()}
         return {
             "engaged": engaged,
-            "float": floating,
+            "float": any(v["float"] for v in arms.values()),
             "gravity_ff": grav_on,
-            "gravity_mass_kg": self._grav.moving_mass_kg,
-            "payload_theta": theta,
-            "payload_name": pname,
-            "kp_vec": [float(self.kp_body[i]) for i in self.layout.motor_indices],
+            "arms": arms,
             "waist_locked": waist_cmd is not None,
             "waist_hold_rad": waist_cmd,
             "waist_target_rad": waist_target,
-            "arm": self.layout.name,
             "max_speed_rad_s": self.max_speed,
             "loop_hz": round(1.0 / self._loop_period, 1) if self._loop_period > 0 else None,
-            "cmd_rad": cmd,
-            "desired_rad": desired,
             "last_error": self._last_err,
-            "joint_names": list(self.layout.joint_names),
             # 接管 / 释放过渡（arm_sdk 后端有，其它为空）
             "ready": engaged and self._commander.ready(),
             "transition": self._commander.phase(),
         }
 
-    def _slew(self, dt: Optional[float] = None) -> None:
-        # 每拍走的量按实际经过的时间算：循环跑不满额定频率时，实际速度仍等于限速
+    # ------------------------------------------------------------ 循环
+    def _slew(self, a: _ArmState, dt: Optional[float] = None) -> None:
+        # 每只手各按限速走、互不等待；每拍走的量按实际经过的时间算
         step = self.max_speed * (self._dt if dt is None else dt)
-        delta = self._desired_q - self._cmd_q
-        n = float(np.max(np.abs(delta)))
+        delta = a.desired_q - a.cmd_q
+        n = float(np.max(np.abs(delta))) if delta.size else 0.0
         if n > step and n > 1e-12:
             delta = delta * (step / n)
-        self._cmd_q = self._clamp(self._cmd_q + delta)
+        a.cmd_q = a.clamp(a.cmd_q + delta)
 
     def _publish(self) -> None:
         snap = self.reader.snapshot()
-        st = self.reader.read_arm(self.layout)
-        q_meas = np.asarray(st.q, dtype=float)
-        with self._lock:
-            floating = self._float
-            q_arm = q_meas.copy() if self._float else self._cmd_q.copy()
-            grav_on = self._grav_on
-            waist_hold = dict(self._waist_cmd) if self._waist_cmd else None
-        tau_arm = np.zeros(self.layout.n)
-        if grav_on:
-            tau_arm = self._grav.tau_arm(q_meas)
-            th = None
-            with self._lock:
-                th = None if self._payload_theta is None else self._payload_theta.copy()
-            if th is not None:
-                tau_arm = tau_arm + self._grav.tau_payload(q_meas, th)
-            tau_arm = np.clip(tau_arm, -TAU_FF_LIMIT, TAU_FF_LIMIT)
-        self._last_tau_ff = np.asarray(tau_arm, float)
-
-        # 未接管的电机：保持实测角 + 默认 PD；腰按保持角锁住；当前臂按指令角
         n = min(self.profile.num_motors, len(snap.q))
         q = list(snap.q[:n])
         kp = list(self.kp_body[:n])
         kd = list(self.kd_body[:n])
         tau = [0.0] * n
+        with self._lock:
+            grav_on = self._grav_on
+            waist_hold = dict(self._waist_cmd) if self._waist_cmd else None
+            plan = [(a, a.float, a.cmd_q.copy(),
+                     None if a.payload_theta is None else a.payload_theta.copy())
+                    for a in self._arms.values()]
+        # 腰按保持角锁住；两只手都按各自指令角（拖拽中的手跟实测、刚度 0），都叠重力前馈
         if waist_hold:
             for idx, q_w in waist_hold.items():
                 i = int(idx)
                 q[i] = float(q_w)
                 kp[i] = float(self._waist.lock_kp)
                 kd[i] = float(self._waist.lock_kd)
-        for name, qv, t in zip(self.layout.joint_names, q_arm, tau_arm):
-            i = self.layout.motor_index(name)
-            q[i] = float(qv)
-            tau[i] = float(t)
-            if floating:
-                kp[i] = 0.0
-                kd[i] = TEACH_KD
+        for a, floating, cmd_q, th in plan:
+            q_meas = np.asarray([snap.q[i] for i in a.layout.motor_indices], dtype=float)
+            q_arm = q_meas if floating else cmd_q
+            tau_arm = np.zeros(a.layout.n)
+            if grav_on:
+                tau_arm = a.grav.tau_arm(q_meas)
+                if th is not None:
+                    tau_arm = tau_arm + a.grav.tau_payload(q_meas, th)
+                tau_arm = np.clip(tau_arm, -TAU_FF_LIMIT, TAU_FF_LIMIT)
+            a.last_tau_ff = np.asarray(tau_arm, float)
+            for name, qv, t in zip(a.layout.joint_names, q_arm, tau_arm):
+                i = a.layout.motor_index(name)
+                q[i] = float(qv)
+                tau[i] = float(t)
+                if floating:
+                    kp[i] = 0.0
+                    kd[i] = TEACH_KD
         self._commander.write(q, kp, kd, tau, mode_machine=snap.mode_machine)
 
     def _loop(self) -> None:
@@ -359,8 +454,9 @@ class ArmLoop:
                 if engaged or self._commander.busy():
                     if engaged:
                         with self._lock:
-                            if not self._float:
-                                self._slew(dt)
+                            for a in self._arms.values():
+                                if not a.float:
+                                    self._slew(a, dt)
                             self._slew_waist(dt)
                     self._publish()
                     self._last_err = None
@@ -382,3 +478,66 @@ class ArmLoop:
         while self._commander.busy() and time.monotonic() < deadline:
             time.sleep(0.05)
         self._stop.set()
+
+
+class ArmView:
+    """ArmLoop 的单臂视图：接口与旧的单臂 ArmLoop 一致，发目标时带上占用者。
+
+    status() 是整机状态加上这只手的字段（float / cmd_rad / desired_rad / payload_* / kp_vec），
+    所以按旧接口写的流程（只认一只手）不用改。
+    """
+
+    def __init__(self, loop: ArmLoop, arm: str, owner: Optional[str] = None) -> None:
+        self.loop = loop
+        self.arm = arm
+        self.owner = owner
+
+    @property
+    def layout(self) -> ArmLayout:
+        return self.loop.layout(self.arm)
+
+    @property
+    def limits(self) -> np.ndarray:
+        return self.loop.limits(self.arm)
+
+    @property
+    def max_speed(self) -> float:
+        return self.loop.max_speed
+
+    @property
+    def kin(self) -> RobotKinematics:
+        return self.loop.kin
+
+    @property
+    def reader(self) -> StateSource:
+        return self.loop.reader
+
+    def claim(self):
+        """占用这只手（owner 为 None 时不占用）。用法：with view.claim(): ..."""
+        if self.owner is None:
+            return nullcontext()
+        return self.loop.claim(self.arm, self.owner)
+
+    def set_target(self, q: Sequence[float]) -> None:
+        self.loop.set_target(q, arm=self.arm, owner=self.owner)
+
+    def arm_sample(self, wait: bool = False) -> dict:
+        return self.loop.arm_sample(self.arm, wait=wait)
+
+    def arm_gains(self) -> tuple:
+        return self.loop.arm_gains(self.arm)
+
+    def set_payload_theta(self, theta, name: Optional[str] = None) -> None:
+        self.loop.set_payload_theta(theta, name, arm=self.arm)
+
+    def payload_theta(self) -> Optional[list]:
+        return self.loop.payload_theta(self.arm)
+
+    def estop_hold(self) -> None:
+        """单臂流程自己中止时只停这只手；整机急停走 ArmLoop.estop_hold。"""
+        self.loop.hold_arm(self.arm)
+
+    def status(self) -> dict:
+        st = self.loop.status()
+        st.update(st["arms"][self.arm])
+        return st

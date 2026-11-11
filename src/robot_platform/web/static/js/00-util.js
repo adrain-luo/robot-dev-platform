@@ -145,3 +145,60 @@ function writeOptions(sel, placeholder, rows, keep) {
   for (const row of rows) sel.add(new Option(row.label, row.value));
   if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
 }
+
+// ---------------------------------------------------------------- 选手（左 / 右）
+// 两只手都在控制循环里，没有全局「控制臂」：需要指定手的卡片各放一个
+// <span class="arm-pick" data-pick="键"></span>，选择按键存在浏览器里（只是本机的偏好）。
+const ARM_PICK_STORE = "rdp.armPick.";
+const ARM_SIDE = { left: "左", right: "右" };
+
+function armPick(key) {
+  const el = document.querySelector(`.arm-pick[data-pick="${key}"]`);
+  return (el && el.dataset.arm) || "right";
+}
+
+function setArmPick(key, arm) {
+  const el = document.querySelector(`.arm-pick[data-pick="${key}"]`);
+  if (!el || (arm !== "left" && arm !== "right")) return;
+  el.dataset.arm = arm;
+  el.querySelectorAll("button").forEach((b) => {
+    const on = b.dataset.arm === arm;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  try { localStorage.setItem(ARM_PICK_STORE + key, arm); } catch (_) { /* 无痕模式等：不记 */ }
+}
+
+function initArmPicks() {
+  document.querySelectorAll(".arm-pick").forEach((el) => {
+    const key = el.dataset.pick;
+    if (el.querySelector("button")) return;
+    for (const arm of ["left", "right"]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.dataset.arm = arm;
+      b.textContent = ARM_SIDE[arm];
+      b.title = `${ARM_SIDE[arm]}臂`;
+      b.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        setArmPick(key, arm);
+        el.dispatchEvent(new CustomEvent("arm-pick", { bubbles: true, detail: { key, arm } }));
+      });
+      el.appendChild(b);
+    }
+    let saved = null;
+    try { saved = localStorage.getItem(ARM_PICK_STORE + key); } catch (_) { saved = null; }
+    setArmPick(key, saved === "left" ? "left" : "right");
+  });
+}
+
+// 这只手现在能不能接受新目标：已接管、不在拖拽、没被任务占用
+function armBusyReason(arm) {
+  const ctrl = window.lastCtrl;
+  const side = ARM_SIDE[arm] || arm;
+  if (!ctrl || !ctrl.engaged) return "先接管";
+  const a = (ctrl.arms || {})[arm] || {};
+  if (a.float) return `${side}臂在拖拽，先退出拖拽`;
+  if (a.owner) return `${side}臂正被「${a.owner}」使用`;
+  return "";
+}

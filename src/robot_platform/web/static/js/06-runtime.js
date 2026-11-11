@@ -61,9 +61,14 @@ function renderRuntimeConfig(rt) {
   }
   const now = $("cfg-now");
   if (now) {
-    const applied = g.applied_name
-      ? `控制臂当前前馈「${g.applied_name}」${g.applied_mass_kg != null ? ` ${Number(g.applied_mass_kg).toFixed(3)} kg` : ""}`
-      : "控制臂当前无负载前馈";
+    const live = g.live || {};
+    const fmtLive = (side, x) => (x && x.name)
+      ? `${side}臂前馈「${x.name}」${x.mass_kg != null ? ` ${Number(x.mass_kg).toFixed(3)} kg` : ""}`
+      : `${side}臂无负载前馈`;
+    const applied = window.lastCtrl?.allow_real_motion
+      ? `${fmtLive("左", live.left)}
+${fmtLive("右", live.right)}`
+      : "只读模式，没有前馈";
     now.classList.toggle("locked", locked);
     now.textContent =
       `${locked ? "🔒 已锁定\n" : ""}` +
@@ -258,7 +263,7 @@ async function cfgApplyWorkPose(arm) {
   const name = wpSel?.value || "";
   if (!tcpName) { flash("先选该侧 TCP", false); return; }
   if (!name) { flash("先选工作姿态", false); return; }
-  if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
+  if (window.lastCtrl?.arms?.[arm]?.float) { flash(`${arm === "left" ? "左" : "右"}臂在拖拽，先退出拖拽`, false); return; }
   if (!confirm(`将转到工作姿态「${name}」（TCP「${tcpName}」）并锁定方向。扶住、守急停。继续？`)) return;
   try {
     await cfgPost(

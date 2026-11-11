@@ -12,13 +12,19 @@ from robot_platform.core.layout import get_arm, short_joint_label
 
 
 class StateMixin:
+    def body_arm(self, body: Dict[str, Any], fallback: Any = None) -> str:
+        """请求里说明是哪只手（arm=left/right）；两只手都在控制循环里，没有「当前控制臂」可兜底。"""
+        arm = str((body or {}).get("arm") or fallback or "")
+        if arm not in ("left", "right"):
+            raise ValueError("说明是哪只手（arm = left / right）")
+        return arm
+
     def ctrl_status(self) -> Dict[str, Any]:
         base = {
             "allow_real_motion": self.allow_real_motion,
             "engaged": False,
             "float": False,
             "gravity_ff": True,
-            "arm": self.loop.arm if self.loop else "right",
             "max_speed_rad_s": self.settings.max_speed_rad_s,
         }
         mon = getattr(self, "cmd_monitor", None)
@@ -27,11 +33,12 @@ class StateMixin:
         if self.loop is None:
             return base
         base.update(self.loop.status())
-        th = base.get("payload_theta")
-        if th:
-            m, com = iden.theta_to_payload(th)
-            base["payload_mass_kg"] = m
-            base["payload_com_m"] = com
+        for a in (base.get("arms") or {}).values():
+            th = a.get("payload_theta")
+            if th:
+                m, com = iden.theta_to_payload(th)
+                a["payload_mass_kg"] = m
+                a["payload_com_m"] = com
         return base
 
     def _urdf(self):
@@ -43,11 +50,12 @@ class StateMixin:
         st = r.read_arm(layout)
         age = r.age_s()
         scene = self.kin.arm_scene(arm, st.q)
-        ctrl = self.ctrl_status()
-        if self.loop is not None and self.loop.arm == arm and ctrl.get("engaged"):
+        ctrl_all = self.ctrl_status()
+        ctrl = (ctrl_all.get("arms") or {}).get(arm) or {}
+        if ctrl and ctrl_all.get("engaged"):
             scene["cmd_links"] = self.kin.arm_scene(arm, ctrl["cmd_rad"])["links"]
             scene["target_links"] = self.kin.arm_scene(arm, ctrl["desired_rad"])["links"]
-        if self.loop is not None and self.loop.arm == arm and ctrl.get("payload_theta"):
+        if ctrl.get("payload_theta"):
             com = ctrl.get("payload_com_m")
             mass = ctrl.get("payload_mass_kg")
             if com is None:
@@ -97,7 +105,7 @@ class StateMixin:
             "fresh": age < 0.5,
             "joints": joints,
             "scene": scene,
-            "ctrl": ctrl,
+            "ctrl": ctrl_all,
         }
 
     def _transition_s(self):

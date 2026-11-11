@@ -160,11 +160,13 @@ def _board(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
             float(body.get("above_cm") or 5.0) / 100.0,
             float(body.get("down_cm") or 4.0) / 100.0,
             float(body.get("up_cm") or 4.0) / 100.0,
+            app.body_arm(body),
         )
     if path == "/api/board/stop":
         app.board.request_stop()
-        if app.loop is not None and app.loop.status().get("engaged"):
-            app.loop.estop_hold()
+        # 只停摸棋盘的那只手，另一只手不受影响
+        if app.loop is not None and app.loop.status().get("engaged") and app.board.arm:
+            app.loop.hold_arm(app.board.arm)
         return 200, app.board.status()
     return 200, {"ok": False, "error": "没有这个棋盘接口"}
 
@@ -241,11 +243,13 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
 
 
 def _teach(app, loop, body: Dict[str, Any]) -> None:
+    """拖拽：body.arm 指定哪只手（不给 = 两只手）；另一只手照常受控。"""
+    arm = str(body.get("arm") or "")
     if bool(body.get("enabled", True)):
-        app.unlock_work_pose("teach")
-        loop.enable_teach()
+        app.unlock_work_pose("teach", arm)
+        loop.enable_teach(arm or None)
     else:
-        loop.disable_teach()
+        loop.disable_teach(arm or None)
 
 
 def _speed(app, loop, body: Dict[str, Any]) -> None:
@@ -254,9 +258,15 @@ def _speed(app, loop, body: Dict[str, Any]) -> None:
 
 
 def _target(app, loop, body: Dict[str, Any]) -> None:
+    arm = app.body_arm(body)
     if not app._work_pose_motion:
-        app.unlock_work_pose("arm_control")
-    loop.set_target(body["q"])
+        app.unlock_work_pose("arm_control", arm)
+    loop.set_target(body["q"], arm=arm)
+
+
+def _arm_stop(app, loop, body: Dict[str, Any]) -> None:
+    """只停一只手（取消它没走完的目标）；占用它的任务不受影响，要停任务用急停。"""
+    loop.hold_arm(app.body_arm(body))
 
 
 def _waist(app, loop, body: Dict[str, Any]) -> None:
@@ -266,13 +276,6 @@ def _waist(app, loop, body: Dict[str, Any]) -> None:
         None if yaw in (None, "") else math.radians(float(yaw)),
         None if pitch in (None, "") else math.radians(float(pitch)),
     )
-
-
-def _control_arm(app, loop, body: Dict[str, Any]) -> None:
-    loop.set_arm(str(body["arm"]))
-    app.payload.restore(loop)
-    app.tcp.restore_for_arm(loop.arm)
-    app.work_pose.unlock_if_tcp_mismatch(app.tcp.active_name or "")
 
 
 ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], None]] = {
@@ -286,7 +289,7 @@ ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], None]] = {
     "/api/waist": _waist,
     "/api/waist/step": _waist_step,
     "/api/waist/stop": lambda app, loop, body: loop.hold_waist(),
-    "/api/control-arm": _control_arm,
+    "/api/arm/stop": _arm_stop,
 }
 
 

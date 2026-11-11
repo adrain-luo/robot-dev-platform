@@ -13,9 +13,23 @@ from robot_platform.tasks.spatial_points import solve_tcp_ik, solve_tcp_pose_ik,
 
 
 class WorkPoseMixin:
-    def unlock_work_pose(self, reason: str = "") -> None:
-        if self.work_pose.locked:
+    def unlock_work_pose(self, reason: str = "", arm: str = "") -> None:
+        """解锁工作姿态；给了 arm 时只在锁的是这只手时解锁（另一只手的锁不受影响）。"""
+        if self.work_pose.locked and (not arm or self.work_pose.arm in ("", arm)):
             self.work_pose.unlock()
+
+    def work_pose_lock_for(self, arm: str, tcp_name: str):
+        """这只手、这个 TCP 下锁定的姿态 (R_lock, q_seed)；锁的是另一只手时返回 (None, None)。
+
+        锁定的是这只手但 TCP 已换掉时顺手解锁。
+        """
+        wp = self.work_pose
+        if not wp.locked or (wp.arm and wp.arm != arm):
+            return None, None
+        if (wp.tcp_name or "") != (tcp_name or ""):
+            wp.unlock()
+            return None, None
+        return wp.R_lock, wp.q_seed
 
     def _solve_tcp_motion(self, model, q0, tcp, target, R_lock):
         """有锁定姿态则按配置做单次/多初值 6D IK，否则纯位置。返回 (q, miss_mm, ori_miss_deg|None)。"""
@@ -42,26 +56,22 @@ class WorkPoseMixin:
 
     def work_pose_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            tcp_name = str(body.get("tcp_name") or self.tcp.active_name or "")
+            tcp_name = str(body.get("tcp_name") or self._default_tcp_name(body))
             name = str(body.get("name") or "")
             note = str(body.get("note") or "")
             if path == "/api/work-pose/list":
                 out = self.work_pose.status(tcp_name)
                 return out
             if path == "/api/work-pose/save":
-                if not self.tcp.active_name or self.tcp.result is None:
-                    raise ValueError("先调用一套 TCP，再记工作姿态")
-                arm = self.loop.arm if self.loop is not None else (self.tcp.arm or "right")
-                if self.tcp.arm and arm != self.tcp.arm:
-                    side = "左" if self.tcp.arm == "left" else "右"
-                    raise ValueError(f"当前 TCP 是{side}臂的，先把控制臂换成同一侧")
+                arm = self.body_arm(body)
+                tcp_name, _ = self._tcp_for_arm(arm)
                 layout = get_arm(arm)
                 st = self.reader().read_arm(layout)
                 scene = self.kin.arm_scene(arm, st.q)
                 T = np.asarray(scene["wrist_T"], dtype=float)
                 return self.work_pose.save(
                     name,
-                    self.tcp.active_name,
+                    tcp_name,
                     arm,
                     T[:3, :3],
                     q=st.q,
@@ -72,40 +82,52 @@ class WorkPoseMixin:
             if path == "/api/work-pose/clear":
                 return self.work_pose.unlock()
             if path == "/api/work-pose/load":
-                return self.work_pose_load(tcp_name, name)
+                return self.work_pose_load(tcp_name, name, str(body.get("arm") or ""))
             return {"ok": False, "error": "没有这个工作姿态接口"}
         except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
-            out = self.work_pose.status(str(body.get("tcp_name") or self.tcp.active_name or ""))
+            out = self.work_pose.status(str(body.get("tcp_name") or self._default_tcp_name(body)))
             out["ok"] = False
             out["error"] = str(exc)
             return out
         except RuntimeError as exc:
-            out = self.work_pose.status(str(body.get("tcp_name") or self.tcp.active_name or ""))
+            out = self.work_pose.status(str(body.get("tcp_name") or self._default_tcp_name(body)))
             out["ok"] = False
             out["error"] = str(exc)
             return out
 
-    def work_pose_load(self, tcp_name: str, name: str) -> Dict[str, Any]:
-        """转到该工作姿态（保 TCP 位置）并锁定。"""
+    def _default_tcp_name(self, body: Dict[str, Any]) -> str:
+        """没给 tcp_name 时：给了 arm 就取那只手生效的 TCP，否则取 TCP 卡片当前的。"""
+        arm = str(body.get("arm") or "")
+        if arm in ("left", "right"):
+            try:
+                return self._tcp_for_arm(arm)[0]
+            except ValueError:
+                return ""
+        return self.tcp.active_name or ""
+
+    def work_pose_load(self, tcp_name: str, name: str, arm: str = "") -> Dict[str, Any]:
+        """转到该工作姿态（保 TCP 位置）并锁定。姿态记着是哪只手的，只动那只手。"""
         loop = self.require_loop()
+        if not tcp_name:
+            raise ValueError("先调用一套 TCP")
+        doc = self.work_pose.load_doc(tcp_name, name)
+        arm = str(doc.get("arm") or arm or "")
+        if arm not in loop.arm_names:
+            raise ValueError("这个工作姿态没记是哪只手的")
+        side = "左" if arm == "left" else "右"
         st = loop.status()
-        if st.get("float"):
-            raise PermissionErrorMotion("先点急停退出拖拽，再调用工作姿态")
         if not st.get("engaged"):
             raise PermissionErrorMotion("先接管再调用工作姿态")
-        if not self.tcp.active_name or self.tcp.result is None or self.tcp.result.get("tcp_m") is None:
-            raise ValueError("先调用一套 TCP")
-        tcp_name = tcp_name or self.tcp.active_name
-        if tcp_name != self.tcp.active_name:
-            raise ValueError(f"该姿态属于 TCP「{tcp_name}」，请先调用该 TCP")
-        doc = self.work_pose.load_doc(tcp_name, name)
-        if doc.get("arm") and doc.get("arm") != loop.arm:
-            side = "左" if doc.get("arm") == "left" else "右"
-            raise ValueError(f"这个工作姿态是{side}臂的，先换控制臂")
-        tcp = np.asarray(self.tcp.result["tcp_m"], dtype=float).reshape(3)
+        if st["arms"][arm].get("float"):
+            raise PermissionErrorMotion(f"{side}臂在拖拽，先退出拖拽再调用工作姿态")
+        active_name, tcp = self._tcp_for_arm(arm)
+        if tcp_name != active_name:
+            raise ValueError(f"该姿态属于 TCP「{tcp_name}」，请先为{side}臂调用该 TCP")
+        tcp = np.asarray(tcp, dtype=float).reshape(3)
         R_target = np.asarray(doc["R"], dtype=float).reshape(3, 3)
-        model = self.kin.arms[loop.arm].model
-        q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
+        model = self.kin.arms[arm].model
+        q0 = np.asarray(self.reader().read_arm(loop.layout(arm)).q, dtype=float)
+        view = loop.view(arm)
         t, R0 = model.fk(q0)
         hold = np.asarray(t, dtype=float).reshape(3) + R0 @ tcp
         self._work_pose_motion = True
@@ -126,7 +148,7 @@ class WorkPoseMixin:
                 )
             self.motion_stop.clear()
             settle = iden.wait_settle(
-                loop,
+                view,
                 q,
                 self.motion_stop,
                 {
@@ -138,10 +160,11 @@ class WorkPoseMixin:
             )
             if self.motion_stop.is_set():
                 raise RuntimeError("已停止")
-            if not loop.status().get("engaged") or loop.status().get("float"):
+            st2 = view.status()
+            if not st2.get("engaged") or st2.get("float"):
                 raise PermissionErrorMotion("到位前已释放或进入拖拽")
             # 用电机角复核
-            samp = loop.arm_sample(wait=True)
+            samp = view.arm_sample(wait=True)
             q_meas = np.asarray(samp["q_meas"], dtype=float)
             t2, R2 = model.fk(q_meas)
             tcp_now = t2 + R2 @ tcp
@@ -157,7 +180,8 @@ class WorkPoseMixin:
             out["measured_ori_deg"] = ori_miss
             out["settle_s"] = float(settle.get("settle_s") or 0.0)
             out["settle_timed_out"] = bool(settle.get("timed_out"))
-            out["message"] = f"已锁定工作姿态「{doc.get('name')}」"
+            out["arm"] = arm
+            out["message"] = f"已锁定{side}臂工作姿态「{doc.get('name')}」"
             return out
         finally:
             self._work_pose_motion = False

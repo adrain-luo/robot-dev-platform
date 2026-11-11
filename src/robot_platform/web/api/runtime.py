@@ -23,13 +23,17 @@ class RuntimeMixin:
                     str(body.get("name") or ""),
                     arm=body.get("arm"),
                 )
-                self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
+                arm = str(body.get("arm") or self.tcp.arm or "")
+                if arm in ("left", "right"):
+                    # 只看这只手：锁的是它、TCP 又换了就解锁；另一只手的锁不动
+                    self.work_pose_lock_for(arm, str(body.get("name") or ""))
                 return out
             if path == "/api/runtime-config/work-pose":
                 # 不受配置锁定限制：确认后到位并锁定工作姿态
                 return self.work_pose_load(
-                    str(body.get("tcp_name") or self.tcp.active_name or ""),
+                    str(body.get("tcp_name") or self._default_tcp_name(body)),
                     str(body.get("name") or ""),
+                    str(body.get("arm") or ""),
                 )
             if path == "/api/runtime-config/pose-ik-mode":
                 # 不受配置锁定：随时切换锁定姿态下的 IK 策略

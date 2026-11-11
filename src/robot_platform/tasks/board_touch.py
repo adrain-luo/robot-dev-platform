@@ -104,12 +104,16 @@ class BoardTouch:
         self.point_xyz: Optional[list] = None
         self._fh = None
         self._thread: Optional[threading.Thread] = None
+        self.arm = ""          # 正在摸的那只手
+        self._tcp_name = ""
+        self._tcp_m: Optional[np.ndarray] = None
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
             return {
                 "ok": True,
                 "running": self.running,
+                "arm": self.arm,
                 "phase": self.phase,
                 "error": self.error,
                 "n": 0 if self.points is None else int(self.points.shape[0]),
@@ -229,29 +233,35 @@ class BoardTouch:
             out["error"] = str(exc)
             return out
 
-    def start(self, above_m: float, down_m: float, up_m: float) -> Dict[str, Any]:
+    def start(self, above_m: float, down_m: float, up_m: float, arm: str = "right") -> Dict[str, Any]:
         if self.running:
             return {"ok": False, "error": "已经在触摸"}
         if self.points is None or self.points.shape[0] < 1:
             return {"ok": False, "error": "先看一眼棋盘"}
-        tcp = self.app.tcp
-        if not tcp.arm or not tcp.result or tcp.result.get("tcp_m") is None:
-            return {"ok": False, "error": "先调用一个 TCP 结果"}
         loop = self.app.loop
         if loop is None:
             return {"ok": False, "error": "未开 --allow-real-motion，不能走点"}
-        if loop.arm != tcp.arm:
-            side = "左" if tcp.arm == "left" else "右"
-            return {"ok": False, "error": f"TCP 是{side}臂的，先把控制臂换成{side}臂"}
+        if arm not in loop.arm_names:
+            return {"ok": False, "error": "说明用哪只手摸（arm = left / right）"}
+        try:
+            tcp_name, tcp_m = self.app._tcp_for_arm(arm)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         st = loop.status()
-        if not st.get("engaged") or st.get("float"):
-            return {"ok": False, "error": "先接管，并退出拖拽"}
+        if not st.get("engaged") or st["arms"][arm].get("float"):
+            return {"ok": False, "error": "先接管，并让这只手退出拖拽"}
+        owner = st["arms"][arm].get("owner")
+        if owner:
+            return {"ok": False, "error": f"这只手正被「{owner}」使用"}
         if above_m <= 0 or down_m <= 0 or up_m <= 0:
             return {"ok": False, "error": "上方、下降、抬升都要大于 0"}
         if down_m > above_m + 1e-6:
             return {"ok": False, "error": "下降超过了上方高度，爪尖会穿过棋盘"}
         self.stop.clear()
         self.error = None
+        self.arm = arm
+        self._tcp_name = tcp_name
+        self._tcp_m = np.asarray(tcp_m, dtype=float).reshape(3)
         if self._fh is None:
             self._open_log()
         self.running = True
@@ -265,20 +275,22 @@ class BoardTouch:
         return self.status()
 
     def _run(self, above_m: float, down_m: float, up_m: float) -> None:
+        claim = None
         try:
-            loop = self.app.loop
-            tcp = np.asarray(self.app.tcp.result["tcp_m"], dtype=float)
-            model = self.app.kin.arms[loop.arm].model
+            loop = self.app.loop.view(self.arm, "棋盘触摸")
+            claim = loop.claim()
+            claim.__enter__()
+            tcp = self._tcp_m
+            model = self.app.kin.arms[self.arm].model
             pts = self.points
             total = int(pts.shape[0])
             up = np.array([0.0, 0.0, 1.0])
-            wp = getattr(self.app, "work_pose", None)
-            pose_note = ""
-            if wp is not None and wp.locked:
-                pose_note = f"，工作姿态锁定「{wp.active_name}」"
+            R_lock, _ = self.app.work_pose_lock_for(self.arm, self._tcp_name)
+            pose_note = f"，工作姿态锁定「{self.app.work_pose.active_name}」" if R_lock is not None else ""
+            side = "左" if self.arm == "left" else "右"
             self._log(
                 f"开始触摸 {total} 点：上方 {above_m * 1000:.0f} mm，下降 {down_m * 1000:.0f} mm，"
-                f"再抬 {up_m * 1000:.0f} mm。TCP {self.app.tcp.active_name or loop.arm}{pose_note}"
+                f"再抬 {up_m * 1000:.0f} mm。{side}臂 TCP {self._tcp_name}{pose_note}"
             )
             q = np.asarray(loop.arm_sample(wait=False)["q_meas"], dtype=float)
             for i, p in enumerate(pts):
@@ -298,6 +310,8 @@ class BoardTouch:
             self.error = str(exc)
             self._log(f"中止：{exc}")
         finally:
+            if claim is not None:
+                claim.__exit__(None, None, None)
             with self._lock:
                 self.running = False
             if self._fh is not None:
@@ -309,12 +323,8 @@ class BoardTouch:
         from robot_platform.tasks.spatial_points import solve_tcp_ik, solve_tcp_pose_ik, solve_tcp_pose_ik_robust
 
         wp = getattr(self.app, "work_pose", None)
-        if wp is not None:
-            wp.unlock_if_tcp_mismatch(getattr(self.app.tcp, "active_name", "") or "")
-        R_lock = wp.R_lock if (wp is not None and wp.locked) else None
-        extra = []
-        if wp is not None and wp.q_seed is not None:
-            extra.append(wp.q_seed)
+        R_lock, q_seed = self.app.work_pose_lock_for(self.arm, self._tcp_name)
+        extra = [] if q_seed is None else [q_seed]
         t, R = model.fk(q)
         start = t + R @ tcp
         dist = float(np.linalg.norm(dest - start))

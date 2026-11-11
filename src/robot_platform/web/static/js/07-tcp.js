@@ -154,15 +154,17 @@ function renderTcp(tcp, arms) {
   const note = $("tcp-now");
   if (!note || !tcp) return;
   window.lastTcpName = tcp.active_name || "";
+  window.lastTcpArm = tcp.arm || "";
+  // 每只手各自生效的 TCP（点动 / 碰点 / 棋盘触摸按卡片选的手取）
+  window.lastTcpActive = { left: tcp.active_left || "", right: tcp.active_right || "" };
   renderTcpTable(tcp);
   const jogNow = $("tcp-jog-now");
   if (jogNow) {
-    if (tcp.active_name) {
-      const side = tcp.arm === "left" ? "左臂" : tcp.arm === "right" ? "右臂" : "";
-      jogNow.textContent = `当前 TCP「${tcp.active_name}」${side ? ` · ${side}` : ""} · 躯干系点动`;
-    } else {
-      jogNow.textContent = "还没调用 TCP（先在标定册 TCP 卡片调用）";
-    }
+    const arm = armPick("jog");
+    const name = window.lastTcpActive[arm];
+    jogNow.textContent = name
+      ? `${ARM_SIDE[arm]}臂 TCP「${name}」· 躯干系点动`
+      : `${ARM_SIDE[arm]}臂还没调用 TCP（先在标定册 TCP 卡片调用）`;
   }
   const side = tcp.arm === "left" ? "左臂" : tcp.arm === "right" ? "右臂" : "";
   let text = tcp.active_name ? `会话已加载「${tcp.active_name}」。` : "";
@@ -254,6 +256,7 @@ if ($("btn-wp-save")) {
     if (exists && !confirm(`覆盖工作姿态「${name}」？`)) return;
     try {
       await workPosePost("/api/work-pose/save", {
+        arm: window.lastTcpArm,
         name,
         note: $("wp-note")?.value.trim() || "",
       });
@@ -268,8 +271,9 @@ if ($("btn-wp-load")) {
     const name = $("wp-select")?.value;
     if (!name) { flash("先选一个工作姿态", false); return; }
     if (!window.lastTcpName) { flash("先调用一套 TCP", false); return; }
-    if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
-    if (!confirm(`将转到「${name}」并锁定腕部方向（尽量保持当前 TCP 位置）。扶住、守急停。继续？`)) return;
+    const busy = armBusyReason(window.lastTcpArm);
+    if (busy) { flash(busy, false); return; }
+    if (!confirm(`将把${ARM_SIDE[window.lastTcpArm] || ""}臂转到「${name}」并锁定腕部方向（尽量保持当前 TCP 位置）。扶住、守急停。继续？`)) return;
     const btn = $("btn-wp-load");
     if (btn) btn.disabled = true;
     flash("正在转到工作姿态…", true);
@@ -277,6 +281,7 @@ if ($("btn-wp-load")) {
       const d = await workPosePost("/api/work-pose/load", {
         name,
         tcp_name: window.lastTcpName,
+        arm: window.lastTcpArm,
       });
       flash(
         d.message
@@ -312,7 +317,7 @@ if ($("btn-wp-del")) {
 
 $("btn-tcp-record").onclick = async () => {
   try {
-    const d = await tcpPost("/api/tcp/record");
+    const d = await tcpPost("/api/tcp/record", { arm: armPick("tcp") });
     const side = d.arm === "left" ? "左" : "右";
     flash(`已记${side}臂第 ${d.n} 个姿态`, true);
   } catch (e) { flash(String(e), false); }
@@ -412,12 +417,13 @@ $("btn-tcp-save").onclick = async () => {
 
 async function tcpJogStep(mode, axis, sign) {
   if (tcpJogBusy) return;
-  if (!window.lastTcpName) { flash("先调用一套 TCP", false); return; }
-  if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
-  if (window.lastCtrl && !window.lastCtrl.engaged) { flash("先接管再点动 TCP", false); return; }
+  const arm = armPick("jog");
+  if (!(window.lastTcpActive || {})[arm]) { flash(`先为${ARM_SIDE[arm]}臂调用一套 TCP`, false); return; }
+  const busy = armBusyReason(arm);
+  if (busy) { flash(busy, false); return; }
   const stepMm = Number($("tcp-jog-step-mm")?.value);
   const stepDeg = Number($("tcp-jog-step-deg")?.value);
-  const body = { mode, axis, sign: Number(sign) };
+  const body = { mode, axis, sign: Number(sign), arm };
   if (mode === "translate") {
     if (!Number.isFinite(stepMm) || stepMm <= 0) { flash("平移步长无效", false); return; }
     body.step_mm = stepMm;

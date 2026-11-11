@@ -28,19 +28,19 @@ class PayloadAPI:
         self.still = dict(iden.DEFAULT_STILL)
 
     def restore(self, loop: ArmLoop) -> None:
-        d = iden.load_payload(loop.arm)
-        if d and d.get("theta"):
-            loop.set_payload_theta(d["theta"], d.get("name"))
+        """两只手各自带上最后应用的负载补偿。"""
+        for arm in loop.arm_names:
+            d = iden.load_payload(arm)
+            if d and d.get("theta"):
+                loop.set_payload_theta(d["theta"], d.get("name"), arm=arm)
 
-    def apply_payload_dict(self, d: Dict[str, Any], *, name: Optional[str] = None) -> Dict[str, Any]:
-        """写入该臂的「最后应用」快照；若正是当前控制臂则同时进前馈。
-
-        与 TCP 左右各记一份相同：可先给对侧登记，换臂后 restore 自动带上。
-        """
+    def apply_payload_dict(self, d: Dict[str, Any], *, name: Optional[str] = None,
+                           arm: Optional[str] = None) -> Dict[str, Any]:
+        """写入该臂的「最后应用」快照，并立刻进这只手的前馈（两只手都在控制循环里）。"""
         loop = self.app.require_loop()
-        arm = str(d.get("arm") or loop.arm)
-        if arm not in ("left", "right"):
-            arm = loop.arm
+        arm = str(d.get("arm") or arm or "")
+        if arm not in loop.arm_names:
+            raise ValueError("这套补偿没有记是哪只手的")
         theta = d.get("theta")
         if not theta:
             theta = iden.payload_to_theta(d["mass_kg"], d.get("com_m") or [0, 0, 0])
@@ -55,10 +55,8 @@ class PayloadAPI:
         if saved["mass_kg"] is None:
             saved["mass_kg"], saved["com_m"] = iden.theta_to_payload(theta)
         iden.save_payload(arm, saved)
-        live = bool(loop.arm == arm)
-        if live:
-            loop.set_payload_theta(theta, name)
-        saved["live"] = live
+        loop.set_payload_theta(theta, name, arm=arm)
+        saved["live"] = True
         return saved
 
     def stop_tasks(self) -> None:
@@ -88,7 +86,7 @@ class PayloadAPI:
             st["session_dir"] = str(sdir) if sdir.is_dir() else None
         else:
             st["session_dir"] = None
-        arm = (self.app.loop.arm if self.app.loop else None) or (st.get("solution") or {}).get("arm")
+        arm = (st.get("solution") or {}).get("arm")
         if arm:
             pp = iden.payload_path(arm)
             st["payload_file"] = str(pp) if pp.exists() else None
@@ -98,14 +96,12 @@ class PayloadAPI:
         st["sessions"] = iden.list_sessions()
         st["applied_left"] = iden.applied_name_for_arm("left")
         st["applied_right"] = iden.applied_name_for_arm("right")
-        st["applied_name"] = None
+        # 两只手各有一套补偿：页面按姿态集的手取 applied_left / applied_right
         if self.app.loop is not None:
-            st["applied_name"] = self.app.loop.status().get("payload_name")
-            # 与 _last 对齐：当前臂若无实时前馈，仍用磁盘登记名做勾选
-            if not st["applied_name"]:
-                st["applied_name"] = (
-                    st["applied_left"] if self.app.loop.arm == "left" else st["applied_right"]
-                ) or None
+            for arm_name in self.app.loop.arm_names:
+                live = self.app.loop.arm_status(arm_name).get("payload_name")
+                if live:
+                    st[f"applied_{arm_name}"] = live
         st["kind"] = self._id.get("kind")
         st["rows"] = list(self._id.get("rows") or [])
         st["summary"] = dict(self._id.get("summary") or {})
@@ -139,8 +135,8 @@ class PayloadAPI:
             arm = (q.get("arm") or ["right"])[0]
             ps = (q.get("poseset") or [None])[0]
             kp = None
-            if self.app.loop is not None:
-                kp = self.app.loop.status().get("kp_vec")
+            if self.app.loop is not None and arm in self.app.loop.arm_names:
+                kp = self.app.loop.arm_status(arm).get("kp_vec")
             band = friction.table_for(arm, ps, kp)
             return {"ok": True, "band": band.to_dict()}
         if path == "/api/validate/list":
@@ -190,9 +186,7 @@ class PayloadAPI:
             i = int(body["index"])
             if not (0 <= i < len(d["poses"])):
                 raise IndexError("姿态下标越界")
-            if loop.arm != d["arm"]:
-                raise PermissionErrorMotion(f"当前控制臂是{loop.arm}，姿态集是{d['arm']}，请先释放并切换")
-            loop.set_target(d["poses"][i]["q"])
+            loop.set_target(d["poses"][i]["q"], arm=d["arm"])
             return {"ok": True, "ctrl": self.app.ctrl_status()}
         raise FileNotFoundError(path)
 
@@ -229,7 +223,7 @@ class PayloadAPI:
                         + ("测量完成 " + str(r.get("session")) if r.get("ok") else str(r.get("error")))
                     )
 
-            task = iden.MeasureTask(loop, d, urdf, base, self._log, done, still=self.still)
+            task = iden.MeasureTask(loop.view(d["arm"], "负载测量"), d, urdf, base, self._log, done, still=self.still)
             with self._id_lock:
                 self._id.update(running=True, error=None, solution=None, session=task.session_dir.name,
                                 kind="measure", rows=[], summary={})
@@ -263,16 +257,17 @@ class PayloadAPI:
             return {"ok": True, "payload": saved, "identify": self.identify_status(), "ctrl": self.app.ctrl_status()}
         if path == "/api/identify/clear":
             loop = self.app.require_loop()
-            loop.set_payload_theta(None)
-            iden.clear_payload(loop.arm)
+            arm = str(body.get("arm") or "")
+            if arm not in loop.arm_names:
+                raise ValueError("说明去掉哪只手的负载项（先选姿态集）")
+            loop.set_payload_theta(None, arm=arm)
+            iden.clear_payload(arm)
             return {"ok": True, "identify": self.identify_status(), "ctrl": self.app.ctrl_status()}
         if path == "/api/identify/payload/apply":
             d = iden.load_profile(str(body["name"]))
             saved = self.apply_payload_dict(d, name=d["name"])
             side = "左" if saved.get("arm") == "left" else "右"
             msg = f"已应用「{saved.get('name')}」为{side}臂补偿"
-            if not saved.get("live"):
-                msg += "（当前控制臂不是这一侧，换臂后自动带上）"
             return {
                 "ok": True,
                 "payload": saved,
@@ -297,8 +292,8 @@ class PayloadAPI:
             for arm in ("left", "right"):
                 if iden.applied_name_for_arm(arm) == name:
                     iden.clear_payload(arm)
-                    if loop is not None and loop.arm == arm:
-                        loop.set_payload_theta(None)
+                    if loop is not None and arm in loop.arm_names:
+                        loop.set_payload_theta(None, arm=arm)
             iden.delete_profile(name)
             return {
                 "ok": True,
@@ -325,7 +320,7 @@ class PayloadAPI:
             if pname:
                 payload = iden.load_profile(str(pname))
             elif any(m != "baseline" for m in modes):
-                payload = vali.snapshot_payload(loop)
+                payload = vali.snapshot_payload(loop.view(d["arm"]))
 
             def done(r: Dict[str, Any]) -> None:
                 with self._id_lock:
@@ -341,7 +336,7 @@ class PayloadAPI:
                     )
 
             task = vali.CompareTask(
-                loop, d, urdf, base, self._log, done, still=self.still,
+                loop.view(d["arm"], "到位对比"), d, urdf, base, self._log, done, still=self.still,
                 modes=modes, payload=payload,
                 correction_iters=int(body.get("correction_iters") or 2),
             )

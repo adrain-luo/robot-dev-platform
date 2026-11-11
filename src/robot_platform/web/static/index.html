@@ -34,15 +34,10 @@
 </header>
 
 <nav class="dock" id="ctrl-group">
-  <label class="field slim">控制臂
-    <select id="control-arm">
-      <option value="right">右</option>
-      <option value="left">左</option>
-    </select>
-  </label>
   <label class="switch"><input id="grav-on" type="checkbox" checked><span>重力前馈</span></label>
   <button id="btn-engage" class="primary">接管</button>
-  <button id="btn-teach">拖拽</button>
+  <button id="btn-teach-left" class="btn-teach" data-arm="left" title="左手卸力拖拽（右手照常受控）">拖左</button>
+  <button id="btn-teach-right" class="btn-teach" data-arm="right" title="右手卸力拖拽（左手照常受控）">拖右</button>
   <button id="btn-hold" class="danger">急停(保持)</button>
   <button id="btn-release">释放</button>
   <label class="field speed" title="所有关节运动的最大角速度（各关节同步缩放，最快的那个关节不超过它）。松手即生效">
@@ -449,6 +444,7 @@
                 <div class="subfold-body">
                   <p class="note">拖拽时把末端工作点对准空间里的同一个点，转开腕部，每个姿态记一次，再计算。红点是当前爪尖。算出后命名保存；固定点可另存进空间点（黄点）。</p>
                   <p class="note" id="tcp-now">还没有姿态</p>
+                  <div class="arm-pick-row"><span>记哪只手</span><span class="arm-pick" data-pick="tcp"></span></div>
                   <div class="cmds">
                     <button id="btn-tcp-record" type="button">记录姿态</button>
                     <button id="btn-tcp-undo" type="button">去掉最后</button>
@@ -620,7 +616,7 @@
           <article class="float" id="panel-joints">
             <button type="button" class="float-toggle">关节</button>
             <div class="float-body">
-              <p class="note" id="joints-note">臂：视图所选（双臂时显示控制臂）。</p>
+              <p class="note" id="joints-note">左右两只手 + 腰。</p>
               <div class="table-scroll">
                 <table id="joints-table">
                   <thead>
@@ -699,7 +695,8 @@
           <article class="float" id="panel-motion">
             <button type="button" class="float-toggle">手臂控制</button>
             <div class="float-body">
-              <p class="note">控制臂 7 轴。滑条平时跟着实测角走；拖滑条松手（或改数字回车）后，只改该关节、其余保持目标/实测，按底栏限速走。</p>
+              <div class="arm-pick-row"><span>手</span><span class="arm-pick" data-pick="motion"></span></div>
+              <p class="note">所选那只手的 7 轴。滑条平时跟着实测角走；拖滑条松手（或改数字回车）后，只改该关节、其余保持目标/实测，按底栏限速走。另一只手不受影响。</p>
               <p class="note" id="arm-ctrl-now">手臂 —</p>
               <div class="arm-sliders" id="goto-inputs"></div>
               <div class="still" title="测量/走点到达后等实测角停住。窗口内 max|dq| 小于速度阈，且位置峰峰值小于漂移阈。">
@@ -723,7 +720,8 @@
           <article class="float" id="panel-tcp-jog">
             <button type="button" class="float-toggle">TCP 控制</button>
             <div class="float-body">
-              <p class="note">点动<strong>当前控制臂已调用的 TCP</strong>（画布红点）。方向按<strong>躯干坐标</strong>：+X 前、+Y 左、+Z 上。平移时姿态不动；旋转时红点不动、绕躯干轴转。到不了会报错。</p>
+              <div class="arm-pick-row"><span>手</span><span class="arm-pick" data-pick="jog"></span></div>
+              <p class="note">点动<strong>所选那只手已调用的 TCP</strong>（画布红点）。方向按<strong>躯干坐标</strong>：+X 前、+Y 左、+Z 上。平移时姿态不动；旋转时红点不动、绕躯干轴转。到不了会报错。</p>
               <p class="note" id="tcp-jog-now">TCP —</p>
               <div class="fields">
                 <label class="field">平移步长 mm
@@ -764,7 +762,8 @@
           <article class="float" id="panel-point">
             <button type="button" class="float-toggle">空间点</button>
             <div class="float-body">
-              <p class="note">黄点是躯干系位置，不分左右手。记下固定点/爪尖/绿点均可。「让 TCP 碰」用<strong>当前控制臂</strong>和<strong>该臂已调用的 TCP</strong>。</p>
+              <div class="arm-pick-row"><span>手</span><span class="arm-pick" data-pick="point"></span></div>
+              <p class="note">黄点是躯干系位置，不分左右手。记下固定点/爪尖/绿点均可。「记下爪尖」和「让 TCP 碰」用<strong>所选那只手</strong>和<strong>它已调用的 TCP</strong>。</p>
               <p class="note" id="pt-now">还没有空间点</p>
               <div class="fields">
                 <label class="field grow">已保存
@@ -859,6 +858,7 @@
           <article class="float" id="panel-board">
             <button type="button" class="float-toggle">棋盘触摸</button>
             <div class="float-body">
+              <div class="arm-pick-row"><span>用哪只手摸</span><span class="arm-pick" data-pick="board"></span></div>
               <p class="note">先看一眼 9×6 内角点，角点会画在中央画面上，绿点是第一下。每个点先到上方 5 cm，垂直下降 4 cm，再垂直抬升 4 cm，然后下一个点。若已锁定工作姿态，全程保持该方向。急停会中止。</p>
               <div class="fields">
                 <label class="field">内角

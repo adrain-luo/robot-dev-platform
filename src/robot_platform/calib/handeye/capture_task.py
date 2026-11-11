@@ -40,13 +40,15 @@ class CaptureTask:
         from robot_platform.calib.payload import identify as iden
 
         path = None
+        claim = None
         try:
             poses = self.poses_cfg.get("poses") or []
             if len(poses) < 3:
                 raise ValueError("姿态集至少 3 个点，建议 8 个以上并且姿态拉开")
             arm = self.poses_cfg["arm"]
-            if self.loop.arm != arm:
-                raise RuntimeError(f"控制臂是{self.loop.arm}，姿态集是{arm}。先释放，把控制臂换成这一侧")
+            # 占用姿态集那只手：期间别的来源给它发目标会被拒绝，另一只手照常可用
+            claim = self.loop.claim()
+            claim.__enter__()
             st = self.loop.status()
             if not st.get("engaged") or st.get("float"):
                 raise RuntimeError("先接管，并退出拖拽")
@@ -97,3 +99,6 @@ class CaptureTask:
                 "session": self.session_name,
                 "n": self.saved,
             })
+        finally:
+            if claim is not None:
+                claim.__exit__(None, None, None)

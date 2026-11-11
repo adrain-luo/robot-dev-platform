@@ -3,6 +3,8 @@
 
 fetch("/api/robot", { cache: "no-store" }).then((r) => r.json()).then(applyRobotCaps).catch(() => {});
 
+initArmPicks();
+
 ensureGotoInputs();
 
 V3.init();

@@ -153,7 +153,7 @@ def g1_loop():
     backend = MockBackend(p)
     cmd = RampCommander()
     kin = RobotKinematics(p.urdf, p.base_link, list(p.arms))
-    loop = ArmLoop(reader=backend.state(), commander=cmd, kin=kin, arm="right", urdf_path=p.urdf)
+    loop = ArmLoop(reader=backend.state(), commander=cmd, kin=kin, urdf_path=p.urdf)
     yield p, cmd, loop
     cmd._busy = False
     loop.shutdown(timeout_s=1)
@@ -164,14 +164,14 @@ def g1_loop():
 def test_g1_motion_blocked_until_transition_done(g1_loop):
     p, cmd, loop = g1_loop
     loop.engage()
-    q = loop.status()["cmd_rad"]
+    q = loop.status()["arms"]["right"]["cmd_rad"]
     with pytest.raises(PermissionErrorMotion, match="过渡"):
-        loop.set_target(q)
+        loop.set_target(q, arm="right")
     with pytest.raises(PermissionErrorMotion, match="过渡"):
         loop.enable_teach()
     assert loop.status()["ready"] is False and loop.status()["transition"]
     cmd._ready = True
-    loop.set_target(q)
+    loop.set_target(q, arm="right")
     assert loop.status()["ready"] is True
     with pytest.raises(PermissionErrorMotion, match="只保持"):
         loop.set_waist(yaw_rad=0.1)

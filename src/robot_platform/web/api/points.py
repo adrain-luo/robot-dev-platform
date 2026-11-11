@@ -25,10 +25,8 @@ class PointsMixin:
                     raise ValueError("这个 TCP 没有标定固定点")
                 status = self.points.save(name, fixed, note, source="tcp_fixed")
             elif path == "/api/points/save-now":
-                # 用当前控制臂（或请求里的臂）+ 该臂 TCP 算爪尖，但文件只存坐标
-                arm = str(body.get("arm") or (self.loop.arm if self.loop else "") or "right")
-                if arm not in ("left", "right"):
-                    arm = "right"
+                # 用请求里那只手 + 该臂 TCP 算爪尖，但文件只存坐标
+                arm = self.body_arm(body)
                 _, tcp = self._tcp_for_arm(arm)
                 st = self.reader().read_arm(get_arm(arm))
                 t, R = self.kin.arms[arm].model.fk(st.q)
@@ -130,6 +128,7 @@ class PointsMixin:
     def _tcp_goto_target(
         self,
         loop: ArmLoop,
+        arm: str,
         base_arr: np.ndarray,
         off_mm: np.ndarray,
         *,
@@ -138,14 +137,35 @@ class PointsMixin:
         refine_passes: int = 2,
         refine_gain: float = 1.0,
     ) -> Dict[str, Any]:
-        """躯干系 base + 偏置 mm，可选误差补偿。不依赖已保存空间点。"""
-        tcp_name, tcp = self._tcp_for_arm(loop.arm)
-        model = self.kin.arms[loop.arm].model
+        """躯干系 base + 偏置 mm，可选误差补偿。不依赖已保存空间点。
+
+        走点期间占用这只手（同一只手的点动 / 滑条 / 另一次碰点会被拒绝），另一只手照常可用。
+        """
+        view = loop.view(arm, "空间点碰点")
+        with view.claim():
+            return self._tcp_goto_target_claimed(
+                view, arm, base_arr, off_mm, refine_on=refine_on, refine_thresh_mm=refine_thresh_mm,
+                refine_passes=refine_passes, refine_gain=refine_gain,
+            )
+
+    def _tcp_goto_target_claimed(
+        self,
+        loop,
+        arm: str,
+        base_arr: np.ndarray,
+        off_mm: np.ndarray,
+        *,
+        refine_on: bool,
+        refine_thresh_mm: float,
+        refine_passes: int,
+        refine_gain: float,
+    ) -> Dict[str, Any]:
+        tcp_name, tcp = self._tcp_for_arm(arm)
+        model = self.kin.arms[arm].model
         base_arr = np.asarray(base_arr, dtype=float).reshape(3)
         off_mm = np.asarray(off_mm, dtype=float).reshape(3)
         point_arr = base_arr + off_mm / 1000.0
-        self.work_pose.unlock_if_tcp_mismatch(self.tcp.active_name or "")
-        R_lock = self.work_pose.R_lock if self.work_pose.locked else None
+        R_lock, _ = self.work_pose_lock_for(arm, tcp_name)
         self.motion_stop.clear()
         stop = self.motion_stop
         q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
@@ -203,7 +223,7 @@ class PointsMixin:
             "measured_tcp_mm": [float(v) * 1000.0 for v in tcp_now.tolist()],
             "settle_s": float(cur["settle_s"]),
             "settle_timed_out": bool(cur["settle_timed_out"]),
-            "goto_arm": loop.arm,
+            "goto_arm": arm,
             "goto_tcp": tcp_name,
             "offset_mm": [float(v) for v in off_mm.tolist()],
             "target_m": [float(v) for v in point_arr.tolist()],
@@ -227,6 +247,7 @@ class PointsMixin:
             refine_on = True if refine_on is None else bool(refine_on)
             out = self._tcp_goto_target(
                 loop,
+                self.body_arm(body),
                 np.asarray(point, dtype=float).reshape(3),
                 off_mm,
                 refine_on=refine_on,
@@ -264,6 +285,7 @@ class PointsMixin:
             refine_on = True if refine_on is None else bool(refine_on)
             return self._tcp_goto_target(
                 loop,
+                self.body_arm(body),
                 base,
                 off_mm,
                 refine_on=refine_on,

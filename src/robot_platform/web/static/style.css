@@ -679,3 +679,28 @@ input[type="range"] {
   .book-left { top: 72px; bottom: auto; max-height: 36vh; }
   .legend { display: none; }
 }
+
+/* 选手（左 / 右）：没有全局控制臂，需要指定手的卡片各放一个 */
+.arm-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 6px;
+  color: var(--muted);
+}
+.arm-pick {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.arm-pick button {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+}
+.arm-pick button + button { border-left: 1px solid var(--line); }
+.arm-pick button.active { background: var(--teal); color: #fff; font-weight: 650; }
+.btn-teach.on { background: var(--warn); color: #fff; font-weight: 650; }

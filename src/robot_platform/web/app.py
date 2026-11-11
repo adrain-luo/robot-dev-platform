@@ -75,7 +75,6 @@ class App(StateMixin, LiftMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMi
                         reader=self._reader,
                         commander=self.backend.commander(),
                         kin=self.kin,
-                        arm="right",
                         max_speed_rad_s=self.settings.max_speed_rad_s,
                         urdf_path=self.settings.urdf,
                         base_link=self.settings.base_link,

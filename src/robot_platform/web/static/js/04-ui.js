@@ -30,7 +30,7 @@ async function poll() {
     if (data.handeye && typeof applyHeRun === "function") {
       try { applyHeRun(data.handeye); } catch (e) { flash(String(e), false); }
     }
-    const modeLabel = data.ctrl?.float ? "实测 · 拖拽卸力" : (data.ctrl?.engaged ? "实测 · 已接管" : (data.mode === "real" ? "实测 · 未接管" : "实测 · 只读"));
+    const modeLabel = data.ctrl?.float ? "实测 · 有手在拖拽" : (data.ctrl?.engaged ? "实测 · 已接管" : (data.mode === "real" ? "实测 · 未接管" : "实测 · 只读"));
     if (window.currentSet && window.currentSet.poses) {
       const tips = window.currentSet.poses.map((p) => p.tip_xyz).filter(Boolean);
       const armSc = window.currentSet.arm === "left" ? left?.scene : right?.scene;
@@ -55,15 +55,15 @@ async function poll() {
     if (data.runtime) renderRuntimeConfig(data.runtime);
     V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel, imu: data.imu || null };
     V3.draw();
-    const ctrlArm = data.ctrl?.arm || "right";
-    // 三维始终画双臂；关节表跟控制臂
-    renderTable(ctrlArm === "left" ? left : right, data.waist);
-    const ctrlSnap = ctrlArm === "left" ? left : right;
+    // 三维和关节表都是双臂；「手臂控制」滑条跟卡片上选的那只手
+    renderTable([left, right], data.waist);
+    const motionArm = armPick("motion");
+    const ctrlSnap = motionArm === "left" ? left : right;
     if (ctrlSnap && ctrlSnap.joints) syncArmSlidersFromLive(ctrlSnap.joints);
     const note = $("arm-ctrl-now");
     if (note && ctrlSnap && ctrlSnap.joints) {
       const live = ctrlSnap.joints.map((j) => `${j.label} ${Number(j.q_deg).toFixed(1)}°`).join(" · ");
-      note.textContent = `控制臂 ${ctrlArm} · ${live}`;
+      note.textContent = `${ARM_SIDE[motionArm]}臂 · ${live}`;
     }
   } catch (e) {
     flash(String(e), false);

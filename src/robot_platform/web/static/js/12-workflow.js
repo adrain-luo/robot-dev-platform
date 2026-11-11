@@ -131,16 +131,19 @@ async function wfDgStepPose() {
   const name = ($("wf-dg-wp")?.value || "").trim();
   if (!name) throw new Error("先选择工作姿态");
   if (!window.lastTcpName) throw new Error("先调用一套 TCP");
-  if (window.lastCtrl && window.lastCtrl.float) throw new Error("先点急停退出拖拽");
-  if (window.lastCtrl && !window.lastCtrl.engaged) throw new Error("先接管再调用工作姿态");
+  // 工作流跟着 TCP 卡片当前那套 TCP 的手走（工作姿态也记着是哪只手的）
+  const busy = armBusyReason(window.lastTcpArm);
+  if (busy) throw new Error(busy);
   wfDgCheckAbort();
   wfDgSetNote("① 调用并锁定工作姿态…");
   const d = await workPosePost("/api/work-pose/load", {
     name,
     tcp_name: window.lastTcpName,
+    arm: window.lastTcpArm,
   });
   wfDgCheckAbort();
   if (!d.ok) throw new Error(d.error || "工作姿态失败");
+  if (window.wfDetectGoto) window.wfDetectGoto.arm = d.arm || window.lastTcpArm;
   const text =
     d.message
     || `① 已锁定「${name}」· 位置 ${Number(d.measured_miss_mm || 0).toFixed(1)} mm · 姿态 ${Number(d.measured_ori_deg || 0).toFixed(1)}°`;
@@ -183,7 +186,9 @@ async function wfDgStepDetect() {
 async function wfDgStepGoto(kind) {
   const center = window.wfDetectGoto.center_m;
   if (!center) throw new Error("还没有识别中心，先跑识别步骤");
-  if (window.lastCtrl && window.lastCtrl.float) throw new Error("先点急停退出拖拽");
+  const arm = (window.wfDetectGoto && window.wfDetectGoto.arm) || window.lastTcpArm;
+  const busy = armBusyReason(arm);
+  if (busy) throw new Error(busy);
   const { ox, oy, oz, hz } = wfDgReadOffset();
   const offset_mm = kind === "lift" ? [ox, oy, oz + hz] : [ox, oy, oz];
   const refine = !($("wf-dg-refine") && !$("wf-dg-refine").checked);
@@ -191,6 +196,7 @@ async function wfDgStepGoto(kind) {
   wfDgCheckAbort();
   wfDgSetNote(`${tag} 走点中…`);
   const d = await post("/api/points/goto-xyz", {
+    arm,
     point_m: center,
     offset_mm,
     refine,

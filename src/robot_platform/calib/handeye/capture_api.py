@@ -58,7 +58,7 @@ class CaptureMixin:
         self._save_config({k: v for k, v in body.items() if k != "create"})
         cfg = load_config()
         if body.get("create"):
-            arm = self.app.loop.arm if self.app.loop is not None else he_session.ARM
+            arm = str(body.get("arm") or he_session.ARM)
             path = he_session.create_session(str(cfg.get("board_size") or "11x8"), arm=arm)
             cfg["session"] = path.name
             save_config(cfg)
@@ -84,9 +84,7 @@ class CaptureMixin:
         else:
             path = he_session.session_dir(name)
         meta = he_session.load_meta(path)
-        arm = meta.get("arm") or (self.app.loop.arm if self.app.loop is not None else he_session.ARM)
-        if meta.get("arm") and self.app.loop is not None and self.app.loop.arm != meta["arm"]:
-            raise PermissionErrorMotion(f"这个会话是{meta['arm']}臂，当前控制臂是{self.app.loop.arm}")
+        arm = meta.get("arm") or str(body.get("arm") or he_session.ARM)
         cam = self._camera(cfg)
         frame = cam.grab(3.0)
         if frame is None:
@@ -121,9 +119,8 @@ class CaptureMixin:
         if not name:
             raise ValueError("先在姿态集里选一套")
         poses = posesets.load_set(name)
-        if loop.arm != poses.get("arm"):
-            raise PermissionErrorMotion(f"当前控制臂是{loop.arm}，姿态集是{poses.get('arm')}。先释放，把控制臂换成这一侧")
-        st = loop.status()
+        view = loop.view(str(poses.get("arm") or he_session.ARM), "手眼采集")
+        st = view.status()
         if not st.get("engaged") or st.get("float"):
             raise RuntimeError("先接管，并退出拖拽")
         board = str(cfg.get("board_size") or "11x8")
@@ -138,7 +135,7 @@ class CaptureMixin:
             with self._lock:
                 self._running = False
 
-        task = CaptureTask(loop, self._camera(cfg), poses, board, still, done)
+        task = CaptureTask(view, self._camera(cfg), poses, board, still, done)
         with self._lock:
             self._task = task
             self._running = True

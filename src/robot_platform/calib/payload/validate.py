@@ -271,14 +271,27 @@ class CompareTask:
         self.session = f"{time.strftime('%Y%m%d_%H%M%S')}_{poses_cfg['arm']}"
 
     def run(self) -> None:
+        # 占用姿态集那只手：期间别的来源给它发目标会被拒绝；另一只手照常可用
+        try:
+            claim = self.loop.claim()
+            claim.__enter__()
+        except Exception as e:
+            self.phase = "失败"
+            self.on_done({"ok": False, "error": f"{type(e).__name__}: {e}", "session": self.session,
+                          "rows": self.rows, "summary": self.summary})
+            return
+        try:
+            self._run()
+        finally:
+            claim.__exit__(None, None, None)
+
+    def _run(self) -> None:
         original = snapshot_payload(self.loop)
         try:
             poses = self.poses_cfg.get("poses") or []
             if len(poses) < 1:
                 raise ValueError("姿态集是空的")
             arm = self.poses_cfg["arm"]
-            if self.loop.arm != arm:
-                raise RuntimeError(f"控制臂是 {self.loop.arm}，姿态集是 {arm}")
             st = self.loop.status()
             if not st.get("engaged") or st.get("float"):
                 raise RuntimeError("先接管并退出拖拽再对比")

@@ -415,48 +415,49 @@ class MeasureTask:
             poses = self.poses_cfg.get("poses") or []
             if len(poses) < 2:
                 raise ValueError("姿态集至少 2 个点")
-            arm = self.poses_cfg["arm"]
-            if self.loop.arm != arm:
-                raise RuntimeError(f"控制臂是 {self.loop.arm}，姿态集是 {arm}")
-            st = self.loop.status()
-            if not st.get("engaged") or st.get("float"):
-                raise RuntimeError("先接管并退出拖拽再测量")
-            lo, hi = self.loop.limits[:, 0], self.loop.limits[:, 1]
-            n_app = 2 if self.bidirectional else 1
-            total = len(poses) * n_app
-            self.progress = [0, total]
-            self.log(
-                f"测量 {len(poses)} 点 × {n_app}，会话 {self.session_dir.name}，限速 {self.loop.max_speed:.3f} rad/s，"
-                f"静止 |dq|<{self.still['still_dq_rad_s']} 漂移<{self.still['still_drift_rad']} "
-                f"窗 {self.still['still_window_s']}s 超时 {self.still['settle_timeout_s']}s"
-            )
-            for pose in poses:
-                q_t = np.asarray(pose["q"], float)
-                approaches = [("+", 1.0), ("-", -1.0)] if self.bidirectional else [("", 0.0)]
-                for tag, sgn in approaches:
-                    if self.stop.is_set():
-                        raise RuntimeError("已停止")
-                    self.phase = f"{pose.get('name')}{tag}"
-                    if sgn != 0.0:
-                        pre = np.clip(q_t + sgn * self.approach_delta, lo, hi)
-                        self.log(f"{self.phase} 预位")
-                        wait_settle(self.loop, pre, self.stop, {**self.still, "still_window_s": min(0.2, self.still["still_window_s"])})
-                    self.log(f"{self.phase} 到位采样")
-                    s = self._one(pose, tag)
-                    self.samples.append(s)
-                    self._save()
-                    self.progress = [len(self.samples), total]
-                    extra = ""
-                    if s["timed_out"]:
-                        extra = f"（超时仍采样 dq={s.get('max_dq_rad_s')} 漂移={s.get('drift_rad')}）"
-                    self.log(f"{self.phase} 完成{extra}")
-            home = self.poses_cfg.get("home_q")
-            if home:
-                self.phase = "回 home"
-                wait_settle(self.loop, home, self.stop, self.still)
-            self.phase = "完成"
-            self.on_done({"ok": True, "session": self.session_dir.name, "n_samples": len(self.samples)})
+            with self.loop.claim():
+                self._run(poses)
         except Exception as e:
             self.phase = "失败"
             self.on_done({"ok": False, "error": f"{type(e).__name__}: {e}", "session": self.session_dir.name,
                           "n_samples": len(self.samples)})
+
+    def _run(self, poses) -> None:
+        st = self.loop.status()
+        if not st.get("engaged") or st.get("float"):
+            raise RuntimeError("先接管并退出拖拽再测量")
+        lo, hi = self.loop.limits[:, 0], self.loop.limits[:, 1]
+        n_app = 2 if self.bidirectional else 1
+        total = len(poses) * n_app
+        self.progress = [0, total]
+        self.log(
+            f"测量 {len(poses)} 点 × {n_app}，会话 {self.session_dir.name}，限速 {self.loop.max_speed:.3f} rad/s，"
+            f"静止 |dq|<{self.still['still_dq_rad_s']} 漂移<{self.still['still_drift_rad']} "
+            f"窗 {self.still['still_window_s']}s 超时 {self.still['settle_timeout_s']}s"
+        )
+        for pose in poses:
+            q_t = np.asarray(pose["q"], float)
+            approaches = [("+", 1.0), ("-", -1.0)] if self.bidirectional else [("", 0.0)]
+            for tag, sgn in approaches:
+                if self.stop.is_set():
+                    raise RuntimeError("已停止")
+                self.phase = f"{pose.get('name')}{tag}"
+                if sgn != 0.0:
+                    pre = np.clip(q_t + sgn * self.approach_delta, lo, hi)
+                    self.log(f"{self.phase} 预位")
+                    wait_settle(self.loop, pre, self.stop, {**self.still, "still_window_s": min(0.2, self.still["still_window_s"])})
+                self.log(f"{self.phase} 到位采样")
+                s = self._one(pose, tag)
+                self.samples.append(s)
+                self._save()
+                self.progress = [len(self.samples), total]
+                extra = ""
+                if s["timed_out"]:
+                    extra = f"（超时仍采样 dq={s.get('max_dq_rad_s')} 漂移={s.get('drift_rad')}）"
+                self.log(f"{self.phase} 完成{extra}")
+        home = self.poses_cfg.get("home_q")
+        if home:
+            self.phase = "回 home"
+            wait_settle(self.loop, home, self.stop, self.still)
+        self.phase = "完成"
+        self.on_done({"ok": True, "session": self.session_dir.name, "n_samples": len(self.samples)})

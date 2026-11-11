@@ -99,7 +99,7 @@ $("btn-pt-now").onclick = async () => {
   const exists = [...$("pt-select").options].some((o) => o.value === name);
   if (exists && !confirm(`覆盖空间点「${name}」？`)) return;
   try {
-    await pointPost("/api/points/save-now", { name, note: $("pt-note").value.trim() });
+    await pointPost("/api/points/save-now", { name, note: $("pt-note").value.trim(), arm: armPick("point") });
     $("pt-name").value = "";
     flash(`已记下「${name}」`, true);
   } catch (e) { flash(String(e), false); }
@@ -177,10 +177,13 @@ $("btn-board-look").onclick = async () => {
 };
 
 $("btn-board-start").onclick = async () => {
-  if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
-  if (!confirm("将按限速逐个触摸棋盘角点。扶住、守急停。继续？")) return;
+  const arm = armPick("board");
+  const busy = armBusyReason(arm);
+  if (busy) { flash(busy, false); return; }
+  if (!confirm(`将用${ARM_SIDE[arm]}臂按限速逐个触摸棋盘角点（另一只手不受影响）。扶住、守急停。继续？`)) return;
   try {
     await boardPost("/api/board/start", {
+      arm,
       above_cm: parseFloat($("board-above").value) || 5,
       down_cm: parseFloat($("board-down").value) || 4,
       up_cm: parseFloat($("board-up").value) || 4,
@@ -208,17 +211,20 @@ if ($("btn-pt-off-clear")) {
 $("btn-pt-goto").onclick = async () => {
   const name = $("pt-select").value;
   if (!name) { flash("先选一个空间点", false); return; }
-  if (window.lastCtrl && window.lastCtrl.float) { flash("先点急停退出拖拽", false); return; }
+  const arm = armPick("point");
+  const busy = armBusyReason(arm);
+  if (busy) { flash(busy, false); return; }
   const off = readPtOffsetMm();
   const refine = !($("pt-refine") && !$("pt-refine").checked);
   const offTxt = `Δ[${off.x}, ${off.y}, ${off.z}] mm`;
   const refineTxt = refine ? "到位后误差补偿（最多 2 步）" : "仅开环走到瞄准点";
-  if (!confirm(`将按限速用当前控制臂的 TCP 碰到「${name}」+ ${offTxt}。${refineTxt}。扶住、守急停。继续？`)) return;
+  if (!confirm(`将按限速用${ARM_SIDE[arm]}臂的 TCP 碰到「${name}」+ ${offTxt}。${refineTxt}。扶住、守急停。继续？`)) return;
   const btn = $("btn-pt-goto");
   if (btn) btn.disabled = true;
   flash(`正在走点（${offTxt}）${refine ? " / 误差补偿" : ""}…`, true);
   try {
     const d = await pointPost("/api/points/goto", {
+      arm,
       name,
       offset_mm: [off.x, off.y, off.z],
       refine,

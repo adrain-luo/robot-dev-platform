@@ -14,7 +14,7 @@ function applyRobotCaps(caps) {
   const show = (id, on) => { const el = $(id); if (el) el.style.display = on ? "" : "none"; };
   const w = caps.waist;
   const desc = w ? w.joints.map((j) => `电机 ${j.motor} ${WAIST_ROLE[j.role] || j.role}`).join(" / ") : "无";
-  if ($("joints-note")) $("joints-note").textContent = `臂：视图所选（双臂时显示控制臂）。腰：${desc}。`;
+  if ($("joints-note")) $("joints-note").textContent = `左右两只手 + 腰：${desc}。`;
   show("lift-zero-block", !!caps.lift);
   show("lift-ctrl", !!caps.lift);
   show("waist-ctrl", !!(w && w.movable));
@@ -42,11 +42,13 @@ function applyRobotCaps(caps) {
   }
 }
 
-function renderTable(snap, waist) {
+function renderTable(snaps, waist) {
   const tb = $("joints-table").querySelector("tbody");
   tb.innerHTML = "";
-  if (snap && snap.joints && snap.joints.length) {
-    appendJointRows(tb, snap.joints, { section: `臂 · ${snap.arm || ""}` });
+  for (const snap of snaps || []) {
+    if (snap && snap.joints && snap.joints.length) {
+      appendJointRows(tb, snap.joints, { section: `${ARM_SIDE[snap.arm] || snap.arm || ""}臂` });
+    }
   }
   if (waist && waist.joints && waist.joints.length) {
     appendJointRows(tb, waist.joints, { section: `腰 · ${waist.joints.map((j) => `${j.motor} ${WAIST_ROLE[j.label.replace("waist_", "")] || j.label}`).join(" / ")}` });

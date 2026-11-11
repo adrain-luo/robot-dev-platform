@@ -170,9 +170,11 @@ class RuntimeConfig:
                 "left": self._gravity_side("left"),
                 "right": self._gravity_side("right"),
                 "profiles": iden.list_profiles(),
-                "applied_arm": ctrl.get("arm"),
-                "applied_name": ctrl.get("payload_name") or "",
-                "applied_mass_kg": ctrl.get("payload_mass_kg"),
+                # 两只手各自正在用的前馈（控制循环里实时的那份）
+                "live": {
+                    name: {"name": a.get("payload_name") or "", "mass_kg": a.get("payload_mass_kg")}
+                    for name, a in (ctrl.get("arms") or {}).items()
+                },
             },
             "tcp": {
                 "active_name": tcp.get("active_name") or "",
@@ -240,7 +242,7 @@ class RuntimeConfig:
         saved["name"] = d.get("name") or name
         iden.save_payload(arm, saved)
         loop = self.app.loop
-        if loop is not None and loop.arm == arm:
+        if loop is not None:  # 两只手都在控制循环里，补偿立刻进这只手的前馈
             self.app.payload.apply_payload_dict(saved, name=saved["name"])
         return self.snapshot()
 
@@ -255,8 +257,4 @@ class RuntimeConfig:
         if want and got and got != want:
             side = "左" if got == "left" else "右"
             raise ValueError(f"「{name}」是{side}臂 TCP，请选到对应侧")
-        # 若当前控制臂就是这侧，内存里已是该结果；否则只写入该侧生效名
-        loop = self.app.loop
-        if loop is not None and got and loop.arm != got:
-            self.app.tcp.restore_for_arm(loop.arm)
         return self.snapshot()

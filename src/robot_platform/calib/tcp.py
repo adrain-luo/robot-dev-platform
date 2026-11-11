@@ -146,6 +146,17 @@ def _set_active_for_arm(arm: str, name: str) -> None:
     _write_active_map(m)
 
 
+def load_active_doc(arm: str) -> Optional[Dict[str, Any]]:
+    """只读：该臂当前生效的 TCP 结果文件（不改 TCP 标定会话）。没有就返回 None。"""
+    name = _read_active_map().get("left" if arm == "left" else "right") or ""
+    if not name or not _result_path(name).is_file():
+        return None
+    try:
+        return json.loads(_result_path(name).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def _clear_active_name(name: str) -> None:
     m = _read_active_map()
     changed = False

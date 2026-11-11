@@ -277,12 +277,9 @@ async function gotoPose(i) {
   if (!window.currentSet) return;
   fillQ(window.currentSet.poses[i].q);
   const ctrl = window.lastCtrl;
-  if (!ctrl?.allow_real_motion || !ctrl.engaged || ctrl.float) {
-    flash("已填入该姿态角（需接管且非拖拽才能走过去）", true);
-    return;
-  }
-  if (ctrl.arm !== window.currentSet.arm) {
-    flash(`姿态集是${window.currentSet.arm === "left" ? "左" : "右"}臂，请先切控制臂`, false);
+  const arm = window.currentSet.arm;
+  if (!ctrl?.allow_real_motion || armBusyReason(arm)) {
+    flash(`已填入该姿态角（${ctrl?.allow_real_motion ? armBusyReason(arm) : "只读模式"}，没有走过去）`, true);
     return;
   }
   try {
@@ -515,7 +512,9 @@ $("btn-id-apply").onclick = async () => {
 
 $("btn-id-clear").onclick = async () => {
   try {
-    const d = await post("/api/identify/clear", {});
+    const arm = window.currentSet?.arm || lastIdentify?.solution?.arm;
+    if (!arm) { flash("先选姿态集（去掉哪只手的负载项）", false); return; }
+    const d = await post("/api/identify/clear", { arm });
     if (d.identify) applyIdentify(d.identify);
     flash("已去掉负载项，只剩 URDF 臂自重", true);
   } catch (e) { flash(String(e), false); }
@@ -545,7 +544,8 @@ $("btn-val-start").onclick = async () => {
   if ($("val-pay").checked) modes.push("payload");
   if ($("val-corr").checked) modes.push("payload_correct");
   if (!modes.length) { flash("至少勾一种方案", false); return; }
-  const payloadName = (lastIdentify && lastIdentify.applied_name)
+  const setArm = window.currentSet?.arm || "right";
+  const payloadName = (lastIdentify && lastIdentify[`applied_${setArm}`])
     || window.lastPayloadPick
     || "";
   if ((modes.includes("payload") || modes.includes("payload_correct")) && !payloadName) {

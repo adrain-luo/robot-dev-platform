@@ -1,4 +1,4 @@
-// 02-arm.js —— 手臂控制：关节滑条与目标、出发、控制状态 applyCtrl、接管 / 释放 / 急停 / 拖拽 / 重力 / 限速、切换控制臂
+// 02-arm.js —— 手臂控制：关节滑条与目标（按卡片选的手）、控制状态 applyCtrl、接管 / 释放 / 急停 / 左右拖拽 / 重力 / 限速
 // 由 web/static/js/ 下各文件按文件名顺序拼成 /static/app.js（同一个脚本作用域）。
 
 const ARM_JOINTS = [
@@ -15,9 +15,7 @@ let armSliderDragging = false;
 
 let armTargetDirty = false;
 
-let lastArmJoints = null;
-
- // 控制臂实测 joints[]
+let lastArmJoints = null;  // 「手臂控制」所选那只手的实测 joints[]
 
 function ensureGotoInputs() {
   const row = $("goto-inputs");
@@ -103,10 +101,13 @@ function syncArmSlidersFromLive(joints) {
 async function armGotoFromUi(confirmGo) {
   const q = readArmTargetRad();
   if (q.some((x) => !Number.isFinite(x))) { flash("手臂目标角不完整", false); return; }
-  if (confirmGo && !confirm("将限速走到目标关节角。扶住、守急停。继续？")) return;
+  const arm = armPick("motion");
+  const busy = armBusyReason(arm);
+  if (busy) { flash(busy, false); return; }
+  if (confirmGo && !confirm(`将限速把${ARM_SIDE[arm]}臂走到目标关节角。扶住、守急停。继续？`)) return;
   try {
-    await post("/api/target", { q });
-    flash("手臂目标已更新", true);
+    await post("/api/target", { q, arm });
+    flash(`${ARM_SIDE[arm]}臂目标已更新`, true);
     armTargetDirty = false;
     poll();
   } catch (e) { flash(String(e), false); }
@@ -168,25 +169,39 @@ function applyCtrl(ctrl) {
   const settling = !!(ctrl.engaged && ctrl.ready === false);
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
-  ["btn-engage", "btn-release", "btn-hold", "btn-teach", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "control-arm", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-he-run"].forEach((id) => {
+  ["btn-engage", "btn-release", "btn-hold", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-he-run"].forEach((id) => {
     const el = $(id); if (el) el.disabled = !allow;
   });
   const mirror = $("btn-poseset-mirror");
   if (mirror) mirror.disabled = !window.currentSet;
-  if ($("btn-teach")) $("btn-teach").disabled = !allow || !ctrl.engaged || settling;
-  $("btn-teach").textContent = ctrl.float ? "结束拖拽" : "拖拽";
+  const arms = ctrl.arms || {};
+  document.querySelectorAll(".btn-teach").forEach((btn) => {
+    const a = arms[btn.dataset.arm] || {};
+    btn.disabled = !allow || !ctrl.engaged || settling || !!a.owner;
+    btn.classList.toggle("on", !!a.float);
+    btn.textContent = `${a.float ? "结束" : "拖"}${ARM_SIDE[btn.dataset.arm]}`;
+  });
   $("grav-on").checked = ctrl.gravity_ff !== false;
+  // 每只手一段：受控 / 拖拽中 / 被某任务占用 / 在走；前馈带上负载名
+  const armText = (name) => {
+    const a = arms[name] || {};
+    let t = a.float ? "拖拽" : a.owner ? a.owner : a.moving ? "在走" : "锁住";
+    if (a.payload_mass_kg != null) t += ` 载${Number(a.payload_mass_kg).toFixed(2)}kg`;
+    return `${ARM_SIDE[name]}:${t}`;
+  };
   $("engage-state").textContent = allow
     ? (ctrl.transition ? `过渡中 · ${ctrl.transition}` : ctrl.engaged
-        ? `${ctrl.float ? "拖拽中" : "已接管"} · ${ctrl.arm}${ctrl.waist_locked ? " · 腰保持" : ""}${
-            ctrl.loop_hz ? ` · ${Math.round(ctrl.loop_hz)} Hz` : ""}${
-            ctrl.payload_mass_kg != null ? ` · 载 ${Number(ctrl.payload_mass_kg).toFixed(2)} kg${ctrl.payload_name ? "(" + ctrl.payload_name + ")" : ""}` : ""
-          }`
+        ? `已接管 · ${["left", "right"].filter((n) => arms[n]).map(armText).join(" ")}${
+            ctrl.waist_locked ? " · 腰保持" : ""}${ctrl.loop_hz ? ` · ${Math.round(ctrl.loop_hz)} Hz` : ""}`
         : "未接管")
     : "只读（加 --allow-real-motion 后可接管）";
-  document.querySelectorAll(".g-q, .g-slider").forEach((el) => { el.disabled = !allow || !!ctrl.float || settling; });
+  const motionArm = arms[armPick("motion")] || {};
+  document.querySelectorAll(".g-q, .g-slider").forEach((el) => {
+    el.disabled = !allow || !!motionArm.float || !!motionArm.owner || settling;
+  });
+  const jogArm = arms[armPick("jog")] || {};
   document.querySelectorAll(".tcp-jog-btn").forEach((el) => {
-    el.disabled = !allow || !ctrl.engaged || !!ctrl.float || tcpJogBusy || settling;
+    el.disabled = !allow || !ctrl.engaged || !!jogArm.float || !!jogArm.owner || tcpJogBusy || settling;
   });
   ["tcp-jog-step-mm", "tcp-jog-step-deg"].forEach((id) => {
     const el = $(id);
@@ -213,7 +228,6 @@ function applyCtrl(ctrl) {
     if (Number(sp.value) !== v) sp.value = v;
     showSpeed(v);
   }
-  if (ctrl.arm) $("control-arm").value = ctrl.arm;
 }
 
 $("btn-engage").onclick = async () => {
@@ -242,14 +256,19 @@ $("btn-hold").onclick = async () => {
   try { await post("/api/hold", {}); flash("急停：退出拖拽，保持当前角", true); } catch (e) { flash(String(e), false); }
 };
 
-$("btn-teach").onclick = async () => {
-  const on = $("btn-teach").textContent !== "结束拖拽";
-  if (on && !confirm("将卸力拖拽（kp=0，保留重力前馈）。请先扶住手臂。继续？")) return;
-  try {
-    await post("/api/teach", { enabled: on });
-    flash(on ? "拖拽中：手推手臂；急停可立刻变硬" : "已结束拖拽并锁在当前角", true);
-  } catch (e) { flash(String(e), false); }
-};
+// 拖拽按手分开：一只手卸力拖拽时，另一只手照常受控
+document.querySelectorAll(".btn-teach").forEach((btn) => {
+  btn.onclick = async () => {
+    const arm = btn.dataset.arm;
+    const side = ARM_SIDE[arm];
+    const on = !((window.lastCtrl?.arms || {})[arm] || {}).float;
+    if (on && !confirm(`将让${side}臂卸力拖拽（kp=0，保留重力前馈），另一只手照常受控。请先扶住${side}臂。继续？`)) return;
+    try {
+      await post("/api/teach", { enabled: on, arm });
+      flash(on ? `${side}臂拖拽中：手推手臂；急停可立刻变硬` : `${side}臂已结束拖拽并锁在当前角`, true);
+    } catch (e) { flash(String(e), false); }
+  };
+});
 
 $("grav-on").onchange = async () => {
   try {
@@ -267,7 +286,10 @@ $("speed").addEventListener("change", async () => {
   } catch (e) { flash(String(e), false); window.speedDirty = false; }
 });
 
-$("control-arm").onchange = async () => {
-  try { await post("/api/control-arm", { arm: $("control-arm").value }); flash("控制臂已切换", true); }
-  catch (e) { flash(String(e), false); }
-};
+// 「手臂控制」换手：滑条改跟那只手的实测角
+document.addEventListener("arm-pick", (ev) => {
+  if (ev.detail.key !== "motion") return;
+  armTargetDirty = false;
+  armSliderDragging = false;
+  poll();
+});

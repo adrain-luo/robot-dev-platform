@@ -1,4 +1,4 @@
-"""整套 HTTP 接口跑在 mock 后端上：接管、走点、急停、拖拽、腰、立柱、换臂、释放。
+"""整套 HTTP 接口跑在 mock 后端上：接管（双臂）、走点、急停、拖拽、腰、立柱、释放。
 
 只调不落盘的接口（不存 TCP / 负载 / 零位），跑完不改仓库里的数据文件。
 """
@@ -39,34 +39,48 @@ def test_engage_target_hold_release(mock_server):
     tgt = list(q0)
     tgt[3] -= 0.2
     assert c.post("/api/speed", {"max_speed_rad_s": 0.5})[0] == 200
-    assert c.post("/api/target", {"q": tgt})[0] == 200
+    assert c.post("/api/target", {"q": tgt, "arm": "right"})[0] == 200
     c.wait(lambda s: abs(s["arms"]["right"]["joints"][3]["q_rad"] - tgt[3]) < 0.01)
 
     # 急停：目标锁回实测，后续不再动
     tgt2 = list(tgt)
     tgt2[3] += 0.3
-    c.post("/api/target", {"q": tgt2})
+    c.post("/api/target", {"q": tgt2, "arm": "right"})
     code, d = c.post("/api/hold")
     assert code == 200
-    a = c.get("/api/scene")["ctrl"]["desired_rad"][3]
-    b = c.get("/api/scene")["ctrl"]["desired_rad"][3]
+    a = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"][3]
+    b = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"][3]
     assert a == b and abs(a - tgt2[3]) > 0.05
 
     code, d = c.post("/api/release")
     assert code == 200 and not d["ctrl"]["engaged"]
-    code, d = c.post("/api/target", {"q": tgt})
+    code, d = c.post("/api/target", {"q": tgt, "arm": "right"})
     assert code == 403
 
 
-def test_teach_mode(mock_server):
+def test_target_requires_arm(mock_server):
+    """没有「当前控制臂」了：设目标必须说明是哪只手。"""
     c = mock_server
     c.post("/api/engage")
-    code, d = c.post("/api/teach", {"enabled": True})
-    assert code == 200 and d["ctrl"]["float"]
-    code, d = c.post("/api/target", {"q": d["ctrl"]["cmd_rad"]})
-    assert code == 403, "拖拽中不允许走点"
-    code, d = c.post("/api/teach", {"enabled": False})
-    assert not d["ctrl"]["float"]
+    q = c.get("/api/scene")["ctrl"]["arms"]["right"]["cmd_rad"]
+    code, d = c.post("/api/target", {"q": q})
+    assert code != 200 and "哪只手" in d["error"]
+    c.post("/api/release")
+
+
+def test_teach_mode_one_arm(mock_server):
+    """左手拖拽时右手照常能走点；左手自己不能走点。"""
+    c = mock_server
+    c.post("/api/engage")
+    code, d = c.post("/api/teach", {"enabled": True, "arm": "left"})
+    arms = d["ctrl"]["arms"]
+    assert code == 200 and arms["left"]["float"] and not arms["right"]["float"]
+    code, d = c.post("/api/target", {"q": arms["left"]["cmd_rad"], "arm": "left"})
+    assert code == 403, "拖拽中的手不允许走点"
+    code, d = c.post("/api/target", {"q": arms["right"]["cmd_rad"], "arm": "right"})
+    assert code == 200, "另一只手照常受控"
+    code, d = c.post("/api/teach", {"enabled": False, "arm": "left"})
+    assert not d["ctrl"]["arms"]["left"]["float"]
     c.post("/api/release")
 
 
@@ -99,15 +113,16 @@ def test_lift_step_and_stop(mock_server):
     assert d["ok"] and not d["busy"]
 
 
-def test_switch_arm_requires_release(mock_server):
+def test_engage_takes_both_arms(mock_server):
+    """接管就是两只手一起：都锁住、都有指令角；没有切换控制臂的接口了。"""
     c = mock_server
-    c.post("/api/engage")
-    code, d = c.post("/api/control-arm", {"arm": "left"})
-    assert code == 500 and "释放" in d["error"]
+    code, d = c.post("/api/engage")
+    assert code == 200 and set(d["ctrl"]["arms"]) == {"left", "right"}
+    for arm in ("left", "right"):
+        assert len(d["ctrl"]["arms"][arm]["cmd_rad"]) == 7
+    s = c.get("/api/scene")
+    assert "cmd_links" in s["arms"]["left"]["scene"] and "cmd_links" in s["arms"]["right"]["scene"]
     c.post("/api/release")
-    code, d = c.post("/api/control-arm", {"arm": "left"})
-    assert code == 200 and d["ctrl"]["arm"] == "left"
-    c.post("/api/control-arm", {"arm": "right"})
 
 
 def test_robot_caps(mock_server):
@@ -142,7 +157,6 @@ def test_hold_stops_multi_pose_tasks(mock_server):
     if st["ctrl"].get("engaged"):
         c.post("/api/release")
         c.wait(lambda s: not s["ctrl"]["engaged"] and not s["ctrl"].get("transition"))
-    assert c.post("/api/control-arm", {"arm": "right"})[0] == 200
     assert c.post("/api/engage")[0] == 200
     assert c.post("/api/speed", {"max_speed_rad_s": 0.4})[0] == 200
     name = "estop_test_set"
@@ -152,17 +166,17 @@ def test_hold_stops_multi_pose_tasks(mock_server):
     for d in (0.0, 0.5, -0.5, 0.5):
         tgt = list(q0)
         tgt[3] += d
-        c.post("/api/target", {"q": tgt})
+        c.post("/api/target", {"q": tgt, "arm": "right"})
         c.wait(lambda s: abs(s["arms"]["right"]["joints"][3]["q_rad"] - tgt[3]) < 0.01, timeout_s=10)
         assert c.post("/api/posesets/record", {"name": name})[0] == 200
-    c.post("/api/target", {"q": q0})
+    c.post("/api/target", {"q": q0, "arm": "right"})
     c.wait(lambda s: abs(s["arms"]["right"]["joints"][3]["q_rad"] - q0[3]) < 0.01, timeout_s=10)
 
     code, d = c.post("/api/identify/measure", {"name": name})
     assert code == 200 and d["identify"]["running"], d
     # 等它开始走（desired 离开起点）再急停
     try:
-        c.wait(lambda s: abs(s["ctrl"]["desired_rad"][3] - q0[3]) > 0.1, timeout_s=30)
+        c.wait(lambda s: abs(s["ctrl"]["arms"]["right"]["desired_rad"][3] - q0[3]) > 0.1, timeout_s=30)
     except AssertionError:
         raise AssertionError(str(c.get("/api/scene")["identify"]))
     time.sleep(0.3)
@@ -171,9 +185,9 @@ def test_hold_stops_multi_pose_tasks(mock_server):
     while c.get("/api/scene")["identify"]["running"]:
         assert time.monotonic() - t0 < 5, "急停后负载测量还在跑"
         time.sleep(0.1)
-    d1 = c.get("/api/scene")["ctrl"]["desired_rad"]
+    d1 = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"]
     time.sleep(2.0)
-    d2 = c.get("/api/scene")["ctrl"]["desired_rad"]
+    d2 = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"]
     assert d1 == d2, "急停后手臂又被发了新目标"
     c.post("/api/posesets/delete", {"name": name})
     c.post("/api/release")
