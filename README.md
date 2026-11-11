@@ -17,7 +17,7 @@ python serve.py --backend mock   # 不接机器人，仿真
 
 `serve.py` 不用安装即可运行。也可以 `pip install -e . --no-deps` 装进当前环境，之后在任何目录用 `python -m robot_platform` 或 `robot-platform` 启动，参数相同。
 
-首次若没有 `abyss` 环境：`conda env create -f environment.yml`，或跑 `./setup_env.sh`。
+所有设备统一用 conda 环境 `abyss`（不用 venv）。首次或依赖变了：`bash setup_env.sh`（按 environment.yml 建 / 更新并自检 SDK）。
 
 启动时用 `instances/default` 里写的机器实例，也可 `--instance <名字>` 指定；新机器先建实例，见 [`instances/README.md`](instances/README.md)。
 
