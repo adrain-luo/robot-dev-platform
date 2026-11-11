@@ -163,8 +163,10 @@ def test_foreign_flagged_while_engaged(mock_server):
     assert code == 200, d
     c.post("/api/mock/foreign", {"hz": 100})
     try:
-        s = c.wait(lambda s: s["ctrl"]["cmd_bus"]["foreign"])
-        assert s["ctrl"]["engaged"] and s["ctrl"]["cmd_bus"]["own_hz"] > 10
+        # own_hz 是最近 1 s 窗口里的帧数：接管后第 1 s 内从 0 往上爬，
+        # 而别人的消息 2 条就判占用（约 0.1 s），所以两个条件一起等，不能先等到 foreign 就断言 own_hz
+        s = c.wait(lambda s: s["ctrl"]["cmd_bus"]["foreign"] and s["ctrl"]["cmd_bus"]["own_hz"] > 10)
+        assert s["ctrl"]["engaged"]
     finally:
         c.post("/api/mock/foreign", {"hz": 0})
         c.post("/api/release")
