@@ -131,9 +131,10 @@ class TcpMixin:
             else:
                 R_tgt = R.copy()
             keep_lock = R_lock is not None
+            free_axis = self.work_pose_free_axis() if keep_lock else None
             self._work_pose_motion = True
             try:
-                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, c_tgt, R_tgt)
+                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, c_tgt, R_tgt, free_axis=free_axis)
                 if miss_mm > 3.0 or ori_deg > 3.0:
                     raise ValueError(
                         f"平移不到：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"
@@ -164,10 +165,13 @@ class TcpMixin:
                 raise ValueError(f"旋转步长无效：{exc}") from exc
             if not (0.2 <= step_deg <= 30.0):
                 raise ValueError("旋转步长请在 0.2～30°")
-            # 旋转会改姿态：这只手锁着的工作姿态解锁
-            if R_lock is not None:
+            # 可平转姿态绕 z 转：绕重力方向转、锁不解（绕重力本来就不约束）；其余旋转会改姿态，解锁
+            free_axis = self.work_pose_free_axis() if R_lock is not None else None
+            yaw_keep = free_axis is not None and axis == "z"
+            if R_lock is not None and not yaw_keep:
                 self.unlock_work_pose("tcp_jog_rotate")
-            R_delta = axis_angle_R(axis_vec, sign * step_deg)
+                free_axis = None
+            R_delta = axis_angle_R(free_axis if yaw_keep else axis_vec, sign * step_deg)
             R_tgt = R_delta @ R
             c_tgt = c.copy()
             q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, c_tgt, R_tgt)
@@ -184,10 +188,12 @@ class TcpMixin:
             out["step_deg"] = step_deg
             out["plan_miss_mm"] = float(miss_mm)
             out["plan_ori_deg"] = float(ori_deg)
-            out["work_pose_locked"] = False
+            out["work_pose_locked"] = yaw_keep
             out["arm"] = arm
+            around = "重力（竖直）" if yaw_keep else f"躯干 {axis.upper()}"
             out["message"] = (
-                f"{side}臂 TCP 绕躯干 {axis.upper()} {'+' if sign > 0 else '−'}{step_deg:g}°（红点不动）"
+                f"{side}臂 TCP 绕{around} {'+' if sign > 0 else '−'}{step_deg:g}°（红点不动"
+                + ("，可平转姿态保持锁定）" if yaw_keep else "）")
             )
             return out
 

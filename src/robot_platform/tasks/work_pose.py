@@ -21,6 +21,16 @@ def ik_mode_path() -> Path:
     return instances.path("pose_ik_mode")
 # single=旧：当前角一枪局部 IK；robust=新：多初值全姿态 IK
 IK_MODES = ("single", "robust")
+# 姿态里不约束的转动：""=三轴全锁；"gravity_z"=可平转，绕重力方向（竖直）转不限
+FREE_MODES = ("", "gravity_z")
+FREE_LABELS = {"": "全锁", "gravity_z": "可平转（绕重力 z）"}
+
+
+def check_free(free) -> str:
+    free = str(free or "").strip()
+    if free not in FREE_MODES:
+        raise ValueError(f"不认识的姿态自由度 {free!r}，只能是 {FREE_MODES}")
+    return free
 _NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 _TCP_DIR_RE = re.compile(r"^[\w\-\u4e00-\u9fff.]{1,48}$")
 
@@ -85,6 +95,7 @@ def list_for_tcp(tcp_name: str) -> List[Dict[str, Any]]:
             "tcp_name": doc.get("tcp_name") or tcp_name,
             "arm": doc.get("arm") or "",
             "note": doc.get("note") or "",
+            "free": doc.get("free") or "",
             "saved_at": doc.get("saved_at") or "",
         })
     return out
@@ -134,6 +145,7 @@ class WorkPoseSession:
         self.R_lock: Optional[np.ndarray] = None
         self.q_seed: Optional[np.ndarray] = None  # 记下/调用时的关节角，供多初值 IK
         self.note = ""
+        self.free = ""  # 见 FREE_MODES
         self.ik_mode = _read_ik_mode()
 
     def set_ik_mode(self, mode: str) -> Dict[str, Any]:
@@ -154,6 +166,7 @@ class WorkPoseSession:
             "tcp_name": self.tcp_name if self.locked else "",
             "arm": self.arm if self.locked else "",
             "note": self.note if self.locked else "",
+            "free": self.free if self.locked else "",
             "R": self.R_lock.tolist() if (self.locked and self.R_lock is not None) else None,
             "ik_mode": self.ik_mode,
             "saved": list_for_tcp(tcp) if tcp else [],
@@ -168,6 +181,7 @@ class WorkPoseSession:
         self.R_lock = None
         self.q_seed = None
         self.note = ""
+        self.free = ""
         return self.status()
 
     def unlock_if_tcp_mismatch(self, tcp_name: str) -> bool:
@@ -187,8 +201,10 @@ class WorkPoseSession:
         R,
         q=None,
         note: str = "",
+        free: str = "",
     ) -> Dict[str, Any]:
         name = _check_name(name)
+        free = check_free(free)
         tcp_name = _check_tcp_dir(tcp_name)
         arm = "left" if arm == "left" else "right"
         Rm = np.asarray(R, dtype=float).reshape(3, 3)
@@ -212,6 +228,8 @@ class WorkPoseSession:
             "R": Rm.tolist(),
             "note": (note or "").strip(),
         }
+        if free:
+            doc["free"] = free
         if q is not None:
             qa = np.asarray(q, dtype=float).reshape(-1)
             if np.all(np.isfinite(qa)):
@@ -244,6 +262,7 @@ class WorkPoseSession:
         self.arm = str(doc.get("arm") or "")
         self.R_lock = Rm
         self.note = str(doc.get("note") or "")
+        self.free = check_free(doc.get("free"))
         self.q_seed = None
         for cand in (q_now, doc.get("q_rad")):
             if cand is None:

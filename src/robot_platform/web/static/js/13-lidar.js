@@ -63,10 +63,13 @@ async function lidarFetchOnce() {
       return;
     }
     const drawn = window.RobotView && window.RobotView.setLidarCloud
-      ? window.RobotView.setLidarCloud(d.xyz, d.rgb) : false;
+      ? window.RobotView.setLidarCloud(d.xyz, d.rgb, d.ground) : false;
     const rng = d.range_m ? `距离 ${d.range_m.near.toFixed(2)}–${d.range_m.far.toFixed(1)} m（中位 ${d.range_m.median.toFixed(2)}）` : "";
     if (note) {
-      note.textContent = `${d.hz > 0 ? d.hz + " Hz" : "测速中"} · 每帧 ${d.n_raw} 点，范围内 ${d.n_valid}，显示 ${d.n_sent}。${rng}`
+      const gnd = d.ground
+        ? ` 地面：躯干离地 ${(d.ground.height_m * 1000).toFixed(0)} mm（±${d.ground.rms_mm.toFixed(0)} mm），模型按它落地。`
+        : " 没找到地面，模型按轮子落地。";
+      note.textContent = `${d.hz > 0 ? d.hz + " Hz" : "测速中"} · 每帧 ${d.n_raw} 点，范围内 ${d.n_valid}，显示 ${d.n_sent}。${rng}${gnd}`
         + (drawn ? "" : " 三维画面还没准备好。") + (lidarLive ? " 实时中。" : "");
     }
   } catch (e) {

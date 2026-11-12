@@ -9,7 +9,9 @@ import numpy as np
 from robot_platform.calib.payload import identify as iden
 from robot_platform.control.arm_loop import PermissionErrorMotion
 from robot_platform.core.layout import get_arm
-from robot_platform.tasks.spatial_points import solve_tcp_ik, solve_tcp_pose_ik, solve_tcp_pose_ik_robust
+from robot_platform.tasks.spatial_points import (
+    pose_ori_miss_deg, solve_tcp_ik, solve_tcp_pose_ik, solve_tcp_pose_ik_robust,
+)
 
 
 class WorkPoseMixin:
@@ -31,11 +33,33 @@ class WorkPoseMixin:
             return None, None
         return wp.R_lock, wp.q_seed
 
+    def gravity_up(self) -> np.ndarray:
+        """躯干系里的「竖直向上」：有躯干 IMU 用实测，否则躯干 +z。"""
+        loop = getattr(self, "loop", None)
+        grav = getattr(loop, "gravity", None) if loop is not None else None
+        if grav is not None:
+            try:
+                return np.asarray(grav.up_dir(), dtype=float)
+            except Exception:  # noqa: BLE001
+                pass
+        return np.array([0.0, 0.0, 1.0])
+
+    def free_axis_for(self, free: str):
+        """姿态自由度 → IK 的不约束转轴（躯干系）；全锁返回 None。"""
+        return self.gravity_up() if free == "gravity_z" else None
+
+    def work_pose_free_axis(self):
+        """当前锁定姿态的不约束转轴（可平转 → 重力方向）；没锁或全锁时 None。"""
+        wp = self.work_pose
+        return self.free_axis_for(wp.free) if wp.locked else None
+
     def _solve_tcp_motion(self, model, q0, tcp, target, R_lock):
-        """有锁定姿态则按配置做单次/多初值 6D IK，否则纯位置。返回 (q, miss_mm, ori_miss_deg|None)。"""
+        """有锁定姿态则按配置做单次/多初值 6D IK（可平转时绕重力不约束），否则纯位置。
+        返回 (q, miss_mm, ori_miss_deg|None)。"""
         if R_lock is not None:
+            free_axis = self.work_pose_free_axis()
             if self.work_pose.ik_mode == "single":
-                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, target, R_lock)
+                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, target, R_lock, free_axis=free_axis)
             else:
                 extra = []
                 if self.work_pose.q_seed is not None:
@@ -49,6 +73,7 @@ class WorkPoseMixin:
                     extra_seeds=extra,
                     n_random=16,
                     n_ok_stop=5,
+                    free_axis=free_axis,
                 )
             return q, miss_mm, ori_deg
         q, miss_mm = solve_tcp_ik(model, q0, tcp, target)
@@ -76,6 +101,7 @@ class WorkPoseMixin:
                     T[:3, :3],
                     q=st.q,
                     note=note,
+                    free=str(body.get("free") or ""),
                 )
             if path == "/api/work-pose/delete":
                 return self.work_pose.delete(tcp_name, name)
@@ -125,6 +151,7 @@ class WorkPoseMixin:
             raise ValueError(f"该姿态属于 TCP「{tcp_name}」，请先为{side}臂调用该 TCP")
         tcp = np.asarray(tcp, dtype=float).reshape(3)
         R_target = np.asarray(doc["R"], dtype=float).reshape(3, 3)
+        free_axis = self.free_axis_for(str(doc.get("free") or ""))
         model = self.kin.arms[arm].model
         q0 = np.asarray(self.reader().read_arm(loop.layout(arm)).q, dtype=float)
         view = loop.view(arm)
@@ -133,14 +160,14 @@ class WorkPoseMixin:
         self._work_pose_motion = True
         try:
             if self.work_pose.ik_mode == "single":
-                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, hold, R_target)
+                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, hold, R_target, free_axis=free_axis)
             else:
                 extra = []
                 if doc.get("q_rad") is not None:
                     extra.append(doc["q_rad"])
                 q, miss_mm, ori_deg = solve_tcp_pose_ik_robust(
                     model, q0, tcp, hold, R_target,
-                    extra_seeds=extra, n_random=12, n_ok_stop=5,
+                    extra_seeds=extra, n_random=12, n_ok_stop=5, free_axis=free_axis,
                 )
             if miss_mm > 8.0 or ori_deg > 5.0:
                 raise ValueError(
@@ -169,9 +196,7 @@ class WorkPoseMixin:
             t2, R2 = model.fk(q_meas)
             tcp_now = t2 + R2 @ tcp
             pos_miss = float(np.linalg.norm(tcp_now - hold) * 1000.0)
-            # rotvec err
-            from robot_platform.tasks.spatial_points import _rotvec_from_R
-            ori_miss = float(np.degrees(np.linalg.norm(_rotvec_from_R(R_target @ R2.T))))
+            ori_miss = pose_ori_miss_deg(R_target, R2, free_axis)
             self.work_pose.apply_lock(doc, q_now=q_meas)
             out = self.work_pose.status(tcp_name)
             out["plan_miss_mm"] = float(miss_mm)

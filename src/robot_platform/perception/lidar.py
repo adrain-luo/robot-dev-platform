@@ -169,6 +169,8 @@ class MockLidar:
     """仿真：地面 + 前方一堵墙 + 一个箱子，按雷达安装位姿换到雷达系（看起来和真雷达一样要再换回来）。"""
 
     kind = "mock"
+    # 躯干系里的地面高度：约等于 G1D 升降在底时躯干离地（0.85 m）再低 1 cm，三维里能看出「按雷达落地」
+    GROUND_Z = -0.86
 
     def __init__(self, T_base_lidar: np.ndarray):
         self.last_error = ""
@@ -179,9 +181,10 @@ class MockLidar:
     def latest(self, max_age_s: float = 2.0):
         r = self._rng
         g = r.uniform(-6, 6, size=(9000, 2))
-        ground = np.c_[g, np.full(len(g), -0.75)]  # 躯干系里地面大约在 0.75 m 以下
-        wall = np.c_[np.full(3000, 3.0), r.uniform(-3, 3, 3000), r.uniform(-0.75, 1.5, 3000)]
-        box = np.c_[r.uniform(1.0, 1.4, 1500), r.uniform(-0.3, 0.3, 1500), r.uniform(-0.75, -0.35, 1500)]
+        gz = self.GROUND_Z
+        ground = np.c_[g, np.full(len(g), gz)]
+        wall = np.c_[np.full(3000, 3.0), r.uniform(-3, 3, 3000), r.uniform(gz, 1.5, 3000)]
+        box = np.c_[r.uniform(1.0, 1.4, 1500), r.uniform(-0.3, 0.3, 1500), r.uniform(gz, gz + 0.4, 1500)]
         pts = np.vstack([ground, wall, box]) + r.normal(0, 0.01, (13500, 3))
         homo = np.c_[pts, np.ones(len(pts))]
         xyz = (self._T_lidar_base @ homo.T).T[:, :3].astype(np.float32)
@@ -190,3 +193,52 @@ class MockLidar:
 
     def close(self) -> None:
         pass
+
+
+def fit_ground(pts: np.ndarray, up=(0.0, 0.0, 1.0), *, radius_m: float = 4.0, below_m: float = 0.3,
+               max_tilt_deg: float = 12.0, tol_m: float = 0.02, min_inliers: int = 300,
+               sample: int = 6000, iters: int = 200, seed: int = 0) -> Optional[dict]:
+    """在躯干系点云里找地面：躯干下方 below_m 以下、水平 radius_m 以内、法向与 up 夹角不超过
+    max_tilt_deg 的最大平面（RANSAC + 内点最小二乘）。返回 {n, d, inliers, rms_mm, height_m}，
+    平面 n·p + d = 0，n 朝上（与 up 同侧），height_m 为躯干原点离地高度；找不到返回 None。"""
+    up = np.asarray(up, dtype=float).reshape(3)
+    up = up / max(np.linalg.norm(up), 1e-9)
+    P = np.asarray(pts, dtype=np.float64).reshape(-1, 3)
+    if not len(P):
+        return None
+    h = P @ up
+    horiz = np.linalg.norm(P - np.outer(h, up), axis=1)
+    P = P[(h < -below_m) & (horiz < radius_m)]
+    if len(P) < min_inliers:
+        return None
+    rng = np.random.default_rng(seed)
+    if len(P) > sample:
+        P = P[rng.choice(len(P), sample, replace=False)]
+    cos_lim = math.cos(math.radians(max_tilt_deg))
+    best = None
+    for _ in range(int(iters)):
+        a, b, c = P[rng.choice(len(P), 3, replace=False)]
+        n = np.cross(b - a, c - a)
+        nn = float(np.linalg.norm(n))
+        if nn < 1e-9:
+            continue
+        n /= nn
+        if n @ up < 0:
+            n = -n
+        if n @ up < cos_lim:
+            continue
+        inl = np.abs((P - a) @ n) < tol_m
+        if best is None or inl.sum() > best.sum():
+            best = inl
+    if best is None or int(best.sum()) < min_inliers:
+        return None
+    G = P[best]
+    c = G.mean(axis=0)
+    _, _, vt = np.linalg.svd(G - c, full_matrices=False)
+    n = vt[2] if vt[2] @ up > 0 else -vt[2]
+    if n @ up < cos_lim:
+        return None
+    d = float(-n @ c)
+    res = G @ n + d
+    return {"n": [float(v) for v in n], "d": d, "inliers": int(len(G)),
+            "rms_mm": float(np.sqrt(np.mean(res ** 2)) * 1000.0), "height_m": d}

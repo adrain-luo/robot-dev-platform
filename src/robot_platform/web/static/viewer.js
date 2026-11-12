@@ -121,15 +121,14 @@ const View = {
       robot.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(robot);
       // 腿式机型（如 G1）根在骨盆、一截在原点下面：抬到脚落地，之后随腿部实测再贴地。
-      // 由后端机型能力明确告知，不按几何猜（G1D 底盘也有部分低于原点，但它不该动）
+      // 由后端机型能力明确告知，不按几何猜（轮式 G1D 不随腿重贴地，地面看雷达）
       this._floating = await fetch("/api/robot", { cache: "no-store" })
         .then((r) => r.json()).then((c) => !!c.legged).catch(() => false);
-      if (this._floating) this._ground(box);
+      // 腿式按脚贴地；轮式（G1D）先按轮子最低点贴地，有雷达点云后改用雷达拟合的地面（setLidarCloud）
+      this._ground(box);
       const size = box.getSize(new THREE.Vector3());
       this.height = Math.max(size.z, 0.4);
-      const grid = new THREE.GridHelper(Math.max(this.height * 2.4, 2), 16, 0x243044, 0x1a2330);
-      grid.rotation.x = Math.PI / 2;
-      scene.add(grid);
+      this._gridDefault();
       this.ready = true;
       this.resize();
       this.home();
@@ -464,8 +463,90 @@ const View = {
     this.render();
     return true;
   },
+  // ---------------------------------------------------------------- 地面网格
+  // 每格 10 cm（每 1 m 一条亮线），铺在 z = 0（地面）；范围跟雷达点云走，没有点云时围着机器人
+  GRID_STEP: 0.1,
+  _gridDefault() {
+    const r = Math.ceil(Math.max((this.height || 1) * 1.2, 1) / 0.5) * 0.5;
+    this._setGrid(-r, r, -r, r);
+  },
+  _setGrid(x0, x1, y0, y1) {
+    const key = [x0, x1, y0, y1].map((v) => v.toFixed(2)).join(",");
+    if (this._gridKey === key) return;
+    this._gridKey = key;
+    if (this.grid) {
+      this.scene3.remove(this.grid);
+      this.grid.geometry.dispose();
+      this.grid.material.dispose();
+    }
+    const step = this.GRID_STEP;
+    const pos = [];
+    const col = [];
+    const minor = new THREE.Color(0x1a2330);
+    const major = new THREE.Color(0x33415a);
+    const push = (ax, ay, bx, by, c) => {
+      pos.push(ax, ay, 0, bx, by, 0);
+      col.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    };
+    const nx = Math.round((x1 - x0) / step);
+    const ny = Math.round((y1 - y0) / step);
+    for (let i = 0; i <= nx; i++) {
+      const x = x0 + i * step;
+      push(x, y0, x, y1, Math.abs(x - Math.round(x)) < 1e-6 ? major : minor);
+    }
+    for (let j = 0; j <= ny; j++) {
+      const y = y0 + j * step;
+      push(x0, y, x1, y, Math.abs(y - Math.round(y)) < 1e-6 ? major : minor);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+    this.grid = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true }));
+    this.grid.userData.slot = "grid";
+    this.scene3.add(this.grid);
+  },
+  // 网格范围 = 雷达点云的水平范围（世界系，向外取整到 0.5 m，含机器人周围 1 m），抖动时不重建
+  _gridFromCloud(pointsObj) {
+    const arr = pointsObj.geometry.getAttribute("position");
+    if (!arr || !arr.count) return;
+    pointsObj.updateMatrixWorld(true);
+    const m = pointsObj.matrixWorld.elements;
+    const a = arr.array;
+    let x0 = -1, x1 = 1, y0 = -1, y1 = 1;
+    const stride = Math.max(1, Math.floor(arr.count / 4000));
+    for (let i = 0; i < arr.count; i += stride) {
+      const px = a[3 * i], py = a[3 * i + 1], pz = a[3 * i + 2];
+      const wx = m[0] * px + m[4] * py + m[8] * pz + m[12];
+      const wy = m[1] * px + m[5] * py + m[9] * pz + m[13];
+      if (wx < x0) x0 = wx; if (wx > x1) x1 = wx;
+      if (wy < y0) y0 = wy; if (wy > y1) y1 = wy;
+    }
+    const out = (v, f) => f(v / 0.5) * 0.5;
+    this._setGrid(out(x0, Math.floor), out(x1, Math.ceil), out(y0, Math.floor), out(y1, Math.ceil));
+  },
+  // 雷达拟合的地面（躯干系平面 n·p + d = 0）→ 把整机上下挪，让这个地面落在 z = 0（网格）。
+  // 只用于轮式机型（G1D）；腿式（G1）照旧按脚贴地。小于 1 mm 的变化不动，大的分两三帧收过去，免得闪
+  _groundFromLidar(ground) {
+    const torso = this.links.get("torso_link");
+    if (!ground || !torso || this._floating || !Array.isArray(ground.n)) return false;
+    torso.updateMatrixWorld(true);
+    const n = new THREE.Vector3(+ground.n[0], +ground.n[1], +ground.n[2]);
+    const p0 = torso.localToWorld(n.clone().multiplyScalar(-(+ground.d)));
+    const nw = n.clone().transformDirection(torso.matrixWorld);
+    if (!(Math.abs(nw.z) > 0.8)) return false;
+    // 机器人正下方（底盘原点的水平位置）的地面高度
+    const o = this.robot.position;
+    const zg = p0.z - ((o.x - p0.x) * nw.x + (o.y - p0.y) * nw.y) / nw.z;
+    if (!Number.isFinite(zg) || Math.abs(zg) < 0.001) return true;
+    const first = !this.groundSource;
+    this.robot.position.z -= first ? zg : 0.5 * zg;
+    this.robot.updateMatrixWorld(true);
+    this.groundSource = "lidar";
+    this.groundInfo = { inliers: ground.inliers, rms_mm: ground.rms_mm };
+    return true;
+  },
   // 雷达点云：单独一层，挂在躯干上（点已在躯干系），每次刷新替换，不参与相机点云的叠帧 / 清除
-  setLidarCloud(xyz, rgb) {
+  setLidarCloud(xyz, rgb, ground) {
     const torso = this.links.get("torso_link");
     if (!this.ready || !torso || !xyz || xyz.length < 3) return false;
     const colors = new Float32Array(rgb.length);
@@ -481,6 +562,8 @@ const View = {
     geo.setAttribute("position", new THREE.Float32BufferAttribute(Float32Array.from(xyz), 3));
     geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     geo.computeBoundingSphere();
+    this._groundFromLidar(ground);
+    this._gridFromCloud(this.lidarPoints);
     this.render();
     return true;
   },
@@ -488,6 +571,8 @@ const View = {
     if (this.lidarPoints) {
       this._disposePoints(this.lidarPoints);
       this.lidarPoints = null;
+      // 地面高度留着（还是最好的估计），网格回到机器人周围
+      this._gridDefault();
       this.render();
     }
     return true;

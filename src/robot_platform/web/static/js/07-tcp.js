@@ -9,6 +9,11 @@ function tcpOnWrist(tcp, arms) {
   return [0, 1, 2].map((i) => T[i][3] + T[i][0] * offset[0] + T[i][1] * offset[1] + T[i][2] * offset[2]);
 }
 
+// 工作姿态自由度的短标签：可平转 = 绕重力 z 不约束
+function wpFreeTag(free) {
+  return free === "gravity_z" ? "（可平转）" : "";
+}
+
 function renderWorkPose(wp, tcp) {
   if (!wp) return;
   window.lastWorkPose = wp;
@@ -21,7 +26,7 @@ function renderWorkPose(wp, tcp) {
   const now = $("wp-now");
   if (now) {
     now.textContent = wp.locked && wp.active_name
-      ? `锁定：${wp.active_name}${wp.note ? " · " + wp.note : ""}`
+      ? `锁定：${wp.active_name}${wpFreeTag(wp.free)}${wp.note ? " · " + wp.note : ""}`
       : "锁定：无";
   }
   const hint = $("wp-tcp-hint");
@@ -33,7 +38,7 @@ function renderWorkPose(wp, tcp) {
   }
   const rows = (wp.saved || []).map((s) => ({
     value: s.name,
-    label: s.note ? `${s.name} · ${s.note}` : s.name,
+    label: `${s.name}${wpFreeTag(s.free)}${s.note ? " · " + s.note : ""}`,
   }));
   const placeholder = tcpName
     ? (rows.length ? "选择工作姿态…" : "这个 TCP 还没有工作姿态")
@@ -259,9 +264,10 @@ if ($("btn-wp-save")) {
         arm: window.lastTcpArm,
         name,
         note: $("wp-note")?.value.trim() || "",
+        free: $("wp-free-yaw")?.checked ? "gravity_z" : "",
       });
       if ($("wp-name")) $("wp-name").value = "";
-      flash(`已记下工作姿态「${name}」`, true);
+      flash(`已记下${$("wp-free-yaw")?.checked ? "可平转" : ""}工作姿态「${name}」`, true);
     } catch (e) { flash(String(e), false); }
   };
 }

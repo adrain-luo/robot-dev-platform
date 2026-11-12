@@ -149,7 +149,7 @@ ${fmtLive("右", live.right)}`
     const all = wp.saved_all || window.lastWorkPoseAll || [];
     const rows = all
       .filter((s) => s.tcp_name === tcpName && (!s.arm || s.arm === arm))
-      .map((s) => ({ value: s.name, label: s.note ? `${s.name} · ${s.note}` : s.name }));
+      .map((s) => ({ value: s.name, label: `${s.name}${wpFreeTag(s.free)}${s.note ? " · " + s.note : ""}` }));
     const keep = (wp.locked && wp.arm === arm && wp.tcp_name === tcpName) ? (wp.active_name || "") : "";
     writeOptions(
       sel,

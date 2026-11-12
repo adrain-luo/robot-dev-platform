@@ -144,6 +144,40 @@ def _rotvec_from_R(R_err: np.ndarray) -> np.ndarray:
     return w * (th / (2.0 * np.sin(th)))
 
 
+def _unit_axis(free_axis) -> Optional[np.ndarray]:
+    if free_axis is None:
+        return None
+    u = np.asarray(free_axis, dtype=float).reshape(3)
+    n = float(np.linalg.norm(u))
+    if not np.isfinite(n) or n < 1e-9:
+        return None
+    return u / n
+
+
+def nearest_about_axis(R_target, R_now, u) -> np.ndarray:
+    """绕躯干系单位轴 u 转 R_target，得到离 R_now 最近的那个姿态（Rot(u,θ)·R_target）。
+
+    取 θ 使 tr(R_nowᵀ·Rot(u,θ)·R_target) 最大：记 M = R_target·R_nowᵀ，
+    tr(Rot·M) = cosθ·(trM − uᵀMu) + sinθ·tr(K·M) + uᵀMu（K 为 u 的叉乘矩阵），闭式求 θ。
+    """
+    Rd = np.asarray(R_target, dtype=float).reshape(3, 3)
+    M = Rd @ np.asarray(R_now, dtype=float).reshape(3, 3).T
+    K = np.array([[0.0, -u[2], u[1]], [u[2], 0.0, -u[0]], [-u[1], u[0], 0.0]])
+    a = float(np.trace(M) - u @ M @ u)
+    b = float(np.trace(K @ M))
+    th = math.atan2(b, a)
+    return axis_angle_R(u, math.degrees(th)) @ Rd
+
+
+def pose_ori_miss_deg(R_target, R_now, free_axis=None) -> float:
+    """姿态误差（°）；给了 free_axis 时不计绕该轴的转角。"""
+    u = _unit_axis(free_axis)
+    Rd = np.asarray(R_target, dtype=float).reshape(3, 3)
+    if u is not None:
+        Rd = nearest_about_axis(Rd, R_now, u)
+    return float(np.degrees(np.linalg.norm(_rotvec_from_R(Rd @ np.asarray(R_now, dtype=float).T))))
+
+
 def solve_tcp_pose_ik(
     model,
     q0,
@@ -153,19 +187,30 @@ def solve_tcp_pose_ik(
     *,
     w_ori: float = 0.5,
     iters: int = 120,
+    free_axis=None,
 ) -> Tuple[np.ndarray, float, float]:
-    """TCP 到 target，且腕部姿态对齐 R_target（躯干系）。返回 (q, 位置误差 mm, 姿态误差 deg)。"""
+    """TCP 到 target，且腕部姿态对齐 R_target（躯干系）。返回 (q, 位置误差 mm, 姿态误差 deg)。
+
+    free_axis（躯干系向量，可空）：绕这根轴的转角不约束（如「可平转」工作姿态绕重力方向）。
+    每步把目标绕该轴转到离当前最近，再去掉误差和雅可比里沿该轴的分量。
+    """
     q_seed = np.asarray(q0, dtype=float).reshape(-1)
     q = q_seed.copy()
     tcp = np.asarray(tcp_m, dtype=float).reshape(3)
     target = np.asarray(target_m, dtype=float).reshape(3)
-    Rd = np.asarray(R_target, dtype=float).reshape(3, 3)
+    Rd0 = np.asarray(R_target, dtype=float).reshape(3, 3)
+    u = _unit_axis(free_axis)
+    P = None if u is None else np.eye(3) - np.outer(u, u)
     limits = model.joint_limits()
     eye6 = np.eye(6)
     for _ in range(int(iters)):
         pos, R, jac = _tcp_pose_jac(model, q, tcp, w_ori=w_ori)
+        Rd = Rd0 if u is None else nearest_about_axis(Rd0, R, u)
         err_p = target - pos
         err_r = _rotvec_from_R(Rd @ R.T)
+        if P is not None:
+            err_r = P @ err_r
+            jac[3:6] = P @ jac[3:6]
         err = np.concatenate([err_p, w_ori * err_r])
         if float(np.linalg.norm(err_p)) < 2e-4 and float(np.linalg.norm(err_r)) < np.deg2rad(0.3):
             break
@@ -179,8 +224,7 @@ def solve_tcp_pose_ik(
         q = np.clip(q + dq, limits[:, 0], limits[:, 1])
     pos, R, _ = _tcp_pose_jac(model, q, tcp, w_ori=w_ori)
     miss_mm = float(np.linalg.norm(pos - target) * 1000.0)
-    ori_miss_deg = float(np.degrees(np.linalg.norm(_rotvec_from_R(Rd @ R.T))))
-    return q, miss_mm, ori_miss_deg
+    return q, miss_mm, pose_ori_miss_deg(Rd0, R, u)
 
 
 # 多初值最多算这么久：够不着的目标以前要把几十组初值全试完（G1D 上 8.7 s）
@@ -200,6 +244,7 @@ def solve_tcp_pose_ik_robust(
     pos_ok_mm: float = 3.0,
     ori_ok_deg: float = 3.0,
     time_budget_s: float = ROBUST_BUDGET_S,
+    free_axis=None,
 ) -> Tuple[np.ndarray, float, float]:
     """多初值位置+全姿态 IK，在独立子进程里算（见 tasks/ik_worker.py）。
 
@@ -213,6 +258,7 @@ def solve_tcp_pose_ik_robust(
         extra_seeds=None if extra_seeds is None else [np.asarray(s, dtype=float) for s in extra_seeds],
         n_random=n_random, n_ok_stop=n_ok_stop, pos_ok_mm=pos_ok_mm, ori_ok_deg=ori_ok_deg,
         time_budget_s=time_budget_s,
+        free_axis=None if free_axis is None else np.asarray(free_axis, dtype=float),
     )
 
 
@@ -229,6 +275,7 @@ def solve_tcp_pose_ik_robust_local(
     pos_ok_mm: float = 3.0,
     ori_ok_deg: float = 3.0,
     time_budget_s: float = ROBUST_BUDGET_S,
+    free_axis=None,
 ) -> Tuple[np.ndarray, float, float]:
     """多初值求位置+全姿态解，避免从当前角一枪局部 IK 陷住。
 
@@ -276,7 +323,8 @@ def solve_tcp_pose_ik_robust_local(
         if k > 0 and time.monotonic() > deadline:
             break
         for w in (0.35, 0.7, 1.2):
-            q, m, o = solve_tcp_pose_ik(model, seed, tcp_m, target_m, R_target, w_ori=w, iters=100)
+            q, m, o = solve_tcp_pose_ik(model, seed, tcp_m, target_m, R_target, w_ori=w, iters=100,
+                                        free_axis=free_axis)
             if best_any is None or (m + 2.0 * o) < (best_any[1] + 2.0 * best_any[2]):
                 best_any = (q, m, o)
             if m <= pos_ok_mm and o <= ori_ok_deg:

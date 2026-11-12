@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from robot_platform.core.robot_profile import activate, active, load_profile
-from robot_platform.perception.lidar import decode_pointcloud2, link_transform
+from robot_platform.perception.lidar import MockLidar, decode_pointcloud2, fit_ground, link_transform
 from robot_platform.perception.lidar_api import LidarAPI
 
 
@@ -79,8 +79,8 @@ def test_api_mock_cloud_in_torso_frame(g1_lidar_api):
     assert d["ok"], d
     assert d["n_sent"] <= 3000 and len(d["xyz"]) == 3 * d["n_sent"] and len(d["rgb"]) == len(d["xyz"])
     xyz = np.asarray(d["xyz"]).reshape(-1, 3)
-    # 仿真地面在躯干系 z≈-0.75：换回来的点应有大量落在这附近
-    assert np.mean(np.abs(xyz[:, 2] + 0.75) < 0.05) > 0.3
+    # 仿真地面在躯干系 z≈GROUND_Z：换回来的点应有大量落在这附近
+    assert np.mean(np.abs(xyz[:, 2] - MockLidar.GROUND_Z) < 0.05) > 0.3
     assert api.status()["running"] is True
     assert api.cloud("color=intensity")["ok"]
     assert api.handle_post("/api/lidar/config", {"lidar": "nope"})["ok"] is False
@@ -145,3 +145,22 @@ def test_g1_lidar_mount_override_drops_urdf_pitch(g1_lidar_api):
     np.testing.assert_allclose(T[:3, :3], np.diag([1.0, -1.0, -1.0]), atol=1e-9)
     np.testing.assert_allclose(T[:3, 3], [0.0002835, 0.00003, 0.428434], atol=1e-9)
     assert abs(math.degrees(active().lidars["head"].params["mount_rpy"][1])) < 1e-9
+
+
+def test_fit_ground_finds_floor_and_ignores_box_and_wall():
+    api_T = np.eye(4)
+    xyz = MockLidar(api_T).latest()["xyz"]
+    g = fit_ground(xyz)
+    assert g is not None
+    assert g["height_m"] == pytest.approx(-MockLidar.GROUND_Z, abs=0.01)
+    assert np.asarray(g["n"]) @ [0, 0, 1] > 0.999 and g["rms_mm"] < 20
+    # 「上」偏了几度也照样找得到；没有地面（只有墙）就返回 None
+    assert fit_ground(xyz, up=(0.05, 0.0, 1.0)) is not None
+    wall = xyz[np.abs(xyz[:, 0] - 3.0) < 0.05]
+    assert fit_ground(wall) is None
+
+
+def test_api_cloud_reports_ground(g1_lidar_api):
+    d = g1_lidar_api.cloud("max_points=3000")
+    assert d["ok"] and d["ground"] is not None
+    assert d["ground"]["height_m"] == pytest.approx(-MockLidar.GROUND_Z, abs=0.02)

@@ -522,7 +522,7 @@
           <article class="float" id="panel-work-pose">
             <button type="button" class="float-toggle">工作姿态 <span id="wp-lock-badge" class="aside"></span></button>
             <div class="float-body">
-              <p class="note">与<strong>当前已调用的 TCP</strong>绑定，只记腕部在躯干系下的方向（如向前/向下）。拖拽摆好后「记下」；「调用」会尽量保持 TCP 位置只转姿态，到位后锁定。锁定时空间点/棋盘触摸保持该方向；拖拽或手臂控制会解锁。</p>
+              <p class="note">与<strong>当前已调用的 TCP</strong>绑定，只记腕部在躯干系下的方向（如向前/向下）。拖拽摆好后「记下」；「调用」会尽量保持 TCP 位置只转姿态，到位后锁定。锁定时空间点/棋盘触摸保持该方向；拖拽或手臂控制会解锁。勾「允许平面旋转」记下的是<strong>可平转姿态</strong>：只保持相对竖直的倾斜，绕重力方向可以转。</p>
               <p class="note" id="wp-now">锁定：无</p>
               <p class="note" id="wp-tcp-hint">TCP：—</p>
               <div class="fields">
@@ -535,6 +535,9 @@
               </div>
               <label class="field">备注
                 <input id="wp-note" placeholder="怎么摆的，可空" maxlength="80">
+              </label>
+              <label class="switch" title="记下的姿态只锁住「相对竖直的倾斜」，绕重力方向（竖直 z）怎么转都行：空间点、棋盘、TCP 平移时 IK 可自由平转；TCP 点动绕 Z 旋转也不会解锁">
+                <input id="wp-free-yaw" type="checkbox"><span>允许平面旋转（绕重力 z）</span>
               </label>
               <div class="cmds">
                 <button id="btn-wp-save" type="button">记下当前姿态</button>

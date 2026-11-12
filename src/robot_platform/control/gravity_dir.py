@@ -126,6 +126,15 @@ class GravityDirection:
             d = self._dir + a * (target - self._dir)
             self._dir = d / np.linalg.norm(d)
 
+    def up_dir(self) -> np.ndarray:
+        """实测「竖直向上」在 base_link 系里的单位向量（不管前馈开没开）；IMU 不可用 / 过期 / 倾角超限时
+        退回躯干 +z。供「可平转」工作姿态取绕重力的转轴。"""
+        with self._lock:
+            d = self._imu_dir
+            fresh = (d is not None and self._imu_age <= STALE_S
+                     and tilt_angles(d)["tilt_deg"] <= self._max_tilt)
+            return (-d / np.linalg.norm(d)) if fresh else -DOWN.copy()
+
     def g_vec(self) -> np.ndarray:
         """当前用于前馈的重力向量（m/s²，base_link 系）。"""
         with self._lock:

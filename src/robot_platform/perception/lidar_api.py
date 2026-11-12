@@ -17,11 +17,14 @@ import numpy as np
 
 from robot_platform.core import instance as instances
 from robot_platform.core.robot_profile import active as active_profile
-from robot_platform.perception.lidar import MockLidar, _rpy_matrix, link_transform
+from robot_platform.perception.lidar import MockLidar, _rpy_matrix, fit_ground, link_transform
 from robot_platform.perception.lidar_worker import WorkerLidar
 
 IDLE_CLOSE_S = 20.0
 FIRST_FRAME_WAIT_S = 5.0  # 含子进程启动、DDS 发现（实测 1–2 s）
+
+
+GROUND_REFIT_S = 1.0
 
 
 def _jet(t: np.ndarray) -> np.ndarray:
@@ -145,6 +148,27 @@ class LidarAPI:
             "error": dev.last_error if dev is not None else "",
         }
 
+    def _ground(self, pts: np.ndarray):
+        """躯干系里的地面平面（见 fit_ground）；「上」取躯干 IMU 实测，没有就躯干 +z。"""
+        up = (0.0, 0.0, 1.0)
+        gu = getattr(self.app, "gravity_up", None)
+        if gu is not None:
+            try:
+                up = gu()
+            except Exception:  # noqa: BLE001
+                pass
+        # 地面变化慢：最多每秒拟合一次，其余帧沿用（少占主进程，避免拖慢同进程的控制循环）
+        now = time.monotonic()
+        cached = getattr(self, "_ground_cache", None)
+        if cached is not None and now - cached[0] < GROUND_REFIT_S:
+            return cached[1]
+        try:
+            g = fit_ground(pts, up, sample=3000, iters=120)
+        except (ValueError, np.linalg.LinAlgError):
+            g = None
+        self._ground_cache = (now, g)
+        return g
+
     def cloud(self, query: str) -> Dict[str, Any]:
         q = {k: v[0] for k, v in parse_qs(query).items()}
         max_points = int(min(30000, max(500, float(q.get("max_points") or 8000))))
@@ -169,12 +193,14 @@ class LidarAPI:
         ok = np.isfinite(r) & (r > 0.15) & (r < max_range)
         n_raw, n_valid = int(len(xyz)), int(ok.sum())
         xyz = xyz[ok]
+        T = self._T
+        # 地面用降采样前的全部有效点拟合（躯干系），三维里把模型抬到这个地面上
+        ground = self._ground((T[:3, :3] @ xyz.T).T + T[:3, 3])
         inten = inten[ok] if inten is not None else None
         if len(xyz) > max_points:
             idx = np.linspace(0, len(xyz) - 1, max_points).astype(int)
             xyz = xyz[idx]
             inten = inten[idx] if inten is not None else None
-        T = self._T
         pts = (T[:3, :3] @ xyz.T).T + T[:3, 3]
         if color == "intensity" and inten is not None and len(inten):
             hi = float(np.percentile(inten, 98)) or 1.0
@@ -195,6 +221,7 @@ class LidarAPI:
             "n_sent": int(len(pts)),
             "range_m": ({"near": float(rr.min()), "median": float(np.median(rr)), "far": float(rr.max())}
                         if len(rr) else None),
+            "ground": ground,
             "xyz": np.round(pts, 3).reshape(-1).tolist(),
             "rgb": rgb.reshape(-1).astype(int).tolist(),
         }

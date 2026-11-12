@@ -324,6 +324,7 @@ class BoardTouch:
 
         wp = getattr(self.app, "work_pose", None)
         R_lock, q_seed = self.app.work_pose_lock_for(self.arm, self._tcp_name)
+        free_axis = self.app.work_pose_free_axis() if R_lock is not None else None
         extra = [] if q_seed is None else [q_seed]
         t, R = model.fk(q)
         start = t + R @ tcp
@@ -339,13 +340,13 @@ class BoardTouch:
                 if R_lock is not None:
                     mode = getattr(wp, "ik_mode", "robust") if wp is not None else "robust"
                     if mode == "single":
-                        q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock)
+                        q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock, free_axis=free_axis)
                     else:
-                        q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock)
+                        q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock, free_axis=free_axis)
                         if miss > 5.0 or ori > 8.0:
                             q_next, miss, ori = solve_tcp_pose_ik_robust(
                                 model, q, tcp, target, R_lock,
-                                extra_seeds=extra, n_random=8, n_ok_stop=5,
+                                extra_seeds=extra, n_random=8, n_ok_stop=5, free_axis=free_axis,
                             )
                     if miss > 5.0 or ori > 8.0:
                         raise RuntimeError(
