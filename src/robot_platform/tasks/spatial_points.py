@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -182,6 +183,10 @@ def solve_tcp_pose_ik(
     return q, miss_mm, ori_miss_deg
 
 
+# 多初值最多算这么久：够不着的目标以前要把几十组初值全试完（G1D 上 8.7 s）
+ROBUST_BUDGET_S = 1.5
+
+
 def solve_tcp_pose_ik_robust(
     model,
     q0,
@@ -194,13 +199,46 @@ def solve_tcp_pose_ik_robust(
     n_ok_stop: int = 5,
     pos_ok_mm: float = 3.0,
     ori_ok_deg: float = 3.0,
+    time_budget_s: float = ROBUST_BUDGET_S,
+) -> Tuple[np.ndarray, float, float]:
+    """多初值位置+全姿态 IK，在独立子进程里算（见 tasks/ik_worker.py）。
+
+    在服务主进程里算会占着 GIL，同进程 100 Hz 控制循环发不出帧，手臂（两只手共用一个循环）会颤；
+    子进程不可用时退回本进程算。参数与返回同 :func:`solve_tcp_pose_ik_robust_local`。
+    """
+    from robot_platform.tasks import ik_worker
+
+    return ik_worker.run(
+        solve_tcp_pose_ik_robust_local, model, q0, tcp_m, target_m, R_target,
+        extra_seeds=None if extra_seeds is None else [np.asarray(s, dtype=float) for s in extra_seeds],
+        n_random=n_random, n_ok_stop=n_ok_stop, pos_ok_mm=pos_ok_mm, ori_ok_deg=ori_ok_deg,
+        time_budget_s=time_budget_s,
+    )
+
+
+def solve_tcp_pose_ik_robust_local(
+    model,
+    q0,
+    tcp_m,
+    target_m,
+    R_target,
+    *,
+    extra_seeds=None,
+    n_random: int = 16,
+    n_ok_stop: int = 5,
+    pos_ok_mm: float = 3.0,
+    ori_ok_deg: float = 3.0,
+    time_budget_s: float = ROBUST_BUDGET_S,
 ) -> Tuple[np.ndarray, float, float]:
     """多初值求位置+全姿态解，避免从当前角一枪局部 IK 陷住。
 
     策略：按需依次试种子（当前角 → 纯位置解 → 中位 → 额外种子 → 随机 /
-    随机上的位置解）；每个种子几档姿态权重。收集进门解，够 ``n_ok_stop``
-    个就停，在合格解里取距 ``q0`` 最近的一组；若始终不够门，退回残差最好的。
+    随机上的位置解）；每个种子几档姿态权重。
+    - 从当前角出发就有合格解：直接取其中离 ``q0`` 最近的（零空间本就往 q0 拉，其它种子的解只会更远）；
+    - 否则收集合格解，够 ``n_ok_stop`` 个或用完 ``time_budget_s`` 就停，取距 ``q0`` 最近的一组；
+    - 始终不够门：退回残差最好的。
     """
+    deadline = time.monotonic() + max(0.0, float(time_budget_s))
     q0 = np.asarray(q0, dtype=float).reshape(-1)
     limits = model.joint_limits()
     rng = np.random.default_rng(0)
@@ -229,7 +267,14 @@ def solve_tcp_pose_ik_robust(
     ok_list: List[Tuple[np.ndarray, float, float, float]] = []
     best_any: Optional[Tuple[np.ndarray, float, float]] = None
 
-    for seed in _seed_iter():
+    def _nearest():
+        ok_list.sort(key=lambda x: x[3])
+        qb, mb, ob, _ = ok_list[0]
+        return qb, mb, ob
+
+    for k, seed in enumerate(_seed_iter()):
+        if k > 0 and time.monotonic() > deadline:
+            break
         for w in (0.35, 0.7, 1.2):
             q, m, o = solve_tcp_pose_ik(model, seed, tcp_m, target_m, R_target, w_ori=w, iters=100)
             if best_any is None or (m + 2.0 * o) < (best_any[1] + 2.0 * best_any[2]):
@@ -237,13 +282,11 @@ def solve_tcp_pose_ik_robust(
             if m <= pos_ok_mm and o <= ori_ok_deg:
                 ok_list.append((q, m, o, float(np.linalg.norm(q - q0))))
                 if len(ok_list) >= n_stop:
-                    ok_list.sort(key=lambda x: x[3])
-                    qb, mb, ob, _ = ok_list[0]
-                    return qb, mb, ob
+                    return _nearest()
+        if k == 0 and ok_list:
+            return _nearest()
     if ok_list:
-        ok_list.sort(key=lambda x: x[3])
-        qb, mb, ob, _ = ok_list[0]
-        return qb, mb, ob
+        return _nearest()
     assert best_any is not None
     return best_any
 

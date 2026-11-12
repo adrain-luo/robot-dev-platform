@@ -17,6 +17,7 @@ from robot_platform.hw.backends.base import Backend, LiftDriver, LiftReader, Sta
 from robot_platform.hw.lift_control import LiftController
 from robot_platform.perception.detect_localize import DetectLocalize
 from robot_platform.perception.lidar_api import LidarAPI
+from robot_platform.tasks import ik_worker
 from robot_platform.tasks.board_touch import BoardTouch
 from robot_platform.tasks.spatial_points import SpatialPoints
 from robot_platform.tasks.work_pose import WorkPoseSession
@@ -60,6 +61,8 @@ class App(StateMixin, LiftMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMi
             traceback.print_exc()
         self.handeye = HandEyeAPI(self)
         self.lidar = LidarAPI(self)
+        # 多初值 IK 在子进程里算（不占主进程 GIL，控制循环不卡），启动时先把子进程起好
+        ik_worker.warm()
 
     def reader(self) -> StateSource:
         with self._lock:
