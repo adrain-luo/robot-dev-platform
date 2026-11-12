@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>相机查看</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #2a313c; --text: #e6edf3; --muted: #8b949e;
+    --accent: #2f8f6f; --accent-2: #3fb68b; --warn: #d29922; --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  .chip { padding: 2px 10px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+  .chip.ok { color: var(--accent-2); border-color: #23573f; }
+  .chip.bad { color: var(--bad); border-color: #6e2a28; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .view { position: relative; background: #000; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; aspect-ratio: 4 / 3; }
+  .view img { display: block; width: 100%; height: 100%; object-fit: contain; }
+  .view .roi { position: absolute; left: 33.333%; top: 33.333%; width: 33.333%; height: 33.333%; border: 1.5px dashed rgba(255,255,255,.55); pointer-events: none; }
+  .view .roi span { position: absolute; top: -20px; left: 0; font-size: 11.5px; color: rgba(255,255,255,.75); }
+  .view .msg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 24px; }
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .card h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 10px; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; color: var(--text); padding: 8px; cursor: pointer; font: inherit; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; }
+  .row label { color: var(--muted); }
+  input[type=range] { width: 150px; accent-color: var(--accent-2); }
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  .switch input { width: 18px; height: 18px; accent-color: var(--accent-2); }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .btns button { border: 1px solid var(--line); background: #1f2630; color: var(--text); border-radius: 7px; padding: 6px 10px; cursor: pointer; font: inherit; font-size: 13px; }
+  .btns button.on { border-color: var(--warn); color: var(--warn); }
+  .legend { margin-top: 10px; }
+  .legend .bar { display: grid; grid-template-columns: repeat(8, 1fr); height: 12px; border-radius: 3px; overflow: hidden; }
+  .legend .ends { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .metric { margin: 6px 0 10px; }
+  .metric .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .metric .val { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .metric .pk { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .meter { height: 6px; background: #0b0f14; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+  .meter > div { height: 100%; background: var(--accent-2); width: 0; transition: width .2s; }
+  .note { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>相机查看</h1>
+  <span class="chip" id="st-src">—</span>
+  <span class="chip" id="st-live">连接中…</span>
+  <span class="chip" id="st-size">—</span>
+</header>
+<main>
+  <section>
+    <div class="view">
+      <img id="view" alt="相机画面">
+      <div class="roi"><span>中心区域</span></div>
+      <div class="msg" id="view-msg"></div>
+    </div>
+    <p class="note">掩膜：局部清晰度（梯度能量）分 8 档上色，白线是档与档的分界（等高线）。颜色是相对刻度——调焦时先「锁定刻度」，转焦距环看颜色往暖色走、数值变大就是更清楚。</p>
+  </section>
+  <aside class="side">
+    <div class="card">
+      <h2>相机</h2>
+      <div class="seg" id="eye-seg">
+        <button data-eye="left" class="on">左眼</button>
+        <button data-eye="right">右眼</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>清晰度掩膜</h2>
+      <div class="row">
+        <label class="switch"><input type="checkbox" id="mask"><span>显示掩膜</span></label>
+      </div>
+      <div class="row">
+        <label for="alpha">透明度 <span id="alpha-val">45%</span></label>
+        <input type="range" id="alpha" min="10" max="90" step="5" value="45">
+      </div>
+      <div class="btns">
+        <button id="btn-lock">锁定刻度</button>
+        <button id="btn-auto">重新自动</button>
+      </div>
+      <div class="legend">
+        <div class="bar" id="legend-bar"></div>
+        <div class="ends"><span>模糊</span><span id="scale-txt">刻度 自动</span><span>清晰</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2 id="metric-title">清晰度 · 左眼</h2>
+      <div class="metric">
+        <div class="top"><span>中心区域</span><span class="pk" id="pk-center">峰值 —</span></div>
+        <div class="val" id="v-center">—</div>
+        <div class="meter"><div id="m-center"></div></div>
+      </div>
+      <div class="metric">
+        <div class="top"><span>整幅</span><span class="pk" id="pk-whole">峰值 —</span></div>
+        <div class="val" id="v-whole">—</div>
+        <div class="meter"><div id="m-whole"></div></div>
+      </div>
+      <div class="btns"><button id="btn-peak">清零峰值</button></div>
+      <p class="note">条 = 当前 / 峰值。调焦时对着有纹理、不动的东西，转到中心区域数值最大即可。另一眼：<span id="other-eye">—</span></p>
+    </div>
+  </aside>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const TURBO = ["#30123b", "#4662d7", "#36aaf9", "#1ae4b6", "#72fe5e", "#c8ef34", "#faba39", "#e4460a"];
+$("legend-bar").innerHTML = TURBO.map((c) => `<div style="background:${c}"></div>`).join("");
+const state = { eye: "left", mask: false, alpha: 0.45 };
+try { Object.assign(state, JSON.parse(localStorage.getItem("camview") || "{}")); } catch (e) {}
+const EYE_NAME = { left: "左眼", right: "右眼" };
+
+function save() { try { localStorage.setItem("camview", JSON.stringify(state)); } catch (e) {} }
+function streamUrl() {
+  return `/stream.mjpg?eye=${state.eye}&mask=${state.mask ? 1 : 0}&alpha=${state.alpha}&t=${Date.now()}`;
+}
+let reconnectTimer = 0;
+function reconnect() {
+  clearTimeout(reconnectTimer);
+  const img = $("view");
+  img.removeAttribute("src");  // 先断开旧流，免得一个页面占着两条
+  reconnectTimer = setTimeout(() => { img.src = streamUrl(); }, 60);
+}
+$("view").addEventListener("error", () => {
+  // 只有真的流断了才重连；切换时清掉 src 也会触发 error，别把它当断流
+  if (!($("view").getAttribute("src") || "").startsWith("/stream.mjpg")) return;
+  $("view-msg").style.display = "flex";
+  $("view-msg").textContent = "画面断开，正在重连…";
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(reconnect, 1500);
+});
+$("view").addEventListener("load", () => { $("view-msg").style.display = "none"; });
+
+function applyUi() {
+  for (const b of document.querySelectorAll("#eye-seg button")) b.classList.toggle("on", b.dataset.eye === state.eye);
+  $("mask").checked = state.mask;
+  $("alpha").value = Math.round(state.alpha * 100);
+  $("alpha-val").textContent = `${Math.round(state.alpha * 100)}%`;
+  $("metric-title").textContent = `清晰度 · ${EYE_NAME[state.eye]}`;
+}
+for (const b of document.querySelectorAll("#eye-seg button")) {
+  b.onclick = () => { state.eye = b.dataset.eye; save(); applyUi(); reconnect(); refresh(); };
+}
+$("mask").onchange = () => { state.mask = $("mask").checked; save(); reconnect(); };
+let alphaTimer = 0;
+$("alpha").oninput = () => {
+  state.alpha = Number($("alpha").value) / 100;
+  $("alpha-val").textContent = `${$("alpha").value}%`;
+  save();
+  clearTimeout(alphaTimer);
+  if (state.mask) alphaTimer = setTimeout(reconnect, 250);
+};
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+let lastStatus = null;
+$("btn-lock").onclick = async () => {
+  const sc = lastStatus?.scale?.[state.eye];
+  render(await post("/api/scale", { eye: state.eye, lock: !(sc && sc.locked) }));
+};
+$("btn-auto").onclick = async () => render(await post("/api/scale", { eye: state.eye, reset: true }));
+$("btn-peak").onclick = async () => render(await post("/api/peak", { eye: state.eye }));
+
+const fmt = (v) => (v == null ? "—" : v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+function render(s) {
+  if (!s || !s.ok) return;
+  lastStatus = s;
+  $("st-src").textContent = s.source === "mock" ? "仿真画面" : `teleimager · ${s.host}`;
+  const live = !s.error && s.age_s != null && s.age_s < 2;
+  $("st-live").textContent = live ? `实时 ${s.fps} fps` : (s.error || "等待画面…");
+  $("st-live").className = "chip " + (live ? "ok" : "bad");
+  $("st-size").textContent = s.size ? `${s.size[0]}×${s.size[1]}` : "—";
+  const cur = s.score?.[state.eye], pk = s.peak?.[state.eye];
+  for (const k of ["center", "whole"]) {
+    $(`v-${k}`).textContent = fmt(cur?.[k]);
+    $(`pk-${k}`).textContent = `峰值 ${fmt(pk?.[k])}`;
+    const ratio = cur && pk && pk[k] > 0 ? Math.min(1, cur[k] / pk[k]) : 0;
+    $(`m-${k}`).style.width = `${(ratio * 100).toFixed(0)}%`;
+  }
+  const other = state.eye === "left" ? "right" : "left";
+  const oc = s.score?.[other];
+  $("other-eye").textContent = oc ? `${EYE_NAME[other]} 中心 ${fmt(oc.center)} · 整幅 ${fmt(oc.whole)}` : "—";
+  const sc = s.scale?.[state.eye];
+  $("btn-lock").textContent = sc && sc.locked ? "解锁刻度" : "锁定刻度";
+  $("btn-lock").classList.toggle("on", !!(sc && sc.locked));
+  $("scale-txt").textContent = sc ? `${sc.locked ? "已锁定" : "自动"} ${fmt(10 ** sc.lo * 1000)}～${fmt(10 ** sc.hi * 1000)}` : (state.mask ? "刻度 自动" : "开掩膜后显示刻度");
+}
+async function refresh() {
+  try { render(await (await fetch("/api/status", { cache: "no-store" })).json()); }
+  catch (e) { $("st-live").textContent = "服务没响应"; $("st-live").className = "chip bad"; }
+}
+applyUi();
+reconnect();
+refresh();
+setInterval(refresh, 500);
+</script>
+</body>
+</html>
