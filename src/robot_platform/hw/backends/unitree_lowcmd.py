@@ -182,6 +182,32 @@ class UnitreeLowCmdBackend(Backend):
                 )
             return self._torso_imu
 
+    def chassis_driver(self):
+        if self.profile.chassis is None:
+            return super().chassis_driver()
+        self.state()
+        with self._lock:
+            if getattr(self, "_chassis_driver", None) is None:
+                from robot_platform.hw.dds.agv_client import AgvChassisDriver
+
+                self._chassis_driver = AgvChassisDriver(
+                    network_interface=self._iface, dds_domain=self._domain, sdk_path=self._sdk)
+            return self._chassis_driver
+
+    def chassis_odom(self):
+        spec = self.profile.chassis
+        if spec is None or not spec.odom_topic:
+            return None
+        self.state()
+        with self._lock:
+            if getattr(self, "_chassis_odom", None) is None:
+                from robot_platform.hw.dds.agv_odom import AgvOdomReader
+
+                self._chassis_odom = AgvOdomReader(
+                    topic=spec.odom_topic, network_interface=self._iface, dds_domain=self._domain,
+                    sdk_path=self._sdk)
+            return self._chassis_odom
+
     def lift_driver(self) -> LiftDriver:
         if self.profile.lift is None:
             return super().lift_driver()

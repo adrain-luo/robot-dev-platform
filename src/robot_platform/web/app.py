@@ -23,13 +23,14 @@ from robot_platform.tasks.spatial_points import SpatialPoints
 from robot_platform.tasks.work_pose import WorkPoseSession
 from robot_platform.web.api.state import StateMixin
 from robot_platform.web.api.lift import LiftMixin
+from robot_platform.web.api.chassis import ChassisMixin
 from robot_platform.web.api.tcp import TcpMixin
 from robot_platform.web.api.work_pose import WorkPoseMixin
 from robot_platform.web.api.points import PointsMixin
 from robot_platform.web.api.runtime import RuntimeMixin
 
 
-class App(StateMixin, LiftMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMixin):
+class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMixin):
     def __init__(self, settings, kin: RobotKinematics, allow_real_motion: bool, backend: Backend):
         self.settings = settings
         self.profile = settings.profile
@@ -40,6 +41,7 @@ class App(StateMixin, LiftMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMi
         self._hispeed: Optional[LiftReader] = None
         self._agv: Optional[LiftDriver] = None
         self._lift_ctrl: Optional[LiftController] = None
+        self._chassis_ctrl = None  # 底盘遥控（web/api/chassis.py），第一次遥控时才建
         self.loop: Optional[ArmLoop] = None
         self.cmd_monitor = None
         self._lock = threading.Lock()

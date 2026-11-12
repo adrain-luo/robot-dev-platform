@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from robot_platform.hw.backends.base import LiftDriver
+from robot_platform.hw.backends.base import ChassisDriver, LiftDriver
 from robot_platform.hw.dds.sdk import init_channel
 
 AGV_SERVICE_NAME = "agv"
@@ -58,3 +58,15 @@ class AgvClient(LiftDriver):
         with self._lock:
             code, _ = self._cli._Call(ROBOT_API_ID_AGV_MOVE, parameter)
         return int(code)
+
+
+class AgvChassisDriver(ChassisDriver):
+    """底盘 Move。单独一个 RPC 客户端、超时短（0.5 s）：立柱闭环的 3 s 超时不能卡住底盘停车。"""
+
+    def __init__(self, *, network_interface: str, dds_domain: int = 0, sdk_path: Optional[Path] = None,
+                 timeout_s: float = 0.5) -> None:
+        self._agv = AgvClient(network_interface=network_interface, dds_domain=dds_domain,
+                              sdk_path=sdk_path, timeout_s=timeout_s)
+
+    def move(self, vx: float, vyaw: float) -> int:
+        return self._agv.move(float(vx), 0.0, float(vyaw))

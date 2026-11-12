@@ -704,3 +704,21 @@ input[type="range"] {
 .arm-pick button + button { border-left: 1px solid var(--line); }
 .arm-pick button.active { background: var(--teal); color: #fff; font-weight: 650; }
 .btn-teach.on { background: var(--warn); color: #fff; font-weight: 650; }
+
+/* 底盘遥控（躯体控制卡片） */
+.chassis-row { display: flex; gap: 12px; align-items: center; margin: 8px 0; }
+.chassis-pad {
+  position: relative; width: 132px; height: 132px; flex: none; border-radius: 50%;
+  background: radial-gradient(circle, rgba(15,110,98,.10) 0 30%, rgba(28,25,21,.06) 31% 100%);
+  border: 1px solid var(--line); touch-action: none; cursor: grab; user-select: none;
+}
+.chassis-pad.on { cursor: grabbing; border-color: var(--teal); }
+.chassis-pad.off { opacity: .45; cursor: not-allowed; }
+.chassis-knob {
+  position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px;
+  border-radius: 50%; background: var(--teal); box-shadow: 0 2px 6px rgba(0,0,0,.25); pointer-events: none;
+}
+.chassis-keys { display: flex; flex-direction: column; gap: 6px; align-items: center; flex: 1; }
+.chassis-keys-mid { display: flex; gap: 6px; }
+.chassis-hold { min-width: 60px; touch-action: none; user-select: none; }
+.chassis-hold.on { background: var(--teal); color: #fff; }

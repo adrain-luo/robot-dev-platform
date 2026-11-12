@@ -47,6 +47,7 @@ async function poll() {
     renderWaist(data);
     window.lastLift = data.lift || null;
     renderLift(data.lift);
+    if (typeof renderChassis === "function") renderChassis(data.chassis);
     renderTcp(data.tcp, { left: left && left.scene, right: right && right.scene });
     renderSpatial(data.spatial);
     renderWorkPose(data.work_pose, data.tcp);

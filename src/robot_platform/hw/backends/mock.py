@@ -19,6 +19,8 @@ from typing import Dict, List, Optional, Sequence, Union
 from robot_platform.hw.backends.base import (
     ArmState,
     Backend,
+    ChassisDriver,
+    ChassisOdom,
     Commander,
     LiftDriver,
     LiftReader,
@@ -35,6 +37,7 @@ TRACK_TAU_S = 0.04
 CMD_TIMEOUT_S = 0.5
 LIFT_MAX_SPEED_MPS = 0.0765
 LIFT_CMD_TIMEOUT_S = 0.5
+BASE_CMD_TIMEOUT_S = 0.5  # 仿真底盘：这么久没收到 Move 就停
 MOCK_MODE_MACHINE = 5
 # G1 站立时实测的腿部角度（rad）
 MOCK_STAND = {"hip_pitch": -0.37, "knee": 0.63, "ankle_pitch": -0.30}
@@ -66,6 +69,12 @@ class MockRobot:
         self.lift_v = 0.0
         self._lift_vz = 0.0
         self._lift_cmd_t = 0.0
+        # 底盘：平面位姿 + 速度指令（指令超时就停）
+        self.base_x = self.base_y = self.base_yaw = 0.0
+        self.base_v = (0.0, 0.0)
+        self._base_cmd = (0.0, 0.0)
+        self._base_cmd_t = 0.0
+        self.base_cmds = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="mock-robot", daemon=True)
         self._thread.start()
@@ -79,6 +88,17 @@ class MockRobot:
         with self._lock:
             self._lift_vz = max(-1.0, min(1.0, float(vz)))
             self._lift_cmd_t = time.monotonic()
+
+    def base_command(self, vx: float, vyaw: float) -> None:
+        with self._lock:
+            self._base_cmd = (float(vx), float(vyaw))
+            self._base_cmd_t = time.monotonic()
+            self.base_cmds += 1
+
+    def base_state(self) -> dict:
+        with self._lock:
+            return {"x": self.base_x, "y": self.base_y, "yaw": self.base_yaw,
+                    "vx": self.base_v[0], "vyaw": self.base_v[1], "age_s": time.monotonic() - self.last_t}
 
     def _step(self, dt: float) -> None:
         now = time.monotonic()
@@ -101,6 +121,12 @@ class MockRobot:
             h = min(hi, max(lo, self.lift_height + vz * LIFT_MAX_SPEED_MPS * dt))
             self.lift_v = (h - self.lift_height) / dt
             self.lift_height = h
+        if self.profile.chassis is not None:
+            vx, wz = self._base_cmd if now - self._base_cmd_t < BASE_CMD_TIMEOUT_S else (0.0, 0.0)
+            self.base_yaw += wz * dt
+            self.base_x += vx * math.cos(self.base_yaw) * dt
+            self.base_y += vx * math.sin(self.base_yaw) * dt
+            self.base_v = (vx, wz)
         self.last_t = now
 
     def _run(self) -> None:
@@ -202,6 +228,23 @@ class MockLiftDriver(LiftDriver):
         return 0
 
 
+class MockChassisDriver(ChassisDriver):
+    def __init__(self, robot: MockRobot) -> None:
+        self._robot = robot
+
+    def move(self, vx: float, vyaw: float) -> int:
+        self._robot.base_command(vx, vyaw)
+        return 0
+
+
+class MockChassisOdom(ChassisOdom):
+    def __init__(self, robot: MockRobot) -> None:
+        self._robot = robot
+
+    def latest(self):
+        return self._robot.base_state()
+
+
 class MockTorsoImu(TorsoImu):
     """仿真躯干 IMU：按设定的俯仰 / 横滚（度）给四元数；stale=True 模拟断流。"""
 
@@ -277,6 +320,14 @@ class MockBackend(Backend):
         if self.profile.lift is None:
             return super().lift_driver()
         return MockLiftDriver(self.robot)
+
+    def chassis_driver(self):
+        if self.profile.chassis is None:
+            return super().chassis_driver()
+        return MockChassisDriver(self.robot)
+
+    def chassis_odom(self):
+        return None if self.profile.chassis is None else MockChassisOdom(self.robot)
 
     def close(self) -> None:
         self.simulate_foreign(0.0)

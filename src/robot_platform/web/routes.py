@@ -206,6 +206,12 @@ def _lift(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     return 200, app.lift_post(path, body)
 
 
+def _chassis(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if not path.startswith("/api/chassis/"):
+        return None
+    return 200, app.chassis_post(path, body)
+
+
 # ---------------------------------------------------------------- 臂控指令
 
 def _waist_step(app, loop, body: Dict[str, Any]) -> None:
@@ -235,6 +241,7 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
     """
     app.motion_stop.set()  # 空间点碰点、工作姿态调用
     stoppers = (
+        lambda: app.chassis_stop("急停"),  # 底盘最先停（它不受手臂接管影响）
         app.board.request_stop,          # 棋盘触摸
         app.payload.stop_tasks,          # 负载测量、到位对比
         app.handeye.stop_capture,        # 手眼采集
@@ -326,7 +333,7 @@ def _mock(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
 
 
 POST_GROUPS: List[Callable[[Any, str, Dict[str, Any]], Optional[Reply]]] = [
-    _mock, _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _lift,
+    _mock, _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _lift, _chassis,
 ]
 
 

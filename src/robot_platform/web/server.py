@@ -120,6 +120,10 @@ def main() -> int:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\n[arm_control] stopped")
+        try:
+            APP.chassis_stop("服务退出")  # 底盘先停：停发后它会不会自己停没确认
+        except Exception:  # noqa: BLE001
+            pass
         if APP.handeye:
             APP.handeye.close()
         if APP.lidar:

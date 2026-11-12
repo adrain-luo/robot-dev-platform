@@ -74,6 +74,21 @@ class WaistSpec:
 
 
 @dataclass(frozen=True)
+class ChassisSpec:
+    """轮式底盘（G1D：宇树 AgvClient.Move，差速，不能横移）。速度单位 m/s、rad/s。
+
+    max_*：页面限速滑条能调到的上限（比硬件上限 1.5 m/s、0.6 rad/s 保守）；default_*：服务启动时的限速。
+    转向限速跟着直线限速按 default_yaw / default_lin 的比例走（一根滑条同时管两者）。"""
+
+    odom_topic: str = ""
+    max_lin_mps: float = 0.5
+    max_yaw_rad_s: float = 0.6
+    default_lin_mps: float = 0.15
+    default_yaw_rad_s: float = 0.2
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class LiftSpec:
     state_topic: str
     urdf_joints: Tuple[str, ...]  # 多级棱柱，按伸出顺序
@@ -169,6 +184,7 @@ class RobotProfile:
     # 雷达，按 robot.json 里的顺序；第一台是默认
     lidars: Dict[str, LidarSpec] = field(default_factory=dict)
     torso_imu: Optional[TorsoImuSpec] = None
+    chassis: Optional[ChassisSpec] = None
 
     @property
     def meshes_dir(self) -> Path:
@@ -273,7 +289,25 @@ def _parse(raw: Dict[str, Any], root: Path) -> RobotProfile:
         cameras=_parse_cameras(raw.get("cameras") or {}),
         lidars=_parse_lidars(raw.get("lidars") or {}),
         torso_imu=_parse_torso_imu(raw.get("torso_imu")),
+        chassis=_parse_chassis(raw.get("chassis")),
     )
+
+
+def _parse_chassis(raw: Optional[Dict[str, Any]]) -> Optional[ChassisSpec]:
+    if not raw:
+        return None
+    d = ChassisSpec()
+    spec = ChassisSpec(
+        odom_topic=str(raw.get("odom_topic") or ""),
+        max_lin_mps=float(raw.get("max_lin_mps", d.max_lin_mps)),
+        max_yaw_rad_s=float(raw.get("max_yaw_rad_s", d.max_yaw_rad_s)),
+        default_lin_mps=float(raw.get("default_lin_mps", d.default_lin_mps)),
+        default_yaw_rad_s=float(raw.get("default_yaw_rad_s", d.default_yaw_rad_s)),
+        note=str(raw.get("note") or ""),
+    )
+    if not (0 < spec.default_lin_mps <= spec.max_lin_mps <= 1.5 and 0 < spec.default_yaw_rad_s <= spec.max_yaw_rad_s <= 0.6):
+        raise ValueError("chassis 限速要满足 0 < default ≤ max ≤ 硬件上限（1.5 m/s、0.6 rad/s）")
+    return spec
 
 
 def _parse_torso_imu(raw: Optional[Dict[str, Any]]) -> Optional[TorsoImuSpec]:

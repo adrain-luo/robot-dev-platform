@@ -45,6 +45,10 @@
     <span>限速 <b id="speed-val">0.20</b> rad/s · <span id="speed-deg">11.5</span>°/s</span>
     <input id="speed" type="range" min="0.02" max="1.0" step="0.01" value="0.2">
   </label>
+  <label class="field speed" id="chassis-speed-wrap" style="display:none" title="底盘遥控的最大直线速度；转向限速按比例跟着变（0.15 m/s 对应约 11°/s）。松手即生效，正在开也立刻生效">
+    <span>底盘 <b id="chassis-speed-val">0.15</b> m/s · <span id="chassis-yaw-val">11.5</span>°/s</span>
+    <input id="chassis-speed" type="range" min="0.02" max="0.5" step="0.01" value="0.15">
+  </label>
   <div id="engage-state" class="state"></div>
 </nav>
 
@@ -694,6 +698,29 @@
                 <button id="btn-lift-up" type="button">升一步</button>
                 <button id="btn-lift-go" class="primary" type="button">到目标</button>
                 <button id="btn-lift-stop" class="danger" type="button">停止升降</button>
+              </div>
+              </div>
+              <div id="chassis-ctrl" style="display:none">
+              <p class="note" style="margin-top:12px">底盘：<strong>按住才走</strong>，松手、切走页面或断网 0.5 s 内自动停；急停也会停底盘。限速在底栏。差速底盘只能前后走和原地转，不能横移。</p>
+              <p class="note" id="chassis-now">底盘 —</p>
+              <div class="chassis-row">
+                <div class="chassis-pad" id="chassis-pad" title="按住拖动：上下 = 前进 / 后退，左右 = 左转 / 右转">
+                  <div class="chassis-knob" id="chassis-knob"></div>
+                </div>
+                <div class="chassis-keys">
+                  <button type="button" class="chassis-hold" data-x="1" data-yaw="0">前进</button>
+                  <div class="chassis-keys-mid">
+                    <button type="button" class="chassis-hold" data-x="0" data-yaw="1">左转</button>
+                    <button type="button" class="chassis-hold" data-x="0" data-yaw="-1">右转</button>
+                  </div>
+                  <button type="button" class="chassis-hold" data-x="-1" data-yaw="0">后退</button>
+                </div>
+              </div>
+              <label class="switch" title="勾上后在页面上按 W/S 前后、A/D 转向（方向键也行），松键即停；光标在输入框里时不响应">
+                <input id="chassis-keys-on" type="checkbox"><span>键盘遥控（WASD / 方向键）</span>
+              </label>
+              <div class="cmds">
+                <button id="btn-chassis-stop" class="danger" type="button">停止底盘</button>
               </div>
               </div>
             </div>

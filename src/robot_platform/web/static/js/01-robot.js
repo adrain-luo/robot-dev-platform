@@ -17,6 +17,9 @@ function applyRobotCaps(caps) {
   if ($("joints-note")) $("joints-note").textContent = `左右两只手 + 腰：${desc}。`;
   show("lift-zero-block", !!caps.lift);
   show("lift-ctrl", !!caps.lift);
+  show("chassis-ctrl", !!caps.chassis);
+  show("chassis-speed-wrap", !!caps.chassis);
+  if (caps.chassis && $("chassis-speed")) $("chassis-speed").max = String(caps.chassis.max_lin_mps);
   show("waist-ctrl", !!(w && w.movable));
   if ($("waist-note")) {
     if (!w) $("waist-note").textContent = "这台没有腰。";

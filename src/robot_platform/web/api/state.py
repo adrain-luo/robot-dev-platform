@@ -139,6 +139,10 @@ class StateMixin:
                 ],
             },
             "lift": None if p.lift is None else {"stroke_max_mm": p.lift.stroke_max_m * 1000.0},
+            "chassis": None if p.chassis is None else {
+                "max_lin_mps": p.chassis.max_lin_mps, "max_yaw_rad_s": p.chassis.max_yaw_rad_s,
+                "default_lin_mps": p.chassis.default_lin_mps, "default_yaw_rad_s": p.chassis.default_yaw_rad_s,
+            },
             # 接管 / 释放有过渡（arm_sdk）：页面显示进度，过渡中不能走点
             "transitions": self.backend.name == "unitree_arm_sdk",
             "transition_s": self._transition_s(),
@@ -289,6 +293,10 @@ class StateMixin:
                 lift = {**lift, "ctrl": self._lift_ctrl.status()}
             except Exception:
                 pass
+        try:
+            chassis = self.chassis_status()
+        except Exception as e:  # noqa: BLE001
+            chassis = {"available": False, "error": f"{type(e).__name__}: {e}"}
         return {
             "ok": err is None,
             "error": err,
@@ -306,6 +314,7 @@ class StateMixin:
             "body": self.body_joints(),
             "imu": self._imu(),
             "lift": lift,
+            "chassis": chassis,
             "tcp": self.tcp.status(),
             "spatial": self.points.status(),
             "work_pose": self.work_pose.status(self.tcp.active_name or ""),

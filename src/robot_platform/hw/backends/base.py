@@ -153,6 +153,24 @@ class LiftDriver(ABC):
         return self.height_adjust(0.0)
 
 
+class ChassisDriver(ABC):
+    """轮式底盘速度指令（发一次管一拍，要持续发；停发后底盘会不会自己停不保证）。"""
+
+    @abstractmethod
+    def move(self, vx: float, vyaw: float) -> int:
+        """vx m/s（前进为正）、vyaw rad/s（逆时针为正）；返回 0 为成功。"""
+
+    def stop(self) -> int:
+        return self.move(0.0, 0.0)
+
+
+class ChassisOdom(ABC):
+    """底盘里程计（只读）。latest() → {x, y, yaw, vx, vyaw, age_s} 或 None。"""
+
+    @abstractmethod
+    def latest(self) -> Optional[dict]: ...
+
+
 class Backend(ABC):
     """一台机器人的全部硬件出口。各部件按需懒创建，同一后端只建一份。"""
 
@@ -177,6 +195,12 @@ class Backend(ABC):
 
     def lift_driver(self) -> LiftDriver:
         raise NotImplementedError(f"{self.name} 后端没有立柱")
+
+    def chassis_driver(self) -> ChassisDriver:
+        raise NotImplementedError(f"{self.name} 后端没有底盘")
+
+    def chassis_odom(self) -> Optional[ChassisOdom]:
+        return None
 
     def close(self) -> None:
         pass

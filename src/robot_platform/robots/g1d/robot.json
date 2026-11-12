@@ -95,6 +95,14 @@
     "lock_kp": 200.0,
     "lock_kd": 4.0
   },
+  "chassis": {
+    "odom_topic": "rt/agv/odom",
+    "max_lin_mps": 0.5,
+    "max_yaw_rad_s": 0.6,
+    "default_lin_mps": 0.15,
+    "default_yaw_rad_s": 0.2,
+    "note": "宇树 AgvClient.Move（服务 agv，API 1001）：vx 前进为正，vyaw 逆时针为正，差速底盘 vy 无效。硬件上限 1.5 m/s、0.6 rad/s；页面滑条最多到 0.5 m/s。停发后底盘会不会自己停未确认，所以本服务自己做心跳超时停车。"
+  },
   "lift": {
     "state_topic": "rt/hispeed_state",
     "urdf_joints": ["LZ_mt_Joint", "LZ_it_Joint"],
