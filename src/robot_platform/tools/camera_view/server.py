@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +37,14 @@ PAGE = Path(__file__).with_name("page.html")
 EYES = ("left", "right")
 STREAM_FPS = 20.0
 JPEG_QUALITY = 85
+MIN_GRAB_PERIOD = 1 / 60.0  # 取图循环最快 60 Hz
+SCORE_PERIOD = 0.1  # 清晰度数值最多 10 Hz
+NICE = 10  # Linux 上降低本进程优先级：和控制循环同机，绝不能抢 CPU
+
+
+def _fingerprint(img: np.ndarray) -> bytes:
+    """抽样像素当指纹，判断是不是新帧（teleimager 会反复返回同一张）。"""
+    return hashlib.blake2b(np.ascontiguousarray(img[::16, ::16]).tobytes(), digest_size=16).digest()
 
 
 class MockStereo:
@@ -93,8 +103,14 @@ class CameraHub:
 
     # ------------------------------------------------------------ 取图
     def _run(self) -> None:
+        """取图循环。teleimager 的 get_head_frame() 不等新帧、直接返回缓冲里最新那张，
+        所以按抽样像素指纹去重，重复帧不处理、让出 CPU（2026-11-12 没去重时在 G1D 上空转到 205% CPU）。"""
         last = None
+        last_fp = b""
+        last_score_t = 0.0
+        scores: Dict[str, Dict[str, float]] = {}
         while not self._stop.is_set():
+            t_loop = time.monotonic()
             try:
                 pair = self.camera.grab_pair(2.0)
             except Exception as exc:  # noqa: BLE001
@@ -104,14 +120,23 @@ class CameraHub:
                 self.error = getattr(self.camera, "last_error", "") or "没有画面"
                 time.sleep(0.5)
                 continue
+            fp = _fingerprint(pair[0])
+            if fp == last_fp:
+                if self._t_frame and t_loop - self._t_frame > 2.0:
+                    self.error = "相机画面 2 s 没更新"
+                time.sleep(MIN_GRAB_PERIOD)
+                continue
+            last_fp = fp
             now = time.monotonic()
-            scores = {}
-            for eye, img in zip(EYES, pair):
-                s = sh.frame_score(img)
-                scores[eye] = s
-                pk = self._peak[eye]
-                for k in ("whole", "center"):
-                    pk[k] = max(pk[k], s[k])
+            if now - last_score_t >= SCORE_PERIOD:  # 清晰度数值最多 10 Hz 算一次（页面 2 Hz 取）
+                last_score_t = now
+                scores = {}
+                for eye, img in zip(EYES, pair):
+                    s = sh.frame_score(img)
+                    scores[eye] = s
+                    pk = self._peak[eye]
+                    for k in ("whole", "center"):
+                        pk[k] = max(pk[k], s[k])
             with self._cond:
                 self._frames = dict(zip(EYES, pair))
                 self._scores = scores
@@ -123,6 +148,9 @@ class CameraHub:
                 self._t_frame = now
                 self.error = ""
                 self._cond.notify_all()
+            spare = MIN_GRAB_PERIOD - (time.monotonic() - t_loop)
+            if spare > 0:
+                time.sleep(spare)
 
     def wait_frame(self, after_seq: int, timeout: float = 3.0) -> Tuple[int, Optional[Dict[str, np.ndarray]]]:
         with self._cond:
@@ -325,6 +353,11 @@ def main(argv=None) -> int:
     ap.add_argument("--teleimager-path", default="", help="teleimager 源码目录（默认取机型声明）")
     ap.add_argument("--mock", action="store_true", help="仿真画面，不连相机")
     a = ap.parse_args(argv)
+    if hasattr(os, "nice"):
+        try:
+            os.nice(NICE)
+        except OSError:
+            pass
     camera = MockStereo() if a.mock else _camera_from_profile(a.robot, a.camera_host, a.teleimager_path)
     hub = CameraHub(camera)
     server = ThreadingHTTPServer((a.host, a.port), make_handler(hub))

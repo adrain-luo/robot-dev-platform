@@ -161,3 +161,34 @@ def test_entry_guarded():
     """camera_serve.py 被当模块导入时不能起服务（与 serve.py 一样有 __main__ 保护）。"""
     src = (ROOT / "camera_serve.py").read_text(encoding="utf-8")
     assert 'if __name__ == "__main__":' in src
+
+
+def test_hub_skips_repeated_frames():
+    """teleimager 会反复返回同一张缓存帧：只处理新帧、不空转（G1D 上曾空转到 205% CPU）。"""
+    from robot_platform.tools.camera_view.server import CameraHub
+
+    class Repeating:
+        source, host, last_error = "stub", "", ""
+
+        def __init__(self):
+            self.calls = 0
+            self.img = _texture(1, 120, 160)
+
+        def grab_pair(self, timeout=2.0):
+            self.calls += 1
+            if self.calls == 30:  # 中途来一张新帧
+                self.img = _texture(2, 120, 160)
+            return self.img, self.img
+
+        def close(self):
+            pass
+
+    cam = Repeating()
+    hub = CameraHub(cam)
+    try:
+        time.sleep(1.0)
+        st = hub.status()
+    finally:
+        hub.close()
+    assert st["seq"] == 2  # 只有两张不同的画面
+    assert cam.calls < 80  # 重复帧会让出 CPU（约 60 Hz 封顶），不是死循环
