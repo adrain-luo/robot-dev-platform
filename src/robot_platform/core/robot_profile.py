@@ -78,7 +78,7 @@ class ChassisSpec:
     """轮式底盘（G1D：宇树 AgvClient.Move，差速，不能横移）。速度单位 m/s、rad/s。
 
     max_*：页面限速滑条能调到的上限（比硬件上限 1.5 m/s、0.6 rad/s 保守）；default_*：服务启动时的限速。
-    转向限速跟着直线限速按 default_yaw / default_lin 的比例走（一根滑条同时管两者）。"""
+    直线、转向限速各一根滑条，互不影响。"""
 
     odom_topic: str = ""
     max_lin_mps: float = 0.5

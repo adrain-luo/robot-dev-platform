@@ -50,7 +50,7 @@ def test_heartbeat_scales_by_limit_and_deadman_stops():
     c.command(1.0, -0.5)
     assert _wait(lambda: d.calls and d.last()[1] > 0)
     _, vx, wz = d.last()
-    assert vx == pytest.approx(0.15) and wz == pytest.approx(-0.1)
+    assert vx == pytest.approx(0.15) and wz == pytest.approx(-0.1)  # 默认 0.15 m/s、0.2 rad/s
     assert c.status()["moving"] is True
     # 不再发心跳：DEADMAN_S 后自己发 0
     t0 = time.monotonic()
@@ -65,15 +65,27 @@ def test_heartbeat_scales_by_limit_and_deadman_stops():
     assert len(d.calls) == n
 
 
-def test_limit_is_clamped_and_yaw_follows():
-    c = ChassisController(FakeDriver(), None, SPEC)
-    st = c.set_limit(0.3)
-    assert st["limit"]["lin_mps"] == pytest.approx(0.3) and st["limit"]["yaw_rad_s"] == pytest.approx(0.4)
-    assert c.set_limit(9.0)["limit"]["lin_mps"] == SPEC.max_lin_mps
-    assert c.status()["limit"]["yaw_rad_s"] <= SPEC.max_yaw_rad_s
-    assert c.set_limit(0.0)["limit"]["lin_mps"] == cc.MIN_LIN_MPS
+def test_lin_and_yaw_limits_are_independent_and_clamped():
+    d = FakeDriver()
+    c = ChassisController(d, None, SPEC)
+    st = c.set_limit(lin_mps=0.3)
+    assert st["limit"]["lin_mps"] == pytest.approx(0.3) and st["limit"]["yaw_rad_s"] == pytest.approx(SPEC.default_yaw_rad_s)
+    st = c.set_limit(yaw_rad_s=0.4)
+    assert st["limit"]["yaw_rad_s"] == pytest.approx(0.4) and st["limit"]["lin_mps"] == pytest.approx(0.3)
+    assert c.set_limit(lin_mps=9.0)["limit"]["lin_mps"] == SPEC.max_lin_mps
+    assert c.set_limit(yaw_rad_s=9.0)["limit"]["yaw_rad_s"] == SPEC.max_yaw_rad_s
+    assert c.set_limit(lin_mps=0.0)["limit"]["lin_mps"] == cc.MIN_LIN_MPS
+    assert c.set_limit(yaw_rad_s=0.0)["limit"]["yaw_rad_s"] == cc.MIN_YAW_RAD_S
     with pytest.raises(ValueError):
-        c.set_limit(float("nan"))
+        c.set_limit(lin_mps=float("nan"))
+    with pytest.raises(ValueError):
+        c.set_limit()
+    # 转向限速直接决定转向速度
+    c.set_limit(yaw_rad_s=0.3)
+    c.command(0.0, 1.0)
+    assert _wait(lambda: d.calls and d.last()[2] > 0)
+    assert d.last()[2] == pytest.approx(0.3)
+    c.stop()
 
 
 def test_stop_sends_zero_immediately():
@@ -106,6 +118,8 @@ def test_api_drives_mock_base_and_estop_stops_it(mock_server):
     x0 = scene["chassis"]["odom"]["x"]
     code, d = c.post("/api/chassis/limit", {"lin_mps": 0.3})
     assert code == 200 and d["ok"] and d["limit"]["lin_mps"] == pytest.approx(0.3)
+    code, d = c.post("/api/chassis/limit", {"yaw_rad_s": 0.25})
+    assert d["ok"] and d["limit"]["yaw_rad_s"] == pytest.approx(0.25) and d["limit"]["lin_mps"] == pytest.approx(0.3)
     for _ in range(6):
         code, d = c.post("/api/chassis/move", {"x": 1.0, "yaw": 0.0})
         assert code == 200 and d["ok"], d
@@ -118,4 +132,4 @@ def test_api_drives_mock_base_and_estop_stops_it(mock_server):
     assert _wait(lambda: c.get("/api/scene")["chassis"]["odom"]["vx"] == 0.0, timeout=1.0)
     assert c.get("/api/scene")["chassis"]["stop_reason"] == "急停"
     assert c.post("/api/chassis/stop")[1]["ok"]
-    c.post("/api/chassis/limit", {"lin_mps": SPEC.default_lin_mps})
+    c.post("/api/chassis/limit", {"lin_mps": SPEC.default_lin_mps, "yaw_rad_s": SPEC.default_yaw_rad_s})

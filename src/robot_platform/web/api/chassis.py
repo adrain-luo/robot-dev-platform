@@ -64,5 +64,7 @@ class ChassisMixin:
         if path == "/api/chassis/move":
             return {"ok": True, **ctrl.command(float(body.get("x") or 0.0), float(body.get("yaw") or 0.0))}
         if path == "/api/chassis/limit":
-            return {"ok": True, **ctrl.set_limit(float(body["lin_mps"]))}
+            lin, yaw = body.get("lin_mps"), body.get("yaw_rad_s")
+            return {"ok": True, **ctrl.set_limit(None if lin in (None, "") else float(lin),
+                                                 None if yaw in (None, "") else float(yaw))}
         return {"ok": False, "error": "没有这个底盘接口"}

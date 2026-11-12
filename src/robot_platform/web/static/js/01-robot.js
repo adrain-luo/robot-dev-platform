@@ -28,7 +28,11 @@ function applyRobotCaps(caps) {
     if (mark) mark.textContent = String(n);
   });
   show("chassis-speed-wrap", !!caps.chassis);
+  show("chassis-yaw-wrap", !!caps.chassis);
   if (caps.chassis && $("chassis-speed")) $("chassis-speed").max = String(caps.chassis.max_lin_mps);
+  if (caps.chassis && $("chassis-yaw")) {
+    $("chassis-yaw").max = String(Math.floor(caps.chassis.max_yaw_rad_s * 180 / Math.PI * 2) / 2);
+  }
   show("waist-ctrl", !!(w && w.movable));
   if ($("waist-note")) {
     if (!w) $("waist-note").textContent = "这台没有腰。";

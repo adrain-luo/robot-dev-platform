@@ -3,7 +3,7 @@
 // 后端 0.5 s 收不到心跳就停车。松手、页面切走、失焦、急停都立刻发 /api/chassis/stop。
 
 const CHASSIS_BEAT_MS = 100;
-const chassis = { x: 0, yaw: 0, timer: null, src: "", keys: new Set(), errShown: false, limitDirty: false };
+const chassis = { x: 0, yaw: 0, timer: null, src: "", keys: new Set(), errShown: false, linDirty: false, yawDirty: false };
 
 function chassisAllowed() {
   return !!(window.ROBOT && window.ROBOT.chassis && window.lastCtrl && window.lastCtrl.allow_real_motion);
@@ -150,43 +150,36 @@ window.addEventListener("blur", () => { chassis.keys.clear(); chassisRelease("�
 document.addEventListener("visibilitychange", () => { if (document.hidden) { chassis.keys.clear(); chassisRelease("切走"); } });
 window.addEventListener("pagehide", () => chassisRelease("关页"));
 
-// 急停 / 停止底盘
+// 急停
 if ($("btn-hold")) $("btn-hold").addEventListener("click", () => { chassis.keys.clear(); chassisRelease("急停"); });
-if ($("btn-chassis-stop")) {
-  $("btn-chassis-stop").onclick = async () => {
-    chassis.keys.clear();
-    chassisRelease("停止");
-    try { await post("/api/chassis/stop", { reason: "停止按钮" }); flash("底盘已停", true); } catch (e) { flash(String(e.message || e), false); }
-  };
-}
 
-// ---------------------------------------------------------------- 底栏限速
-function showChassisLimit(lin, yaw) {
+// ---------------------------------------------------------------- 底栏限速（直线、转向两根滑条，互不影响）
+const DEG = 180 / Math.PI;
+
+function showChassisLin(lin) {
   if ($("chassis-speed-val")) $("chassis-speed-val").textContent = Number(lin).toFixed(2);
-  if ($("chassis-yaw-val")) $("chassis-yaw-val").textContent = (Number(yaw) * 180 / Math.PI).toFixed(1);
+}
+function showChassisYaw(yawRad) {
+  if ($("chassis-yaw-val")) $("chassis-yaw-val").textContent = (Number(yawRad) * DEG).toFixed(1);
 }
 
-function chassisYawFor(lin) {
-  const c = window.ROBOT?.chassis;
-  if (!c) return 0;
-  return Math.min(c.max_yaw_rad_s, lin * c.default_yaw_rad_s / c.default_lin_mps);
+async function chassisSendLimit(body, dirtyKey) {
+  try {
+    const d = await post("/api/chassis/limit", body);
+    showChassisLin(d.limit.lin_mps);
+    showChassisYaw(d.limit.yaw_rad_s);
+    flash(`底盘限速：直线 ${d.limit.lin_mps.toFixed(2)} m/s，转向 ${(d.limit.yaw_rad_s * DEG).toFixed(1)}°/s`, true);
+  } catch (e) { flash(String(e.message || e), false); }
+  chassis[dirtyKey] = false;
 }
 
 if ($("chassis-speed")) {
-  $("chassis-speed").addEventListener("input", () => {
-    chassis.limitDirty = true;
-    const v = Number($("chassis-speed").value);
-    showChassisLimit(v, chassisYawFor(v));
-  });
-  $("chassis-speed").addEventListener("change", async () => {
-    const v = Number($("chassis-speed").value);
-    try {
-      const d = await post("/api/chassis/limit", { lin_mps: v });
-      showChassisLimit(d.limit.lin_mps, d.limit.yaw_rad_s);
-      flash(`底盘限速 ${d.limit.lin_mps.toFixed(2)} m/s、转向 ${(d.limit.yaw_rad_s * 180 / Math.PI).toFixed(1)}°/s`, true);
-    } catch (e) { flash(String(e.message || e), false); }
-    chassis.limitDirty = false;
-  });
+  $("chassis-speed").addEventListener("input", () => { chassis.linDirty = true; showChassisLin($("chassis-speed").value); });
+  $("chassis-speed").addEventListener("change", () => chassisSendLimit({ lin_mps: Number($("chassis-speed").value) }, "linDirty"));
+}
+if ($("chassis-yaw")) {
+  $("chassis-yaw").addEventListener("input", () => { chassis.yawDirty = true; showChassisYaw(Number($("chassis-yaw").value) / DEG); });
+  $("chassis-yaw").addEventListener("change", () => chassisSendLimit({ yaw_rad_s: Number($("chassis-yaw").value) / DEG }, "yawDirty"));
 }
 
 // ---------------------------------------------------------------- 状态
@@ -196,18 +189,24 @@ function renderChassis(c) {
   const pad = $("chassis-pad");
   if (pad) pad.classList.toggle("off", !allow);
   document.querySelectorAll(".chassis-hold").forEach((b) => { b.disabled = !allow; });
-  if ($("chassis-speed")) $("chassis-speed").disabled = !allow;
   const sp = $("chassis-speed");
-  if (c.limit && sp && document.activeElement !== sp && !chassis.limitDirty) {
+  const yw = $("chassis-yaw");
+  if (sp) sp.disabled = !allow;
+  if (yw) yw.disabled = !allow;
+  if (c.limit && sp && document.activeElement !== sp && !chassis.linDirty) {
     sp.value = c.limit.lin_mps;
-    showChassisLimit(c.limit.lin_mps, c.limit.yaw_rad_s);
+    showChassisLin(c.limit.lin_mps);
+  }
+  if (c.limit && yw && document.activeElement !== yw && !chassis.yawDirty) {
+    yw.value = (c.limit.yaw_rad_s * DEG).toFixed(1);
+    showChassisYaw(c.limit.yaw_rad_s);
   }
   const el = $("chassis-now");
   if (!el) return;
   const parts = [];
   const o = c.odom;
   if (o) {
-    parts.push(`实测 ${Number(o.vx).toFixed(2)} m/s、${(Number(o.vyaw) * 180 / Math.PI).toFixed(1)}°/s`);
+    parts.push(`实测 ${Number(o.vx).toFixed(2)} m/s、${(Number(o.vyaw) * DEG).toFixed(1)}°/s`);
     parts.push(`里程计 x ${Number(o.x).toFixed(2)} y ${Number(o.y).toFixed(2)} m，朝向 ${(Number(o.yaw) * 180 / Math.PI).toFixed(1)}°`);
     if (o.age_s > 1) parts.push(`里程计 ${Number(o.age_s).toFixed(1)} s 没更新`);
   } else if (c.available) {

@@ -17,6 +17,7 @@ DT_S = 0.1            # 重发 Move 的周期
 DEADMAN_S = 0.5       # 这么久没收到页面的 move 就停
 ZERO_REPEAT = 3       # 停车时连发几次 0
 MIN_LIN_MPS = 0.02
+MIN_YAW_RAD_S = 0.02
 
 
 class ChassisController:
@@ -29,6 +30,7 @@ class ChassisController:
         self._yaw = 0.0
         self._cmd_t = 0.0
         self._lin = float(spec.default_lin_mps)
+        self._yaw_lim = float(spec.default_yaw_rad_s)
         self._last_code: Optional[int] = None
         self._last_error = ""
         self._stop_reason = ""
@@ -36,19 +38,22 @@ class ChassisController:
         self._thread: Optional[threading.Thread] = None
         self._wake = threading.Event()
 
-    # ------------------------------------------------------------ 限速
-    def yaw_limit(self, lin: Optional[float] = None) -> float:
-        """转向限速跟直线限速按机型默认的比例走，不超过机型上限。"""
-        s = self._spec
-        lin = self._lin if lin is None else lin
-        return min(float(s.max_yaw_rad_s), lin * float(s.default_yaw_rad_s) / float(s.default_lin_mps))
+    # ------------------------------------------------------------ 限速（直线、转向各自独立）
+    def yaw_limit(self) -> float:
+        return self._yaw_lim
 
-    def set_limit(self, lin_mps: float) -> Dict[str, Any]:
-        v = float(lin_mps)
-        if v != v:
+    def set_limit(self, lin_mps: Optional[float] = None, yaw_rad_s: Optional[float] = None) -> Dict[str, Any]:
+        """只改给了的那项；夹到 [最小值, 机型上限]。"""
+        vals = [v for v in (lin_mps, yaw_rad_s) if v is not None]
+        if not vals:
+            raise ValueError("需要 lin_mps 或 yaw_rad_s")
+        if any(float(v) != float(v) for v in vals):
             raise ValueError("限速不是数")
         with self._lock:
-            self._lin = max(MIN_LIN_MPS, min(float(self._spec.max_lin_mps), v))
+            if lin_mps is not None:
+                self._lin = max(MIN_LIN_MPS, min(float(self._spec.max_lin_mps), float(lin_mps)))
+            if yaw_rad_s is not None:
+                self._yaw_lim = max(MIN_YAW_RAD_S, min(float(self._spec.max_yaw_rad_s), float(yaw_rad_s)))
         return self.status()
 
     # ------------------------------------------------------------ 指令
@@ -93,8 +98,7 @@ class ChassisController:
             self._thread.start()
 
     def _velocity(self):
-        lin = self._lin
-        return self._x * lin, self._yaw * self.yaw_limit(lin)
+        return self._x * self._lin, self._yaw * self._yaw_lim
 
     def _loop(self) -> None:
         zeros = 0
@@ -151,7 +155,7 @@ class ChassisController:
                 "available": True,
                 "moving": self._moving,
                 "cmd": {"vx": vx, "vyaw": wz},
-                "limit": {"lin_mps": self._lin, "yaw_rad_s": self.yaw_limit(self._lin),
+                "limit": {"lin_mps": self._lin, "yaw_rad_s": self._yaw_lim,
                           "max_lin_mps": float(self._spec.max_lin_mps),
                           "max_yaw_rad_s": float(self._spec.max_yaw_rad_s)},
                 "last_code": self._last_code,
