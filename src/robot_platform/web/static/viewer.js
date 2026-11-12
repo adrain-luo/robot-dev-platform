@@ -134,6 +134,7 @@ const View = {
       this.resize();
       this.home();
       this.render();
+      this.loadSensors();
     } catch (err) {
       const note = document.getElementById("msg");
       if (note) note.textContent = "三维模型没有载入：" + err.message;
@@ -701,6 +702,135 @@ const View = {
   },
   render() {
     if (this.renderer && this.scene3 && this.camera) this.renderer.render(this.scene3, this.camera);
+  },
+  // ---------------------------------------------------------------- 传感器位置标记（/api/sensors）
+  // 相机：小机身 + 视锥（光学系 z 朝前）；雷达：圆柱。挂在对应 URDF 连杆上，随躯干一起动。
+  // 传感器多在头壳里面，标记不做深度遮挡，透过外壳也看得见。
+  sensorsVisible: true,
+  async loadSensors() {
+    if (!this.ready) return;
+    try {
+      const d = await fetch("/api/sensors", { cache: "no-store" }).then((r) => r.json());
+      this.setSensors((d && d.sensors) || []);
+    } catch (err) {
+      this.setSensors([]);
+    }
+  },
+  setSensorsVisible(on) {
+    this.sensorsVisible = !!on;
+    for (const g of this._sensorGroups || []) g.visible = this.sensorsVisible;
+    this.render();
+  },
+  _sensorMat(color, opacity = 1) {
+    return { color, transparent: true, opacity, depthTest: false, depthWrite: false };
+  },
+  _sensorLabel(text, color) {
+    const pad = 10, font = 28;
+    const c = document.createElement("canvas");
+    const ctx = c.getContext("2d");
+    ctx.font = `600 ${font}px system-ui, sans-serif`;
+    c.width = Math.ceil(ctx.measureText(text).width) + pad * 2;
+    c.height = font + pad * 2;
+    ctx.font = `600 ${font}px system-ui, sans-serif`;
+    ctx.fillStyle = "rgba(15, 20, 28, 0.82)";
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(1.5, 1.5, c.width - 3, c.height - 3);
+    ctx.fillStyle = "#f3f4f6";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, pad, c.height / 2);
+    const tex = new THREE.CanvasTexture(c);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, depthWrite: false }));
+    const h = 0.022;
+    sp.scale.set(h * c.width / c.height, h, 1);
+    sp.renderOrder = 1001;
+    return sp;
+  },
+  _cameraMarker(color) {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.016, 0.012), new THREE.MeshBasicMaterial(this._sensorMat(color, 0.9)));
+    body.position.z = -0.006;
+    g.add(body);
+    // 视锥：光学系 z 朝前、x 右、y 下，深 6 cm
+    const zf = 0.06, xf = 0.04, yf = 0.03;
+    const c = [[xf, yf], [-xf, yf], [-xf, -yf], [xf, -yf]].map(([x, y]) => new THREE.Vector3(x, y, zf));
+    const o = new THREE.Vector3(0, 0, 0);
+    const pts = [];
+    for (let i = 0; i < 4; i++) pts.push(o, c[i], c[i], c[(i + 1) % 4]);
+    g.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial(this._sensorMat(color))));
+    // 图像「上」方向（光学 -y）画一小截，看得出相机有没有装反
+    g.add(new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -yf, zf), new THREE.Vector3(0, -yf - 0.015, zf)]),
+      new THREE.LineBasicMaterial(this._sensorMat(color))));
+    return g;
+  },
+  _lidarMarker(color) {
+    const g = new THREE.Group();
+    // MID-360：半球形，直径约 65 mm。圆底面在连杆原点，球顶朝连杆 +z（雷达自身轴向；
+    // G1 / G1D 头里是倒装的，mid360_link 的 z 在躯干系里朝下，所以球顶朝下）
+    const r = 0.0325;
+    // three 的球面 phi 0..π/2 是绕 y 轴的上半球（顶朝 +y），转到顶朝 +z
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshBasicMaterial({ ...this._sensorMat(color, 0.35), side: THREE.DoubleSide }));
+    dome.rotation.x = Math.PI / 2;
+    g.add(dome);
+    const wire = new THREE.LineSegments(
+      new THREE.WireframeGeometry(new THREE.SphereGeometry(r, 12, 4, 0, Math.PI * 2, 0, Math.PI / 2)),
+      new THREE.LineBasicMaterial(this._sensorMat(color, 0.9)));
+    wire.rotation.x = Math.PI / 2;
+    g.add(wire);
+    // 底面圆
+    const base = [];
+    for (let i = 0; i < 32; i++) {
+      const a0 = (i / 32) * Math.PI * 2, a1 = ((i + 1) / 32) * Math.PI * 2;
+      base.push(new THREE.Vector3(r * Math.cos(a0), r * Math.sin(a0), 0), new THREE.Vector3(r * Math.cos(a1), r * Math.sin(a1), 0));
+    }
+    g.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(base), new THREE.LineBasicMaterial(this._sensorMat(color))));
+    // 轴向（球顶方向）多画一截
+    g.add(new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, r + 0.02)]),
+      new THREE.LineBasicMaterial(this._sensorMat(color))));
+    return g;
+  },
+  setSensors(list) {
+    for (const g of this._sensorGroups || []) {
+      if (g.parent) g.parent.remove(g);
+      g.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+      });
+    }
+    this._sensorGroups = [];
+    if (!this.ready) return;
+    const COLORS = { camera: 0x22d3ee, cameraNominal: 0xf59e0b, lidar: 0xa3e635 };
+    for (const s of list || []) {
+      const parent = this.links.get(s.parent_link);
+      if (!parent || !Array.isArray(s.T) || s.T.length !== 4) continue;
+      const color = s.kind === "lidar" ? COLORS.lidar : (s.calibrated ? COLORS.camera : COLORS.cameraNominal);
+      const css = "#" + color.toString(16).padStart(6, "0");
+      const g = new THREE.Group();
+      g.name = `sensor:${s.id}`;
+      g.userData.sensor = s;
+      const m = new THREE.Matrix4();
+      m.set(...s.T[0], ...s.T[1], ...s.T[2], ...s.T[3]);
+      m.decompose(g.position, g.quaternion, g.scale);
+      g.add(s.kind === "lidar" ? this._lidarMarker(color) : this._cameraMarker(color));
+      g.traverse((o) => { o.renderOrder = 1000; });
+      parent.add(g);
+      g.updateMatrixWorld(true);
+      // 标签按世界方向错开（雷达在后上方，相机在前方，左右眼上下错开），免得叠在一起；
+      // 按挂上去时的世界朝向换到局部（躯干只会小角度倾斜）
+      const off = s.kind === "lidar" ? [-0.07, 0, 0.075]
+        : s.eye === "left" ? [0.1, 0, 0.05] : s.eye === "right" ? [0.1, 0, -0.005] : [0.1, 0, 0.03];
+      const label = this._sensorLabel(s.calibrated ? `${s.label}（标定）` : `${s.label}（标称）`, css);
+      const qw = g.getWorldQuaternion(new THREE.Quaternion()).invert();
+      label.position.copy(new THREE.Vector3(...off).applyQuaternion(qw));
+      g.add(label);
+      g.visible = this.sensorsVisible;
+      this._sensorGroups.push(g);
+    }
+    this.render();
   },
   // 腿式机型：按机身 IMU（在骨盆）的横滚 / 俯仰转骨盆，网格平面即真实水平面；不用偏航（会漂，也无意义）。
   // 返回姿态是否明显变了（变了就马上重新贴地）。

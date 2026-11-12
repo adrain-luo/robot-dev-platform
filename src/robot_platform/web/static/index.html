@@ -91,6 +91,9 @@
               <label class="switch" title="用机身 IMU 的横滚 / 俯仰把骨盆摆正，网格就是真实水平面；关掉则骨盆画成水平（旧行为）">
                 <input id="render-imu-level" type="checkbox" checked><span>按 IMU 水平摆正</span>
               </label>
+              <label class="switch" title="在机器人上画出相机（青色：手眼标定的实测位姿；橙色：URDF 标称位置）和雷达（绿色）装在哪">
+                <input id="render-sensors" type="checkbox" checked><span>显示传感器位置</span>
+              </label>
               <div class="fields">
                 <label class="field grow">挂接
                   <select id="render-frame">

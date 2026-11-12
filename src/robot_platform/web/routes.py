@@ -76,6 +76,11 @@ def handle_get(app, handler, parsed: ParseResult) -> None:
     if path == "/api/robot":
         send_json(handler, 200, app.robot_caps())
         return
+    if path == "/api/sensors":
+        from robot_platform.perception.sensors import sensor_list
+
+        send_json(handler, 200, {"ok": True, "sensors": sensor_list(app.profile)})
+        return
     if path == "/api/runtime-config":
         send_json(handler, 200, app.runtime.snapshot())
         return

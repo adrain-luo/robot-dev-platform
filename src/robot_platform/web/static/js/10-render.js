@@ -24,6 +24,7 @@ function applyRenderControlsFromUi() {
   if (window.RobotView.setCloudFrame) window.RobotView.setCloudFrame(frame);
   if (window.RobotView.setCloudAccumulate) window.RobotView.setCloudAccumulate(stack === "fixed");
   if (window.RobotView.setImuLevel) window.RobotView.setImuLevel(!!$("render-imu-level")?.checked);
+  if (window.RobotView.setSensorsVisible) window.RobotView.setSensorsVisible($("render-sensors")?.checked ?? true);
   const distEl = $("cloud-max-dist");
   if (distEl && window.RobotView.setCloudMaxDist) {
     window.RobotView.setCloudMaxDist(parseFloat(distEl.value) || 2);
@@ -36,6 +37,12 @@ function syncCloudMaxDistLabel() {
   const lab = $("cloud-max-dist-val");
   if (!sl || !lab) return;
   lab.textContent = Number(sl.value).toFixed(1);
+}
+
+if ($("render-sensors")) {
+  $("render-sensors").addEventListener("change", () => {
+    if (window.RobotView && window.RobotView.setSensorsVisible) window.RobotView.setSensorsVisible($("render-sensors").checked);
+  });
 }
 
 if ($("render-imu-level")) {

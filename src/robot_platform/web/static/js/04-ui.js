@@ -55,6 +55,12 @@ async function poll() {
     if (data.runtime) renderRuntimeConfig(data.runtime);
     V3.scene = { right: right?.scene, left: left?.scene, joints, modeLabel, imu: data.imu || null };
     V3.draw();
+    // 手眼结果换了：相机标记按新结果重画（首次载入由三维就绪时自己取）
+    const heKey = String(data.handeye?.active_result ?? "");
+    if (window._sensorHeKey !== undefined && window._sensorHeKey !== heKey && window.RobotView?.loadSensors) {
+      window.RobotView.loadSensors();
+    }
+    window._sensorHeKey = heKey;
     // 三维和关节表都是双臂；「手臂控制」滑条跟卡片上选的那只手
     renderTable([left, right], data.waist);
     const motionArm = armPick("motion");

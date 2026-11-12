@@ -9,7 +9,9 @@
       "label": "头部双目（teleimager）",
       "type": "teleimager",
       "host": "192.168.123.164",
-      "teleimager_path": "/home/robot/yx/teleimager_src_copy"
+      "teleimager_path": "/home/robot/yx/teleimager_src_copy",
+      "link": "d435_link",
+      "link_note": "URDF 的 d435_link 是头部双目的标称安装位（ROS 机体系，下俯约 47.6°）；有手眼标定时三维按标定结果画"
     }
   },
   "lidars": {
