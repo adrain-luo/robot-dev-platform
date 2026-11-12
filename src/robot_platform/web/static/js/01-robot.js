@@ -18,6 +18,15 @@ function applyRobotCaps(caps) {
   show("lift-zero-block", !!caps.lift);
   show("lift-ctrl", !!caps.lift);
   show("chassis-ctrl", !!caps.chassis);
+  show("panel-base", !!(caps.lift || caps.chassis));
+  // 各页卡片数按本机型实际显示的卡片算（如 G1 没有「底盘」卡片）
+  document.querySelectorAll(".page[data-page]").forEach((page) => {
+    const n = [...page.querySelectorAll("article.float")].filter((a) => a.style.display !== "none").length;
+    const head = page.querySelector(".page-head span");
+    if (head) head.textContent = `${n} 张卡片`;
+    const mark = document.querySelector(`.bookmark[data-page="${page.dataset.page}"] .count`);
+    if (mark) mark.textContent = String(n);
+  });
   show("chassis-speed-wrap", !!caps.chassis);
   if (caps.chassis && $("chassis-speed")) $("chassis-speed").max = String(caps.chassis.max_lin_mps);
   show("waist-ctrl", !!(w && w.movable));

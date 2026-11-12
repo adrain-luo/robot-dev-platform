@@ -215,7 +215,7 @@
       标定<span class="count">6</span>
     </button>
     <button type="button" class="bookmark" data-page="control" aria-pressed="false">
-      控制<span class="count">6</span>
+      控制<span class="count">7</span>
     </button>
     <button type="button" class="bookmark" data-page="workflow" aria-pressed="false">
       工作流<span class="count">2</span>
@@ -557,7 +557,7 @@
 
     <div class="page" data-page="control">
       <div class="page-sheet">
-        <div class="page-head"><strong>控制</strong><span>6 张卡片</span></div>
+        <div class="page-head"><strong>控制</strong><span>7 张卡片</span></div>
         <div class="page-cards">
           <article class="float" id="panel-config">
             <button type="button" class="float-toggle">配置 <span id="cfg-lock-badge" class="aside"></span></button>
@@ -679,50 +679,62 @@
                 <button id="btn-waist-stop" class="danger" type="button">停止腰</button>
               </div>
               </div>
-              <div id="lift-ctrl">
-              <p class="note" style="margin-top:12px">立柱：用 Agv HeightAdjust 闭环到行程。条形拖到目标松手后走；也可按步长升/降一步。</p>
-              <p class="note" id="lift-ctrl-now">立柱 —</p>
-              <label class="field grow">行程 mm
-                <input id="lift-slider" type="range" min="0" max="420" step="1" value="0">
-              </label>
-              <div class="fields">
-                <label class="field">目标 mm
-                  <input id="lift-target" type="number" step="1" min="0" max="420" value="0">
-                </label>
-                <label class="field">步长 mm
-                  <input id="lift-step" type="number" step="1" min="1" max="100" value="10">
-                </label>
-              </div>
-              <div class="cmds">
-                <button id="btn-lift-down" type="button">降一步</button>
-                <button id="btn-lift-up" type="button">升一步</button>
-                <button id="btn-lift-go" class="primary" type="button">到目标</button>
-                <button id="btn-lift-stop" class="danger" type="button">停止升降</button>
-              </div>
-              </div>
-              <div id="chassis-ctrl" style="display:none">
-              <p class="note" style="margin-top:12px">底盘：<strong>按住才走</strong>，松手、切走页面或断网 0.5 s 内自动停；急停也会停底盘。限速在底栏。差速底盘只能前后走和原地转，不能横移。</p>
-              <p class="note" id="chassis-now">底盘 —</p>
-              <div class="chassis-row">
-                <div class="chassis-pad" id="chassis-pad" title="按住拖动：上下 = 前进 / 后退，左右 = 左转 / 右转">
-                  <div class="chassis-knob" id="chassis-knob"></div>
-                </div>
-                <div class="chassis-keys">
-                  <button type="button" class="chassis-hold" data-x="1" data-yaw="0">前进</button>
-                  <div class="chassis-keys-mid">
-                    <button type="button" class="chassis-hold" data-x="0" data-yaw="1">左转</button>
-                    <button type="button" class="chassis-hold" data-x="0" data-yaw="-1">右转</button>
+            </div>
+          </article>
+
+          <article class="float" id="panel-base" style="display:none">
+            <button type="button" class="float-toggle">底盘</button>
+            <div class="float-body">
+              <section class="subfold" id="lift-ctrl" style="display:none">
+                <button type="button" class="subfold-toggle">立柱</button>
+                <div class="subfold-body">
+                  <p class="note">用 Agv HeightAdjust 闭环到行程。条形拖到目标松手后走；也可按步长升/降一步。</p>
+                  <p class="note" id="lift-ctrl-now">立柱 —</p>
+                  <label class="field grow">行程 mm
+                    <input id="lift-slider" type="range" min="0" max="420" step="1" value="0">
+                  </label>
+                  <div class="fields">
+                    <label class="field">目标 mm
+                      <input id="lift-target" type="number" step="1" min="0" max="420" value="0">
+                    </label>
+                    <label class="field">步长 mm
+                      <input id="lift-step" type="number" step="1" min="1" max="100" value="10">
+                    </label>
                   </div>
-                  <button type="button" class="chassis-hold" data-x="-1" data-yaw="0">后退</button>
+                  <div class="cmds">
+                    <button id="btn-lift-down" type="button">降一步</button>
+                    <button id="btn-lift-up" type="button">升一步</button>
+                    <button id="btn-lift-go" class="primary" type="button">到目标</button>
+                    <button id="btn-lift-stop" class="danger" type="button">停止升降</button>
+                  </div>
                 </div>
-              </div>
-              <label class="switch" title="勾上后在页面上按 W/S 前后、A/D 转向（方向键也行），松键即停；光标在输入框里时不响应">
-                <input id="chassis-keys-on" type="checkbox"><span>键盘遥控（WASD / 方向键）</span>
-              </label>
-              <div class="cmds">
-                <button id="btn-chassis-stop" class="danger" type="button">停止底盘</button>
-              </div>
-              </div>
+              </section>
+              <section class="subfold" id="chassis-ctrl" style="display:none">
+                <button type="button" class="subfold-toggle">底盘移动</button>
+                <div class="subfold-body">
+                  <p class="note"><strong>按住才走</strong>，松手、切走页面或断网 0.5 s 内自动停；急停也会停底盘。限速在底栏。差速底盘只能前后走和原地转，不能横移。</p>
+                  <p class="note" id="chassis-now">底盘 —</p>
+                  <div class="chassis-row">
+                    <div class="chassis-pad" id="chassis-pad" title="按住拖动：上下 = 前进 / 后退，左右 = 左转 / 右转">
+                      <div class="chassis-knob" id="chassis-knob"></div>
+                    </div>
+                    <div class="chassis-keys">
+                      <button type="button" class="chassis-hold" data-x="1" data-yaw="0">前进</button>
+                      <div class="chassis-keys-mid">
+                        <button type="button" class="chassis-hold" data-x="0" data-yaw="1">左转</button>
+                        <button type="button" class="chassis-hold" data-x="0" data-yaw="-1">右转</button>
+                      </div>
+                      <button type="button" class="chassis-hold" data-x="-1" data-yaw="0">后退</button>
+                    </div>
+                  </div>
+                  <label class="switch" title="勾上后在页面上按 W/S 前后、A/D 转向（方向键也行），松键即停；光标在输入框里时不响应">
+                    <input id="chassis-keys-on" type="checkbox"><span>键盘遥控（WASD / 方向键）</span>
+                  </label>
+                  <div class="cmds">
+                    <button id="btn-chassis-stop" class="danger" type="button">停止底盘</button>
+                  </div>
+                </div>
+              </section>
             </div>
           </article>
 
