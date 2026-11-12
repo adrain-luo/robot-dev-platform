@@ -235,6 +235,8 @@ class MockBackend(Backend):
         self._commander = MockCommander(self.robot, self._monitor)
         self._foreign_stop: Optional[threading.Event] = None
         self._torso_imu = MockTorsoImu() if profile.torso_imu is not None else None
+        if self._torso_imu is not None:
+            self._torso_imu.set_tilt(-3.4, -0.75)  # 同 G1D 2026-11-11 实测：躯干后仰约 3.4°、左倾约 0.75°
 
     def torso_imu(self):
         return self._torso_imu

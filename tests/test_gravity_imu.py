@@ -189,3 +189,32 @@ def test_api_gravity_imu(mock_server):
         time.sleep(0.05)
     code, d = mock_server.post("/api/gravity-imu", {"enabled": False})
     assert code == 200, d
+
+
+def test_scene_tilts_torso_pitch_joint_by_imu(mock_server):
+    """G1D 没有腰俯仰电机：三维里的 Yaw_Joint 按躯干 IMU 测到的俯仰摆（仿真 IMU 默认同实测：后仰 3.4°）。"""
+    assert load_profile("g1d").torso_imu.display_pitch_joint == "Yaw_Joint"
+    body = mock_server.get("/api/scene")["body"]
+    assert math.degrees(body["Yaw_Joint"]) == pytest.approx(-3.4, abs=0.05)
+    # 腰的读数 / 控件里仍然没有俯仰（它只是给三维看的）
+    assert "Yaw_Joint" not in mock_server.get("/api/scene")["waist"]
+
+
+def test_torso_tilt_joint_skipped_when_imu_untrusted():
+    """IMU 断流或倾角离谱：不给这个关节（三维按 0 画），也不报错。"""
+    from types import SimpleNamespace
+
+    from robot_platform.web.api.state import StateMixin
+
+    profile = load_profile("g1d")
+    imu = MockTorsoImu()
+    app = SimpleNamespace(profile=profile, reader=lambda: None, backend=SimpleNamespace(torso_imu=lambda: imu))
+    get = lambda: StateMixin._torso_tilt_joint(app)  # noqa: E731
+    imu.set_tilt(-3.0, 0.0)
+    assert math.degrees(get()["Yaw_Joint"]) == pytest.approx(-3.0, abs=0.05)
+    imu.stale = True
+    assert get() == {}
+    imu.stale = False
+    imu.set_tilt(30.0, 0.0)
+    assert get() == {}
+    assert StateMixin._torso_tilt_joint(SimpleNamespace(profile=load_profile("g1"))) == {}

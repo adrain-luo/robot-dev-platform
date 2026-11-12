@@ -133,7 +133,8 @@ def test_robot_caps(mock_server):
     assert c["lift"]["stroke_max_mm"] == 420 and c["waist"]["movable"] is True
     assert [j["motor"] for j in c["waist"]["joints"]] == [12]  # G1D 没有腰俯仰
     assert c["legged"] is False and c["transitions"] is False
-    assert mock_server.get("/api/scene")["body"] == {}
+    # 非腿式：没有腿的显示关节，只有按躯干 IMU 摆的腰俯仰（只给三维看）
+    assert set(mock_server.get("/api/scene")["body"]) == {"Yaw_Joint"}
 
 
 def test_app_js_is_bundle_of_parts(mock_server):

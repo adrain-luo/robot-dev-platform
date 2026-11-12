@@ -27,6 +27,7 @@
     "mount_rpy": [0.0, 0.0, 0.0],
     "max_tilt_deg": 20.0,
     "gravity_default": false,
+    "display_pitch_joint": "Yaw_Joint",
     "note": "宇树躯干 IMU（unitree_hg IMUState，约 1 kHz），坐标系与 torso_link 一致（同 G1 URDF 的 imu_in_torso，rpy 0）。2026-11-11 实测：四元数给的躯干倾角与雷达拟合地面差约 0.15°；原始加速度计有约 2° 零偏，不用。"
   },
   "control": {
@@ -87,7 +88,7 @@
     "joints": [
       {"role": "yaw", "urdf_joint": "torso_Joint", "motor": 12, "limit_rad": [-2.7053, 2.7053]}
     ],
-    "no_pitch_note": "G1D 实物没有腰俯仰电机（URDF 的 Yaw_Joint 只是模型里的轴，三维按 0 画；电机 14 读数恒 0）。躯干倾角看躯干 IMU（torso_imu）。",
+    "no_pitch_note": "G1D 实物没有腰俯仰电机（URDF 的 Yaw_Joint 只是模型里的轴，三维按躯干 IMU 的俯仰摆，见 torso_imu.display_pitch_joint；电机 14 读数恒 0）。躯干倾角看躯干 IMU（torso_imu）。",
     "hold_motors": [12, 13],
     "lock_kp": 200.0,
     "lock_kd": 4.0

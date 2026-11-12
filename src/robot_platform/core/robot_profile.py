@@ -142,6 +142,8 @@ class TorsoImuSpec:
     mount_rpy: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     max_tilt_deg: float = 20.0  # 躯干倾角超过这个就当读数不可信，保持上一次的重力方向
     gravity_default: bool = False  # 服务启动时重力前馈是否就按 IMU 算
+    # 三维里按 IMU 测到的躯干俯仰摆这个 URDF 关节（G1D：没有俯仰电机，躯干的倾斜只能靠 IMU 看出来）
+    display_pitch_joint: str = ""
     note: str = ""
 
 
@@ -285,6 +287,7 @@ def _parse_torso_imu(raw: Optional[Dict[str, Any]]) -> Optional[TorsoImuSpec]:
         mount_rpy=rpy,
         max_tilt_deg=float(raw.get("max_tilt_deg", 20.0)),
         gravity_default=bool(raw.get("gravity_default", False)),
+        display_pitch_joint=str(raw.get("display_pitch_joint") or ""),
         note=str(raw.get("note") or ""),
     )
 

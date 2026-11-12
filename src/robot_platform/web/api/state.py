@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Dict
 import math
+import time
 
 from robot_platform.calib import lift as lift_calib
 from robot_platform.calib.payload import identify as iden
 from robot_platform.core import instance as instances
+from robot_platform.control.gravity_dir import down_in_base, rpy_to_R, tilt_angles
 from robot_platform.core.layout import get_arm, short_joint_label
 
 
@@ -145,15 +147,46 @@ class StateMixin:
         }
 
     def body_joints(self) -> Dict[str, float]:
-        """只用于三维显示的其它关节（如 G1 的腿）。"""
+        """只用于三维显示的其它关节（如 G1 的腿、G1D 按躯干 IMU 摆的腰俯仰）。"""
+        out = self._torso_tilt_joint()
         disp = self.profile.display_joints
         if not disp:
-            return {}
+            return out
         try:
             st = self.reader().read_motor_states(list(disp))
         except Exception:
+            return out
+        out.update({name: st[i]["q"] for i, name in disp.items()})
+        return out
+
+    def _torso_tilt_joint(self) -> Dict[str, float]:
+        """机型声明了 torso_imu.display_pitch_joint：按躯干 IMU 测到的俯仰摆这个 URDF 关节（只给三维用）。
+
+        G1D 没有腰俯仰电机，躯干实际后仰约 3～4°，不这样三维里躯干永远是竖直的。
+        IMU 没数据、断流或倾角离谱时不给（三维按 0 画）。只读模式也读（不发任何指令）。
+        """
+        spec = self.profile.torso_imu
+        if spec is None or not spec.display_pitch_joint:
             return {}
-        return {name: st[i]["q"] for i, name in disp.items()}
+        now = time.monotonic()
+        if now < getattr(self, "_torso_view_retry_at", 0.0):
+            return {}
+        try:
+            self.reader()
+            imu = self.backend.torso_imu()
+            got = imu.latest() if imu is not None else None
+        except Exception:  # noqa: BLE001  IMU 起不来：三维照旧按 0 画，过一会儿再试
+            self._torso_view_retry_at = now + 5.0
+            return {}
+        if got is None or now - got[1] > 0.5:
+            return {}
+        try:
+            t = tilt_angles(down_in_base(got[0], rpy_to_R(*spec.mount_rpy)))
+        except ValueError:
+            return {}
+        if t["tilt_deg"] > spec.max_tilt_deg:
+            return {}
+        return {spec.display_pitch_joint: math.radians(t["pitch_deg"])}
 
     def _imu(self):
         """机身 IMU 姿态，给三维把骨盆按重力摆正（只用横滚 / 俯仰）。没有就 None。"""
