@@ -30,6 +30,7 @@ function applyRobotCaps(caps) {
   show("chassis-speed-wrap", !!caps.chassis);
   show("chassis-yaw-wrap", !!caps.chassis);
   show("keys-on-wrap", !!(caps.chassis || caps.lift));
+  show("lift-hold-speed-wrap", !!caps.lift);
   if (caps.chassis && $("chassis-speed")) $("chassis-speed").max = String(caps.chassis.max_lin_mps);
   if (caps.chassis && $("chassis-yaw")) {
     $("chassis-yaw").max = String(Math.floor(caps.chassis.max_yaw_rad_s * 180 / Math.PI * 2) / 2);

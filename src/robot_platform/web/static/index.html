@@ -53,8 +53,12 @@
     <span>底盘转向 <b id="chassis-yaw-val">11.5</b>°/s</span>
     <input id="chassis-yaw" type="range" min="1" max="34" step="0.5" value="11.5">
   </label>
+  <label class="field speed" id="lift-hold-speed-wrap" style="display:none" title="键盘长按 E / Q 时立柱升降的速度。松手即生效，正在按着也立刻生效">
+    <span>立柱长按 <b id="lift-hold-speed-val">20</b> mm/s</span>
+    <input id="lift-hold-speed" type="range" min="5" max="76" step="1" value="20">
+  </label>
   <div id="engage-state" class="state"></div>
-  <label class="switch" id="keys-on-wrap" style="display:none" title="勾上后在页面上：W/S 前后、A/D 转向（方向键也行），松键即停；按住 E 立柱一直升、按住 Q 一直降，松键即停（目标始终领先当前高度一个「步长 mm」，断线最多再走一个步长）。光标在输入框里时不响应">
+  <label class="switch" id="keys-on-wrap" style="display:none" title="勾上后在页面上：W/S 前后、A/D 转向（方向键也行），松键即停；按住 E 立柱一直升、按住 Q 一直降，松键即停；速度在底栏「立柱长按」滑条调；松键、断线 0.5 s 内自动停，到行程两端也停。光标在输入框里时不响应">
     <input id="chassis-keys-on" type="checkbox"><span>键盘 <small>WASD · E/Q 立柱</small></span>
   </label>
 </nav>
@@ -735,7 +739,7 @@
                       <button type="button" class="chassis-hold" data-x="-1" data-yaw="0">后退</button>
                     </div>
                   </div>
-                  <p class="note">键盘遥控开关在底栏最右：W/S 前后、A/D 转向（方向键也行），按住 E/Q 立柱一直升/降，松键即停（立柱的「步长 mm」越大升降越快）。</p>
+                  <p class="note">键盘遥控开关在底栏最右：W/S 前后、A/D 转向（方向键也行），按住 E/Q 立柱一直升/降，松键即停，速度在底栏「立柱长按」滑条调。</p>
                 </div>
               </section>
             </div>

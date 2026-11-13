@@ -84,6 +84,13 @@ class LiftMixin:
             out = ctrl.goto(height)
             out["message"] = f"立柱目标行程 {(out.get('target_m', height) - lift_calib.load_zero()) * 1000.0:.1f} mm"
             return out
+        if path == "/api/lift/jog":
+            # 键盘长按：每 ~0.1 s 续一次，停发 0.5 s 自动停
+            try:
+                speed = float(body.get("speed_mm_s"))
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "需要 speed_mm_s"}
+            return ctrl.jog(speed)
         if path == "/api/lift/step":
             if "delta_mm" in body and body.get("delta_mm") not in (None, ""):
                 delta = float(body["delta_mm"]) / 1000.0

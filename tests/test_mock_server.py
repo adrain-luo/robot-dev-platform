@@ -102,6 +102,32 @@ def test_waist_step_and_limits(mock_server):
     c.post("/api/release")
 
 
+def test_lift_jog_deadman(mock_server):
+    """键盘长按：按速度升，停止续命 0.5 s 内自动停；stop 立即停。"""
+    import time as _t
+    c = mock_server
+    c.post("/api/lift/stop")
+    c.post("/api/lift/goto", {"stroke_mm": 100})
+    c.wait(lambda s: not (s["lift"].get("ctrl") or {}).get("busy"), timeout_s=15)
+    s0 = c.get("/api/scene")["lift"]["stroke_mm"]
+    t0 = _t.monotonic()
+    while _t.monotonic() - t0 < 1.0:
+        code, d = c.post("/api/lift/jog", {"speed_mm_s": 30})
+        assert code == 200 and d["ok"], d
+        _t.sleep(0.1)
+    # 停止续命：0.5 s 看门狗后停下
+    s = c.wait(lambda s: not (s["lift"].get("ctrl") or {}).get("busy"), timeout_s=3)
+    moved = s["lift"]["stroke_mm"] - s0
+    assert 20 < moved < 60, moved  # ~1 s × 30 mm/s + 看门狗那一截
+    _t.sleep(0.4)
+    assert abs(c.get("/api/scene")["lift"]["stroke_mm"] - s["lift"]["stroke_mm"]) < 1.0
+    # 往下点动再 stop：立即停
+    c.post("/api/lift/jog", {"speed_mm_s": -30})
+    c.post("/api/lift/stop")
+    s = c.wait(lambda s: not (s["lift"].get("ctrl") or {}).get("busy"), timeout_s=3)
+    assert not c.post("/api/lift/jog", {})[1]["ok"]
+
+
 def test_lift_step_and_stop(mock_server):
     c = mock_server
     s0 = c.get("/api/scene")["lift"]["stroke_mm"]

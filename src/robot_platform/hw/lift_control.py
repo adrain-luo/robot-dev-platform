@@ -19,6 +19,11 @@ _ARRIVE_TOL_M = 0.0015
 _ARRIVE_STABLE = 12
 _DT_S = 0.05
 _HEIGHT_TIMEOUT_S = 0.6
+# HeightAdjust vz=1 时的官方满速（mock 也按它积分）
+FULL_SPEED_MM_S = 76.5
+# 点动（键盘长按）：多久没收到续命就停；离行程两端多近就不再往那边走
+JOG_DEADMAN_S = 0.5
+_JOG_END_MARGIN_M = 0.002
 
 
 class LiftController:
@@ -38,6 +43,8 @@ class LiftController:
         self._last_error: Optional[str] = None
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
+        self._jog_vz: Optional[float] = None  # 点动中：归一化速度
+        self._jog_until = 0.0
 
     def status(self) -> Dict[str, Any]:
         st = self._hispeed.latest()
@@ -48,8 +55,11 @@ class LiftController:
             err = self._last_error
         height = None if st is None else float(st.height_m)
         stroke = None if height is None else max(0.0, min(self._stroke_max_m, height - zero))
+        with self._lock:
+            jog = self._jog_vz
         return {
             "busy": busy,
+            "jog_mm_s": None if jog is None else jog * FULL_SPEED_MM_S,
             "target_m": target,
             "target_mm": None if target is None else target * 1000.0,
             "height_m": height,
@@ -76,6 +86,20 @@ class LiftController:
         target = self.clamp_height(height_m)
         with self._lock:
             self._target_m = target
+            self._jog_vz = None
+            self._last_error = None
+        self._ensure_thread()
+        return {"ok": True, **self.status()}
+
+    def jog(self, speed_mm_s: float, hold_s: float = JOG_DEADMAN_S) -> Dict[str, Any]:
+        """按速度升降（正为升），hold_s 内没有再调就自动停；到行程两端自动停。"""
+        if self.current_height() is None:
+            return {"ok": False, "error": "还没有立柱高度反馈", **self.status()}
+        vz = max(-1.0, min(1.0, float(speed_mm_s) / FULL_SPEED_MM_S))
+        with self._lock:
+            self._target_m = None
+            self._jog_vz = vz
+            self._jog_until = time.monotonic() + max(0.05, min(2.0, float(hold_s)))
             self._last_error = None
         self._ensure_thread()
         return {"ok": True, **self.status()}
@@ -90,6 +114,7 @@ class LiftController:
         self._stop.set()
         with self._lock:
             self._target_m = None
+            self._jog_vz = None
             self._busy = False
             self._last_error = None
         try:
@@ -101,6 +126,10 @@ class LiftController:
         return {"ok": True, **self.status()}
 
     def _ensure_thread(self) -> None:
+        t = self._thread
+        if t is not None and t.is_alive() and self._stop.is_set():
+            # 刚 stop 过、旧线程还在退出：等它退完再起新的，免得新目标被正在退出的线程吞掉
+            t.join(timeout=0.5)
         self._stop.clear()
         t = self._thread
         if t is not None and t.is_alive():
@@ -118,16 +147,40 @@ class LiftController:
             while not self._stop.is_set():
                 with self._lock:
                     target = self._target_m
-                if target is None:
+                    jog = self._jog_vz
+                    jog_until = self._jog_until
+                if target is None and jog is None:
                     break
                 st = self._hispeed.latest()
                 age = self._hispeed.age_s()
                 if st is None or age > _HEIGHT_TIMEOUT_S:
                     with self._lock:
                         self._last_error = "立柱高度超时"
+                        self._jog_vz = None
                     self._agv.stop_height()
                     break
                 height = float(st.height_m)
+                if jog is not None:
+                    zero = lift_calib.load_zero()
+                    at_top = jog > 0 and height >= zero + self._stroke_max_m - _JOG_END_MARGIN_M
+                    at_bottom = jog < 0 and height <= zero + _JOG_END_MARGIN_M
+                    if time.monotonic() > jog_until or at_top or at_bottom:
+                        # 没续命（松键 / 断线）或到头：停
+                        with self._lock:
+                            if at_top or at_bottom or self._jog_until == jog_until:  # 到头，或期间没人续命
+                                self._jog_vz = None
+                        self._agv.stop_height()
+                        break
+                    code = self._agv.height_adjust(jog)
+                    if code != 0:
+                        with self._lock:
+                            self._last_error = f"HeightAdjust 返回 {code}"
+                            self._jog_vz = None
+                        self._agv.stop_height()
+                        break
+                    prev_err = None
+                    time.sleep(_DT_S)
+                    continue
                 now = time.monotonic()
                 dt = max(1e-3, now - prev_t)
                 prev_t = now
@@ -163,9 +216,13 @@ class LiftController:
         finally:
             with self._lock:
                 self._busy = False
-                if self._target_m is not None and self._last_error is None:
-                    # 被 stop 清掉目标时保持
-                    pass
+                # 线程正要退出时又来了新目标 / 点动续命（没被 stop、没出错）：接着跑
+                again = (not self._stop.is_set() and self._last_error is None
+                         and (self._target_m is not None or self._jog_vz is not None))
+            if again:
+                self._thread = threading.Thread(target=self._loop, name="lift-pd", daemon=True)
+                self._thread.start()
+                return
             try:
                 self._agv.stop_height()
             except Exception:

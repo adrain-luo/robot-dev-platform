@@ -125,26 +125,31 @@ function chassisTyping(ev) {
   return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
 }
 
-// 立柱：按住 E 一直升、按住 Q 一直降，松键即停。按住期间每 LIFT_HOLD_MS 把目标重设为「当前高度 ± 步长」
-// （步长取立柱卡片「步长 mm」，越大越快）；所以就算松键消息丢了 / 断网，最多再走一个步长就停在那里。
+// 立柱：按住 E 一直升、按住 Q 一直降，松键即停。速度由底栏「立柱长按」滑条定（mm/s）：
+// 按住期间每 LIFT_HOLD_MS 发一次 /api/lift/jog 续命，后端 0.5 s 没收到就自动停（松键消息丢了 / 断网也停），
+// 到行程两端也自动停。
 const LIFT_KEYS = { e: 1, q: -1 };
-const LIFT_HOLD_MS = 150;
+const LIFT_HOLD_MS = 100;
+const LIFT_SPEED_KEY = "rdp.liftHoldSpeed";
 const liftHold = { dir: 0, timer: null, inflight: false };
+
+function liftHoldSpeed() {
+  const v = Number($("lift-hold-speed")?.value);
+  return Number.isFinite(v) && v > 0 ? v : 20;
+}
 
 async function liftHoldTick() {
   if (!liftHold.dir || liftHold.inflight) return;
-  const step = parseFloat($("lift-step")?.value);
-  if (!Number.isFinite(step) || step <= 0) { liftHoldStop("步长无效"); flash("立柱步长无效", false); return; }
   liftHold.inflight = true;
   try {
-    const d = await post("/api/lift/step", { delta_mm: liftHold.dir * step });
+    const d = await post("/api/lift/jog", { speed_mm_s: liftHold.dir * liftHoldSpeed() });
     if (!d.ok) throw new Error(d.error || "立柱失败");
   } catch (e) {
     liftHoldStop("出错");
     flash(`立柱：${e.message || e}`, false);
   } finally {
     liftHold.inflight = false;
-    // 松键时这一步还在路上：它到后端会重设目标，再补一次停
+    // 松键时这一拍还在路上：它到后端会再续命，补一次停
     if (!liftHold.dir) post("/api/lift/stop", { reason: "松键补停" }).catch(() => {});
   }
 }
@@ -155,6 +160,22 @@ function liftHoldStart(dir) {
   clearInterval(liftHold.timer);
   liftHoldTick();
   liftHold.timer = setInterval(liftHoldTick, LIFT_HOLD_MS);
+}
+
+function showLiftHoldSpeed() {
+  if ($("lift-hold-speed-val")) $("lift-hold-speed-val").textContent = String(Math.round(liftHoldSpeed()));
+}
+
+if ($("lift-hold-speed")) {
+  try {
+    const saved = Number(localStorage.getItem(LIFT_SPEED_KEY));
+    if (Number.isFinite(saved) && saved > 0) $("lift-hold-speed").value = String(saved);
+  } catch (e) { /* 存储不可用就用默认 */ }
+  showLiftHoldSpeed();
+  $("lift-hold-speed").addEventListener("input", showLiftHoldSpeed);
+  $("lift-hold-speed").addEventListener("change", () => {
+    try { localStorage.setItem(LIFT_SPEED_KEY, $("lift-hold-speed").value); } catch (e) { /* 忽略 */ }
+  });
 }
 
 function liftHoldStop(why) {
