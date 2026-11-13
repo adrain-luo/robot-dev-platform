@@ -764,6 +764,36 @@
             </div>
           </article>
 
+          <article class="float" id="panel-single-pose">
+            <button type="button" class="float-toggle">单姿态记录和到位 <span id="sp-mode" class="aside"></span></button>
+            <div class="float-body">
+              <div class="arm-pick-row"><span>手</span><span class="arm-pick" data-pick="single"></span></div>
+              <p class="note">一个名字就是所选那只手的一个姿态。拖拽或点动到位后命名「记录」；点<strong>名字</strong>或「到位」按底栏限速走过去，用控制页「配置」里已应用的 IK 策略解末端位姿。到位会解开这只手锁着的工作姿态。</p>
+              <div class="fields">
+                <label class="field grow">命名
+                  <input id="sp-name" placeholder="例如 初步起手式" maxlength="48">
+                </label>
+                <button id="btn-sp-record" class="primary" type="button">记录当前姿态</button>
+              </div>
+              <div class="asset-table-wrap">
+                <table id="sp-table" class="asset-table">
+                  <thead>
+                    <tr>
+                      <th>名称（点击到位）</th>
+                      <th>末端 mm</th>
+                      <th>到位</th>
+                      <th>改名</th>
+                      <th>删除</th>
+                    </tr>
+                  </thead>
+                  <tbody id="sp-table-body"></tbody>
+                </table>
+              </div>
+              <p class="note" id="sp-table-empty">这只手还没有记录的姿态</p>
+              <p class="note" id="sp-now"></p>
+            </div>
+          </article>
+
           <article class="float" id="panel-tcp-jog">
             <button type="button" class="float-toggle">TCP 控制</button>
             <div class="float-body">

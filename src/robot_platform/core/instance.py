@@ -30,6 +30,7 @@ LAYOUT: Dict[str, str] = {
     "handeye_results": "calib/handeye",
     "payloads": "calib/payloads",
     "posesets": "calib/posesets",
+    "single_poses": "calib/single_poses",
     "color_intrinsics": "calib/color_intrinsics",
     "lift_zero": "state/lift_zero.json",
     "runtime_lock": "state/runtime_lock.json",

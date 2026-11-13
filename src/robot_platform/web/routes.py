@@ -200,6 +200,12 @@ def _points(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     return 200, app.point_post(path, body)
 
 
+def _single_pose(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if not path.startswith("/api/single-pose/"):
+        return None
+    return 200, app.single_pose_post(path, body)
+
+
 def _lift(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     if not path.startswith("/api/lift/"):
         return None
@@ -239,7 +245,7 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
     任务只是被通知停止，线程要等下一次检查才退出；所以先置停止标志、最后才锁目标，
     避免任务在锁目标之后又发出下一个点。各项互不影响：某项出错也继续往下停。
     """
-    app.motion_stop.set()  # 空间点碰点、工作姿态调用
+    app.motion_stop.set()  # 空间点碰点、工作姿态调用、单姿态到位
     stoppers = (
         lambda: app.chassis_stop("急停"),  # 底盘最先停（它不受手臂接管影响）
         app.board.request_stop,          # 棋盘触摸
@@ -333,7 +339,7 @@ def _mock(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
 
 
 POST_GROUPS: List[Callable[[Any, str, Dict[str, Any]], Optional[Reply]]] = [
-    _mock, _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _lift, _chassis,
+    _mock, _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _single_pose, _lift, _chassis,
 ]
 
 

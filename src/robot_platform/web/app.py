@@ -28,9 +28,11 @@ from robot_platform.web.api.tcp import TcpMixin
 from robot_platform.web.api.work_pose import WorkPoseMixin
 from robot_platform.web.api.points import PointsMixin
 from robot_platform.web.api.runtime import RuntimeMixin
+from robot_platform.web.api.single_pose import SinglePoseMixin
 
 
-class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMixin):
+class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMixin,
+          SinglePoseMixin):
     def __init__(self, settings, kin: RobotKinematics, allow_real_motion: bool, backend: Backend):
         self.settings = settings
         self.profile = settings.profile

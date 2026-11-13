@@ -14,7 +14,8 @@ instances/<名字>/
 │   ├── spatial_points/  空间点，_active.json 记当前选中
 │   ├── handeye/         命名的手眼结果（json + 配套双目 yaml）
 │   ├── payloads/        末端负载补偿，_last_left/right.json 记各臂当前应用
-│   └── posesets/        姿态集
+│   ├── posesets/        姿态集
+│   └── single_poses/    单姿态（一个名字一只手一个姿态，控制页「单姿态记录和到位」）
 ├── state/               当前状态（进 git）
 │   ├── handeye.json     相机地址、当前手眼 / 双目 yaml、采集参数
 │   ├── lift_zero.json   立柱最低点
