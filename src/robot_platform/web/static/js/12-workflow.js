@@ -132,7 +132,7 @@ async function wfDgStepPose() {
   if (!name) throw new Error("先选择工作姿态");
   if (!window.lastTcpName) throw new Error("先调用一套 TCP");
   // 工作流跟着 TCP 卡片当前那套 TCP 的手走（工作姿态也记着是哪只手的）
-  const busy = armBusyReason(window.lastTcpArm);
+  const busy = await armBusyReasonFresh(window.lastTcpArm);
   if (busy) throw new Error(busy);
   wfDgCheckAbort();
   wfDgSetNote("① 调用并锁定工作姿态…");
@@ -187,7 +187,7 @@ async function wfDgStepGoto(kind) {
   const center = window.wfDetectGoto.center_m;
   if (!center) throw new Error("还没有识别中心，先跑识别步骤");
   const arm = (window.wfDetectGoto && window.wfDetectGoto.arm) || window.lastTcpArm;
-  const busy = armBusyReason(arm);
+  const busy = await armBusyReasonFresh(arm);
   if (busy) throw new Error(busy);
   const { ox, oy, oz, hz } = wfDgReadOffset();
   const offset_mm = kind === "lift" ? [ox, oy, oz + hz] : [ox, oy, oz];

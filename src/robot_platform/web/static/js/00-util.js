@@ -202,3 +202,16 @@ function armBusyReason(arm) {
   if (a.owner) return `${side}臂正被「${a.owner}」使用`;
   return "";
 }
+
+// 同上，但先取一次最新状态再判断。连续几步的流程用：上一步刚结束时，轮询缓存里可能还是
+// 上一步占着手的旧状态（例：③ 碰点刚返回，缓存仍显示「空间点碰点」，④ 会被误拦）
+async function armBusyReasonFresh(arm) {
+  try {
+    const res = await fetch("/api/status", { cache: "no-store" });
+    const d = await res.json();
+    if (d && d.ctrl && typeof applyCtrl === "function") applyCtrl(d.ctrl);
+  } catch (e) {
+    /* 取不到就按缓存判断，后端走点时还会再查一次占用 */
+  }
+  return armBusyReason(arm);
+}
