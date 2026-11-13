@@ -4,7 +4,7 @@ POST 的顺序有讲究，与拆分前一致：
 1. /api/runtime-config/* 先走（它自己管锁定，不受锁定拦截）；
 2. 配置锁定检查 runtime.guard_path；
 3. 手眼、负载、雷达三组（它们自带路由表）；
-4. TCP、工作姿态、棋盘、识别定位、空间点、立柱；
+4. TCP、工作姿态、棋盘、识别定位、空间点、单姿态、吸盘、立柱、底盘；
 5. 其余都是臂控指令，要求开了 --allow-real-motion。
 
 每个分组函数返回 (状态码, JSON) 表示已处理，返回 None 表示不归它管。
@@ -206,6 +206,12 @@ def _single_pose(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     return 200, app.single_pose_post(path, body)
 
 
+def _suction(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if not path.startswith("/api/suction/"):
+        return None
+    return 200, app.suction_post(path, body)
+
+
 def _lift(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     if not path.startswith("/api/lift/"):
         return None
@@ -339,7 +345,7 @@ def _mock(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
 
 
 POST_GROUPS: List[Callable[[Any, str, Dict[str, Any]], Optional[Reply]]] = [
-    _mock, _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _single_pose, _lift, _chassis,
+    _mock, _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _single_pose, _suction, _lift, _chassis,
 ]
 
 

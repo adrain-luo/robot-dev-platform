@@ -1,4 +1,4 @@
-// 14-chassis.js —— 底盘遥控：摇杆 / 按钮 / 键盘「按住才走」，底栏限速滑条，急停联动
+// 14-chassis.js —— 底盘遥控：摇杆 / 按钮 / 键盘「按住才走」（键盘开关在底栏最右，按住 E/Q 立柱升降），底栏限速滑条，急停联动
 // 按住期间每 CHASSIS_BEAT_MS 发一次 /api/chassis/move（x 前后、yaw 转向，归一化 ±1）当心跳；
 // 后端 0.5 s 收不到心跳就停车。松手、页面切走、失焦、急停都立刻发 /api/chassis/stop。
 
@@ -125,10 +125,60 @@ function chassisTyping(ev) {
   return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
 }
 
+// 立柱：按住 E 一直升、按住 Q 一直降，松键即停。按住期间每 LIFT_HOLD_MS 把目标重设为「当前高度 ± 步长」
+// （步长取立柱卡片「步长 mm」，越大越快）；所以就算松键消息丢了 / 断网，最多再走一个步长就停在那里。
+const LIFT_KEYS = { e: 1, q: -1 };
+const LIFT_HOLD_MS = 150;
+const liftHold = { dir: 0, timer: null, inflight: false };
+
+async function liftHoldTick() {
+  if (!liftHold.dir || liftHold.inflight) return;
+  const step = parseFloat($("lift-step")?.value);
+  if (!Number.isFinite(step) || step <= 0) { liftHoldStop("步长无效"); flash("立柱步长无效", false); return; }
+  liftHold.inflight = true;
+  try {
+    const d = await post("/api/lift/step", { delta_mm: liftHold.dir * step });
+    if (!d.ok) throw new Error(d.error || "立柱失败");
+  } catch (e) {
+    liftHoldStop("出错");
+    flash(`立柱：${e.message || e}`, false);
+  } finally {
+    liftHold.inflight = false;
+    // 松键时这一步还在路上：它到后端会重设目标，再补一次停
+    if (!liftHold.dir) post("/api/lift/stop", { reason: "松键补停" }).catch(() => {});
+  }
+}
+
+function liftHoldStart(dir) {
+  if (liftHold.dir === dir) return;
+  liftHold.dir = dir;
+  clearInterval(liftHold.timer);
+  liftHoldTick();
+  liftHold.timer = setInterval(liftHoldTick, LIFT_HOLD_MS);
+}
+
+function liftHoldStop(why) {
+  if (!liftHold.dir && !liftHold.timer) return;
+  liftHold.dir = 0;
+  clearInterval(liftHold.timer);
+  liftHold.timer = null;
+  post("/api/lift/stop", { reason: why || "松键" }).then(() => { window.liftTargetDirty = false; }).catch(() => {});
+}
+
 document.addEventListener("keydown", (ev) => {
   if (!$("chassis-keys-on")?.checked || chassisTyping(ev)) return;
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const k = ev.key.toLowerCase();
+  if (k in LIFT_KEYS) {
+    if (!window.ROBOT?.lift) return;
+    ev.preventDefault();
+    if (ev.repeat) return;
+    if ($("btn-lift-up")?.disabled) { flash("立柱现在不能动（未开真机运动？）", false); return; }
+    liftHoldStart(LIFT_KEYS[k]);
+    return;
+  }
   if (!(k in CHASSIS_KEYS)) return;
+  if (!window.ROBOT?.chassis) return;
   ev.preventDefault();
   if (ev.repeat && chassis.keys.has(k)) return;
   chassis.keys.add(k);
@@ -136,22 +186,28 @@ document.addEventListener("keydown", (ev) => {
 });
 document.addEventListener("keyup", (ev) => {
   const k = ev.key.toLowerCase();
+  if (k in LIFT_KEYS) { if (liftHold.dir === LIFT_KEYS[k]) liftHoldStop("松键"); return; }
   if (!chassis.keys.delete(k)) return;
   chassisFromKeys();
 });
 if ($("chassis-keys-on")) {
   $("chassis-keys-on").addEventListener("change", () => {
-    if (!$("chassis-keys-on").checked) { chassis.keys.clear(); if (chassis.src === "key") chassisRelease("关键盘"); }
+    if (!$("chassis-keys-on").checked) {
+      chassis.keys.clear(); if (chassis.src === "key") chassisRelease("关键盘");
+      liftHoldStop("关键盘");
+    }
   });
 }
 
 // 看不到页面 / 失焦：一律停
-window.addEventListener("blur", () => { chassis.keys.clear(); chassisRelease("失焦"); });
-document.addEventListener("visibilitychange", () => { if (document.hidden) { chassis.keys.clear(); chassisRelease("切走"); } });
-window.addEventListener("pagehide", () => chassisRelease("关页"));
+window.addEventListener("blur", () => { chassis.keys.clear(); chassisRelease("失焦"); liftHoldStop("失焦"); });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { chassis.keys.clear(); chassisRelease("切走"); liftHoldStop("切走"); }
+});
+window.addEventListener("pagehide", () => { chassisRelease("关页"); liftHoldStop("关页"); });
 
 // 急停
-if ($("btn-hold")) $("btn-hold").addEventListener("click", () => { chassis.keys.clear(); chassisRelease("急停"); });
+if ($("btn-hold")) $("btn-hold").addEventListener("click", () => { chassis.keys.clear(); chassisRelease("急停"); liftHoldStop("急停"); });
 
 // ---------------------------------------------------------------- 底栏限速（直线、转向两根滑条，互不影响）
 const DEG = 180 / Math.PI;

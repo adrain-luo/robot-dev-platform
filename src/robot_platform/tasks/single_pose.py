@@ -1,7 +1,7 @@
 """单姿态：一个名字对应一只手的一个姿态，存在实例的 calib/single_poses/<名字>.json。
 
 记录时存实测关节角 q 和末端（法兰）在躯干系的位姿 p、R；到位时按「已应用的 IK 策略」
-（工作姿态那边的 single / robust）解法兰位姿，记下的 q 作为多初值之一。
+（工作姿态那边的 single / robust / luo）解法兰位姿，记下的 q 作为多初值之一。
 """
 
 from __future__ import annotations

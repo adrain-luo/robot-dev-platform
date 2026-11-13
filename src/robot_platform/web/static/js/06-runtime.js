@@ -190,7 +190,7 @@ ${fmtLive("右", live.right)}`
   });
   const ikSel = $("cfg-pose-ik-mode");
   if (ikSel && !cfgSelectBusy("cfg-pose-ik-mode")) {
-    const mode = wp.ik_mode === "single" ? "single" : "robust";
+    const mode = ["single", "robust", "luo"].includes(wp.ik_mode) ? wp.ik_mode : "robust";
     ikSel.value = mode;
   }
   const lockBtn = $("btn-cfg-lock");
@@ -286,7 +286,7 @@ if ($("btn-cfg-pose-ik-mode")) {
       await cfgPost(
         "/api/runtime-config/pose-ik-mode",
         { mode },
-        mode === "single" ? "已切到旧·单次局部 IK" : "已切到新·多初值 IK",
+        ({ single: "已切到旧·单次局部 IK", robust: "已切到新·多初值 IK", luo: "已切到罗-IK" })[mode] || "已切换",
         ["cfg-pose-ik-mode"],
       );
     } catch (e) { flash(String(e), false); }

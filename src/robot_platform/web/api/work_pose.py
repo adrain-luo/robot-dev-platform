@@ -10,7 +10,7 @@ from robot_platform.calib.payload import identify as iden
 from robot_platform.control.arm_loop import PermissionErrorMotion
 from robot_platform.core.layout import get_arm
 from robot_platform.tasks.spatial_points import (
-    pose_ori_miss_deg, solve_tcp_ik, solve_tcp_pose_ik, solve_tcp_pose_ik_robust,
+    pose_ori_miss_deg, solve_pose_ik_by_mode, solve_tcp_ik,
 )
 
 
@@ -58,23 +58,13 @@ class WorkPoseMixin:
         返回 (q, miss_mm, ori_miss_deg|None)。"""
         if R_lock is not None:
             free_axis = self.work_pose_free_axis()
-            if self.work_pose.ik_mode == "single":
-                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, target, R_lock, free_axis=free_axis)
-            else:
-                extra = []
-                if self.work_pose.q_seed is not None:
-                    extra.append(self.work_pose.q_seed)
-                q, miss_mm, ori_deg = solve_tcp_pose_ik_robust(
-                    model,
-                    q0,
-                    tcp,
-                    target,
-                    R_lock,
-                    extra_seeds=extra,
-                    n_random=16,
-                    n_ok_stop=5,
-                    free_axis=free_axis,
-                )
+            extra = []
+            if self.work_pose.q_seed is not None:
+                extra.append(self.work_pose.q_seed)
+            q, miss_mm, ori_deg = solve_pose_ik_by_mode(
+                self.work_pose.ik_mode, model, q0, tcp, target, R_lock,
+                extra_seeds=extra, n_random=16, n_ok_stop=5, free_axis=free_axis,
+            )
             return q, miss_mm, ori_deg
         q, miss_mm = solve_tcp_ik(model, q0, tcp, target)
         return q, miss_mm, None
@@ -159,16 +149,13 @@ class WorkPoseMixin:
         hold = np.asarray(t, dtype=float).reshape(3) + R0 @ tcp
         self._work_pose_motion = True
         try:
-            if self.work_pose.ik_mode == "single":
-                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, hold, R_target, free_axis=free_axis)
-            else:
-                extra = []
-                if doc.get("q_rad") is not None:
-                    extra.append(doc["q_rad"])
-                q, miss_mm, ori_deg = solve_tcp_pose_ik_robust(
-                    model, q0, tcp, hold, R_target,
-                    extra_seeds=extra, n_random=12, n_ok_stop=5, free_axis=free_axis,
-                )
+            extra = []
+            if doc.get("q_rad") is not None:
+                extra.append(doc["q_rad"])
+            q, miss_mm, ori_deg = solve_pose_ik_by_mode(
+                self.work_pose.ik_mode, model, q0, tcp, hold, R_target,
+                extra_seeds=extra, n_random=12, n_ok_stop=5, free_axis=free_axis,
+            )
             if miss_mm > 8.0 or ori_deg > 5.0:
                 raise ValueError(
                     f"到不了该工作姿态：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"

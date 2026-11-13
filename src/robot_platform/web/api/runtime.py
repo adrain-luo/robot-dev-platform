@@ -41,9 +41,9 @@ class RuntimeMixin:
                 snap = self.runtime.snapshot()
                 snap["work_pose"] = out
                 snap["ok"] = True
-                snap["message"] = (
-                    "已切到多初值（新）" if out.get("ik_mode") == "robust" else "已切到单次局部 IK（旧）"
-                )
+                from robot_platform.tasks.work_pose import IK_LABELS
+
+                snap["message"] = f"已切到{IK_LABELS.get(out.get('ik_mode'), out.get('ik_mode'))} IK"
                 return snap
             if path == "/api/runtime-config":
                 return self.runtime.snapshot()

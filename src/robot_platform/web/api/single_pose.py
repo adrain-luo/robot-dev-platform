@@ -1,6 +1,6 @@
 """单姿态记录和到位：/api/single-pose/*（list / record / rename / delete / goto）。
 
-到位用「已应用的 IK 策略」（工作姿态那边的 single / robust）解记下的法兰位姿（以记录时的关节角
+到位用「已应用的 IK 策略」（工作姿态那边的 single / robust / luo）解记下的法兰位姿（以记录时的关节角
 为起点和参照，冗余的手肘也按记录复现），限速走过去、
 等停稳、用实测角复核。走的期间占用这只手；到位后若这只手锁着工作姿态就解锁（姿态已变）。
 """
@@ -15,8 +15,9 @@ from robot_platform.calib.payload import identify as iden
 from robot_platform.control.arm_loop import PermissionErrorMotion
 from robot_platform.tasks import single_pose as sp
 from robot_platform.tasks.spatial_points import (
-    pose_ori_miss_deg, solve_tcp_pose_ik, solve_tcp_pose_ik_robust,
+    pose_ori_miss_deg, solve_pose_ik_by_mode,
 )
+from robot_platform.tasks.work_pose import IK_LABELS
 
 OWNER = "单姿态到位"
 PLAN_MAX_MM = 8.0
@@ -90,12 +91,9 @@ class SinglePoseMixin:
             mode = self.work_pose.ik_mode
             # 7 轴有冗余：同一末端位姿有一族关节解。以记录时的关节角为起点 / 参照，
             # 求解器取最贴近记录姿态的那组（手肘也复现），而不是离当前角最近的那组
-            if mode == "single":
-                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q_rec, zero, p_t, R_t)
-            else:
-                q, miss_mm, ori_deg = solve_tcp_pose_ik_robust(
-                    model, q_rec, zero, p_t, R_t, extra_seeds=[q_now], n_random=12, n_ok_stop=5,
-                )
+            q, miss_mm, ori_deg = solve_pose_ik_by_mode(
+                mode, model, q_rec, zero, p_t, R_t, extra_seeds=[q_now], n_random=12, n_ok_stop=5,
+            )
             if miss_mm > PLAN_MAX_MM or ori_deg > PLAN_MAX_DEG:
                 raise ValueError(f"到不了「{name}」：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°")
             self.motion_stop.clear()
@@ -116,7 +114,7 @@ class SinglePoseMixin:
         joint_diff = float(np.degrees(np.max(np.abs(q_meas - q_rec))))
         # 姿态变了：这只手锁着的工作姿态不再成立
         self.unlock_work_pose("single_pose", arm)
-        mode_label = "多初值" if mode != "single" else "单次局部"
+        mode_label = IK_LABELS.get(mode, mode)
         return {
             "ok": True,
             "arm": arm,

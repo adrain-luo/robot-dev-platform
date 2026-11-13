@@ -320,7 +320,9 @@ class BoardTouch:
 
     def _line(self, loop, model, tcp: np.ndarray, q: np.ndarray, dest: np.ndarray, label: str) -> np.ndarray:
         """沿直线走，大约每 1 cm 一个点，避免关节空间把爪尖甩出竖线。"""
-        from robot_platform.tasks.spatial_points import solve_tcp_ik, solve_tcp_pose_ik, solve_tcp_pose_ik_robust
+        from robot_platform.tasks.spatial_points import (
+            solve_pose_ik_by_mode, solve_tcp_ik, solve_tcp_pose_ik, solve_tcp_pose_ik_robust,
+        )
 
         wp = getattr(self.app, "work_pose", None)
         R_lock, q_seed = self.app.work_pose_lock_for(self.arm, self._tcp_name)
@@ -341,6 +343,16 @@ class BoardTouch:
                     mode = getattr(wp, "ik_mode", "robust") if wp is not None else "robust"
                     if mode == "single":
                         q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock, free_axis=free_axis)
+                    elif mode == "luo":
+                        # 每厘米一步：只从上一步出发（连续），不行再加种子
+                        q_next, miss, ori = solve_pose_ik_by_mode(
+                            "luo", model, q, tcp, target, R_lock, n_random=0, n_ok_stop=1, free_axis=free_axis,
+                        )
+                        if miss > 5.0 or ori > 8.0:
+                            q_next, miss, ori = solve_pose_ik_by_mode(
+                                "luo", model, q, tcp, target, R_lock,
+                                extra_seeds=extra, n_random=8, n_ok_stop=3, free_axis=free_axis,
+                            )
                     else:
                         q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock, free_axis=free_axis)
                         if miss > 5.0 or ori > 8.0:

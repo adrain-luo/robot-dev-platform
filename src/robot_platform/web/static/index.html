@@ -54,6 +54,9 @@
     <input id="chassis-yaw" type="range" min="1" max="34" step="0.5" value="11.5">
   </label>
   <div id="engage-state" class="state"></div>
+  <label class="switch" id="keys-on-wrap" style="display:none" title="勾上后在页面上：W/S 前后、A/D 转向（方向键也行），松键即停；按住 E 立柱一直升、按住 Q 一直降，松键即停（目标始终领先当前高度一个「步长 mm」，断线最多再走一个步长）。光标在输入框里时不响应">
+    <input id="chassis-keys-on" type="checkbox"><span>键盘 <small>WASD · E/Q 立柱</small></span>
+  </label>
 </nav>
 
 <!-- 左书：感知 [页|签] -->
@@ -561,7 +564,7 @@
 
     <div class="page" data-page="control">
       <div class="page-sheet">
-        <div class="page-head"><strong>控制</strong><span>7 张卡片</span></div>
+        <div class="page-head"><strong>控制</strong><span>9 张卡片</span></div>
         <div class="page-cards">
           <article class="float" id="panel-config">
             <button type="button" class="float-toggle">配置 <span id="cfg-lock-badge" class="aside"></span></button>
@@ -581,11 +584,12 @@
                     <select id="cfg-pose-ik-mode">
                       <option value="robust">新·多初值（推荐）</option>
                       <option value="single">旧·当前角单次局部 IK</option>
+                      <option value="luo">罗-IK（SLSQP 紧约束 + 少动 / 居中挑解）</option>
                     </select>
                   </label>
                   <button id="btn-cfg-pose-ik-mode" type="button">应用 IK 策略</button>
                 </div>
-                <p class="note">只影响「工作姿态已锁定」时的碰点/棋盘/调用姿态；未锁定仍是纯位置 IK。</p>
+                <p class="note">影响「工作姿态已锁定」时的碰点/棋盘/调用姿态和单姿态到位；未锁定的碰点仍是纯位置 IK。罗-IK 要求 1 mm / 1° 到位，在合格解里挑离当前近、关节居中、离限位远的，需要 scipy。</p>
               </div>
               <div class="cfg-arms">
                 <section class="cfg-arm" data-arm="left">
@@ -731,9 +735,7 @@
                       <button type="button" class="chassis-hold" data-x="-1" data-yaw="0">后退</button>
                     </div>
                   </div>
-                  <label class="switch" title="勾上后在页面上按 W/S 前后、A/D 转向（方向键也行），松键即停；光标在输入框里时不响应">
-                    <input id="chassis-keys-on" type="checkbox"><span>键盘遥控（WASD / 方向键）</span>
-                  </label>
+                  <p class="note">键盘遥控开关在底栏最右：W/S 前后、A/D 转向（方向键也行），按住 E/Q 立柱一直升/降，松键即停（立柱的「步长 mm」越大升降越快）。</p>
                 </div>
               </section>
             </div>
@@ -833,6 +835,23 @@
                 <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="z" data-sign="-1">绕 Z −</button>
                 <button type="button" class="tcp-jog-btn" data-jog="rotate" data-axis="z" data-sign="1">绕 Z +</button>
               </div>
+            </div>
+          </article>
+
+          <article class="float" id="panel-tool">
+            <button type="button" class="float-toggle">末端 <span id="suction-badge" class="aside"></span></button>
+            <div class="float-body">
+              <section class="subfold" id="suction-ctrl">
+                <button type="button" class="subfold-toggle">吸盘</button>
+                <div class="subfold-body">
+                  <p class="note">ES80Z 真空单元（盒子串口 ttyUSB0，经本机 es80z-api）。「吸」开真空；「释放」先正压吹气约 0.25 s 再全关。状态是「命令过的」状态，没有真空度反馈，吸没吸住请看实物。</p>
+                  <p class="note" id="suction-now">吸盘 —</p>
+                  <div class="cmds">
+                    <button id="btn-suction-suck" class="primary" type="button">吸</button>
+                    <button id="btn-suction-release" type="button">释放</button>
+                  </div>
+                </div>
+              </section>
             </div>
           </article>
 

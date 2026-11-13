@@ -339,6 +339,38 @@ def solve_tcp_pose_ik_robust_local(
     return best_any
 
 
+def solve_pose_ik_by_mode(
+    mode: str,
+    model,
+    q0,
+    tcp_m,
+    target_m,
+    R_target,
+    *,
+    extra_seeds=None,
+    n_random: int = 12,
+    n_ok_stop: int = 5,
+    free_axis=None,
+) -> Tuple[np.ndarray, float, float]:
+    """按「已应用的 IK 策略」解 TCP 位姿：single=单次局部，robust=多初值，luo=罗-IK（SLSQP）。
+
+    q0 既是起点也是参照（多初值取离它最近的、罗-IK 的「少动」代价相对它算）。返回 (q, mm, deg)。
+    """
+    if mode == "single":
+        return solve_tcp_pose_ik(model, q0, tcp_m, target_m, R_target, free_axis=free_axis)
+    if mode == "luo":
+        from robot_platform.tasks.luo_ik import solve_tcp_pose_ik_luo
+
+        return solve_tcp_pose_ik_luo(
+            model, q0, tcp_m, target_m, R_target, extra_seeds=extra_seeds,
+            n_random=min(int(n_random), 8), n_ok_stop=min(int(n_ok_stop), 2), free_axis=free_axis,
+        )
+    return solve_tcp_pose_ik_robust(
+        model, q0, tcp_m, target_m, R_target, extra_seeds=extra_seeds,
+        n_random=n_random, n_ok_stop=n_ok_stop, free_axis=free_axis,
+    )
+
+
 def _tcp_pos_jac(model, q, tcp):
     t, R = model.fk(q)
     pos = t + R @ tcp

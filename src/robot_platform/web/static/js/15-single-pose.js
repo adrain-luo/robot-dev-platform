@@ -34,7 +34,8 @@ function spRender() {
   }
   spSyncButtons();
   const mode = $("sp-mode");
-  if (mode) mode.textContent = singlePose.ikMode ? (singlePose.ikMode === "single" ? "IK：单次局部" : "IK：多初值") : "";
+  const IK_NAMES = { single: "单次局部", robust: "多初值", luo: "罗-IK" };
+  if (mode) mode.textContent = singlePose.ikMode ? `IK：${IK_NAMES[singlePose.ikMode] || singlePose.ikMode}` : "";
 }
 
 function spSyncButtons() {

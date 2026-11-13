@@ -736,3 +736,12 @@ input[type="range"] {
 .chassis-keys-mid { display: flex; gap: 6px; }
 .chassis-hold { min-width: 60px; touch-action: none; user-select: none; }
 .chassis-hold.on { background: var(--teal); color: #fff; }
+
+/* 底栏最右：键盘遥控开关（底盘 WASD + 立柱 E/Q） */
+#keys-on-wrap { margin-left: auto; }
+#keys-on-wrap small { color: var(--muted); font-size: 11px; }
+#keys-on-wrap:has(input:checked) { background: #fff3d6; box-shadow: inset 0 0 0 1px #e0b44a; }
+
+/* 末端 · 吸盘 */
+#suction-now.on { color: var(--ok); }
+#suction-now.bad { color: var(--danger); }

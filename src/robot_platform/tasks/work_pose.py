@@ -19,8 +19,9 @@ def poses_dir() -> Path:
 
 def ik_mode_path() -> Path:
     return instances.path("pose_ik_mode")
-# single=旧：当前角一枪局部 IK；robust=新：多初值全姿态 IK
-IK_MODES = ("single", "robust")
+# single=旧：当前角一枪局部 IK；robust=新：多初值全姿态 IK；luo=罗-IK：SLSQP 紧约束 + 代价挑解（需 scipy）
+IK_MODES = ("single", "robust", "luo")
+IK_LABELS = {"single": "单次局部", "robust": "多初值", "luo": "罗-IK"}
 # 姿态里不约束的转动：""=三轴全锁；"gravity_z"=可平转，绕重力方向（竖直）转不限
 FREE_MODES = ("", "gravity_z")
 FREE_LABELS = {"": "全锁", "gravity_z": "可平转（绕重力 z）"}
@@ -151,7 +152,12 @@ class WorkPoseSession:
     def set_ik_mode(self, mode: str) -> Dict[str, Any]:
         mode = str(mode or "").strip()
         if mode not in IK_MODES:
-            raise ValueError("姿态 IK 只能是 single（旧·单次）或 robust（新·多初值）")
+            raise ValueError("姿态 IK 只能是 single（单次局部）、robust（多初值）或 luo（罗-IK）")
+        if mode == "luo":
+            from robot_platform.tasks.luo_ik import scipy_available
+
+            if not scipy_available():
+                raise ValueError("罗-IK 需要 scipy，这台机器上没有；先装 scipy 或继续用多初值")
         self.ik_mode = mode
         _write_ik_mode(mode)
         return self.status()
