@@ -66,7 +66,8 @@ function wfDgSyncUi() {
     else btn.textContent = "下一步";
     btn.disabled = !!st.busy;
   }
-  if (btnAll) btnAll.disabled = !!st.busy || !!st.finished;
+  // 已完成时「自动继续」= 复位后从 ① 开始新一轮，不必先点「完成」
+  if (btnAll) btnAll.disabled = !!st.busy;
   // 进行中可急停；已跑过至少一步（含已完成）也可点停止复位，不必硬点「下一步」
   if (btnStop) btnStop.disabled = !(st.busy || st.next > 0 || st.finished);
   if (badge) {
@@ -288,15 +289,18 @@ async function wfDgRunStep() {
 
 async function wfDgRunAuto() {
   const st = window.wfDetectGoto;
-  if (st.busy || st.finished) return;
-  const from = st.next;
-  if (from >= WF_DG_STEP_COUNT) return;
+  if (st.busy) return;
+  // 上一轮已跑完：从 ① 开始新一轮
+  const newRound = !!st.finished || st.next >= WF_DG_STEP_COUNT;
+  const from = newRound ? 0 : st.next;
   if (from === 0) {
     const name = ($("wf-dg-wp")?.value || "").trim();
     if (!name) { flash("先选择工作姿态", false); return; }
   }
   const remain = WF_DG_STEP_NAMES.slice(from).join(" → ");
-  if (!confirm(`自动继续（从当前进度）：${remain}。扶住、守急停。继续？`)) return;
+  const head = newRound ? "上一轮已完成，开始新一轮" : "自动继续（从当前进度）";
+  if (!confirm(`${head}：${remain}。扶住、守急停。继续？`)) return;
+  if (newRound) wfDgResetToStart("新一轮开始");
   await wfDgWithBusy(async () => {
     while (window.wfDetectGoto.next < WF_DG_STEP_COUNT && !window.wfDetectGoto.finished) {
       wfDgCheckAbort();
