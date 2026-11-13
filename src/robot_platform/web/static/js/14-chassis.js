@@ -259,6 +259,19 @@ if ($("chassis-yaw")) {
   $("chassis-yaw").addEventListener("change", () => chassisSendLimit({ yaw_rad_s: Number($("chassis-yaw").value) / DEG }, "yawDirty"));
 }
 
+// 底栏滑条已走过的那段上色（WebKit 轨道没有 progress 伪元素，用 --pct 画渐变）；
+// 值也会被状态刷新改写（不触发 input），所以再低频补一次
+function dockRangeFill() {
+  document.querySelectorAll(".dock input[type=range]").forEach((r) => {
+    const lo = Number(r.min) || 0, hi = Number(r.max) || 100;
+    const pct = hi > lo ? ((Number(r.value) - lo) / (hi - lo)) * 100 : 0;
+    r.style.setProperty("--pct", `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`);
+  });
+}
+document.addEventListener("input", (ev) => { if (ev.target.closest?.(".dock")) dockRangeFill(); });
+setInterval(dockRangeFill, 400);
+dockRangeFill();
+
 // ---------------------------------------------------------------- 状态
 function renderChassis(c) {
   if (!c) return;

@@ -117,21 +117,14 @@ input:focus, select:focus { border-color: #8fbfb6; box-shadow: 0 0 0 3px rgba(15
 
 .dock {
   left: 14px; right: 14px; bottom: 14px;
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-  padding: 10px;
+  display: flex; align-items: center; gap: 0;
+  padding: 8px;
   border-radius: 18px;
   background: var(--glass);
   border: 1px solid rgba(255,255,255,.55);
   box-shadow: 0 16px 40px rgba(0,0,0,.28);
   backdrop-filter: blur(16px);
 }
-.dock .state {
-  flex: 1 1 180px;
-  min-width: 140px;
-  color: #3f3a34;
-  font-size: 12px;
-}
-
 /* 书块：签 + 页一体平移 */
 .book {
   position: fixed; z-index: 3;
@@ -737,10 +730,103 @@ input[type="range"] {
 .chassis-hold { min-width: 60px; touch-action: none; user-select: none; }
 .chassis-hold.on { background: var(--teal); color: #fff; }
 
-/* 底栏最右：键盘遥控开关（底盘 WASD + 立柱 E/Q） */
-#keys-on-wrap { margin-left: auto; }
-#keys-on-wrap small { color: var(--muted); font-size: 11px; }
-#keys-on-wrap:has(input:checked) { background: #fff3d6; box-shadow: inset 0 0 0 1px #e0b44a; }
+/* ================================================================ 底栏
+   三组：[手臂开关 + 按钮] | [速度滑条] | [状态 + 键盘开关]，组间细竖线 */
+.dock [hidden] { display: none !important; }
+.dock-group { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 12px; }
+.dock-group:first-child { padding-left: 2px; }
+.dock-group:last-child { padding-right: 2px; }
+.dock-group + .dock-group { border-left: 1px solid var(--line); }
+.dock-arm { flex: none; gap: 10px; }
+.dock-toggles, .dock-btns { display: flex; align-items: center; gap: 6px; }
+.dock-btns button { height: 36px; padding: 0 13px; border-radius: 10px; font-weight: 600; }
+.dock-btns button:not(.primary):not(.danger):not(.on) { background: rgba(28,25,21,.05); border-color: var(--line); }
+.dock-btns button:not(.primary):not(.danger):not(.on):not(:disabled):hover { background: #fff; }
+.dock-btns button.danger { box-shadow: 0 2px 8px rgba(163,59,50,.28); }
+.dock-btns button.danger:hover { background: #b8443a; }
+
+/* 开关：药丸形拨钮 */
+.dock .switch {
+  height: 32px; padding: 0 10px 0 6px; gap: 7px; border-radius: 999px;
+  background: transparent; font-size: 12px; font-weight: 600; color: #4a443d;
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+.dock .switch:hover { background: rgba(28,25,21,.05); }
+.dock .switch input {
+  appearance: none; -webkit-appearance: none; flex: none;
+  width: 30px; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 999px;
+  background: rgba(28,25,21,.18); position: relative; cursor: pointer;
+  transition: background .18s var(--ease);
+}
+.dock .switch input::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .18s var(--ease);
+}
+.dock .switch input:checked { background: var(--teal); }
+.dock .switch input:checked::after { transform: translateX(12px); }
+.dock .switch input:focus-visible { outline: 2px solid var(--teal-2); outline-offset: 2px; }
+
+/* 速度滑条：标题左、数值右，下面一根细轨 */
+.dock-speeds {
+  flex: 1 1 auto;
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(110px, 1fr); gap: 4px 18px;
+}
+.dock .field.speed { width: auto; min-width: 0; gap: 1px; color: var(--muted); }
+.speed-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 11px; white-space: nowrap; }
+.speed-head em { font-style: normal; font-weight: 650; color: #4a443d; }
+.speed-head > span { overflow: hidden; text-overflow: ellipsis; }
+.dock .field.speed b { font-size: 12px; color: var(--teal); }
+.dock input[type="range"] {
+  -webkit-appearance: none; appearance: none; height: 18px; cursor: pointer;
+  --pct: 50%;
+}
+.dock input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 99px;
+  background: linear-gradient(90deg, var(--teal) var(--pct), rgba(28,25,21,.14) var(--pct));
+}
+.dock input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px; background: rgba(28,25,21,.14); }
+.dock input[type="range"]::-moz-range-progress { height: 4px; border-radius: 99px; background: var(--teal); }
+.dock input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--teal); box-shadow: 0 1px 4px rgba(0,0,0,.25);
+  transition: transform .12s;
+}
+.dock input[type="range"]::-moz-range-thumb {
+  width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2px solid var(--teal);
+  box-shadow: 0 1px 4px rgba(0,0,0,.25);
+}
+.dock input[type="range"]:not(:disabled):hover::-webkit-slider-thumb,
+.dock input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
+
+/* 尾：状态文字 + 键盘开关（最右） */
+.dock-tail { flex: 0 1 auto; gap: 10px; }
+.dock .state {
+  min-width: 4.5em; max-width: 280px;
+  color: var(--muted); font-size: 12px; line-height: 1.35;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.dock .keys-switch { border: 1px solid var(--line); background: rgba(255,255,255,.6); }
+.dock .keys-switch:has(input:checked) { background: #fff3d6; border-color: #e0b44a; }
+.keys-switch small { display: inline-flex; gap: 3px; margin-left: 2px; }
+.keys-switch kbd {
+  font: 600 10px/1 ui-monospace, Consolas, monospace; color: #5c564e;
+  padding: 3px 4px; border-radius: 4px; background: #fff;
+  border: 1px solid rgba(28,25,21,.18); border-bottom-width: 2px;
+}
+
+/* 窄屏：滑条整组换到第二行 */
+@media (max-width: 1440px) {
+  .dock { flex-wrap: wrap; row-gap: 8px; }
+  .dock-arm { order: 1; }
+  .dock-tail { order: 2; flex: 1 1 auto; justify-content: flex-end; }
+  .dock-speeds { order: 3; flex-basis: 100%; border-left: 0 !important; border-top: 1px solid var(--line); padding: 6px 4px 0; }
+}
+@media (max-width: 720px) {
+  .dock-speeds { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dock-arm { flex: 1 1 100%; flex-wrap: wrap; padding: 0 2px; }
+  .dock-btns { flex-wrap: wrap; }
+  .dock-tail { flex-basis: 100%; border-left: 0 !important; padding: 0 2px; justify-content: space-between; }
+}
 
 /* 末端 · 吸盘 */
 #suction-now.on { color: var(--ok); }
