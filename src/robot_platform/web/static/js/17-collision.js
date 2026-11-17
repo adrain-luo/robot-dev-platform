@@ -23,8 +23,11 @@ function renderCollision(st) {
   if ($("col-margin") && document.activeElement !== $("col-margin") && !colUi.marginDirty) {
     $("col-margin").value = String(Math.round(st.margin_mm));
     $("col-margin-val").textContent = String(Math.round(st.margin_mm));
+    colInflate(st.margin_mm);
   }
   const parts = [st.enabled ? `已开 · 余量 ${Math.round(st.margin_mm)} mm` : "已关（手臂目标不查自碰撞）"];
+  const nClose = (st.close || []).length;
+  if (nClose) parts.push(`${nClose} 处已比余量近（三维标红）`);
   const per = st.per_arm || {};
   for (const [arm, label] of [["left", "左手"], ["right", "右手"]]) {
     const p = per[arm];
@@ -46,14 +49,26 @@ function renderCollision(st) {
   }
   if (badge) badge.textContent = st.enabled ? "" : "已关";
   if (colUi.geomShown && window.RobotView?.setCollisionHighlight) {
+    // 比余量近的都标红；刚被拦的那对再标 8 s
     const hot = [];
-    const n = st.nearest;
-    if (n && n.distance_mm < Math.max(20, st.margin_mm)) hot.push(...n.pair);
+    for (const c of st.close || []) hot.push(...c.pair);
     const b = st.last_block;
     if (b && b.time && colUi.lastBlockSeen !== b.time) { colUi.lastBlockSeen = b.time; colUi.blockUntil = Date.now() + 8000; colUi.blockPair = b.pair; }
     if (colUi.blockUntil && Date.now() < colUi.blockUntil) hot.push(...(colUi.blockPair || []));
     window.RobotView.setCollisionHighlight(hot);
   }
+}
+
+// 三维碰撞体按「余量的一半」加厚：两块碰到一起 = 间距刚好到余量。拖滑条时实时跟着变（40 ms 合并一次）
+function colInflate(marginMm) {
+  const m = Number(marginMm) / 2000;
+  if (colUi.inflate === m) return;
+  colUi.inflate = m;
+  if (colUi.raf) return;
+  colUi.raf = setTimeout(() => {
+    colUi.raf = 0;
+    if (window.RobotView?.setCollisionInflate) window.RobotView.setCollisionInflate(colUi.inflate);
+  }, 40);
 }
 
 async function collisionRefresh() {
@@ -79,6 +94,10 @@ async function collisionShowGeometry(on) {
   try {
     const d = await post("/api/collision/geometry", {});
     if (!d.ok) { flash(d.error || "取碰撞体失败", false); return; }
+    if (window.RobotView.setCollisionInflate) {
+      colUi.inflate = Number($("col-margin")?.value || 0) / 2000;
+      window.RobotView._collisionInflate = colUi.inflate;
+    }
     if (!window.RobotView.setCollision(d)) flash("三维还没准备好，稍后再勾", false);
     collisionRefresh();
   } catch (e) { flash(String(e.message || e), false); }
@@ -92,7 +111,11 @@ if ($("col-on")) {
   });
 }
 if ($("col-margin")) {
-  $("col-margin").addEventListener("input", () => { colUi.marginDirty = true; $("col-margin-val").textContent = $("col-margin").value; });
+  $("col-margin").addEventListener("input", () => {
+    colUi.marginDirty = true;
+    $("col-margin-val").textContent = $("col-margin").value;
+    colInflate($("col-margin").value);
+  });
   $("col-margin").addEventListener("change", () => collisionConfig({ margin_mm: Number($("col-margin").value) }));
 }
 if ($("col-show")) $("col-show").addEventListener("change", () => collisionShowGeometry($("col-show").checked));

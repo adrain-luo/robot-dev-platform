@@ -791,13 +791,23 @@ const View = {
   // ---------------------------------------------------------------- 碰撞体（/api/collision/geometry）
   // 各连杆系下的胶囊体 / 球（[ax,ay,az,bx,by,bz,r]），挂在对应连杆上随关节动；半透明，highlight 的连杆标红。
   _collisionGroups: null,
+  _collisionGeom: null,
+  _collisionInflate: 0,
+  _collisionHot: null,
+  // inflate（m）：每个碰撞体半径加厚这么多。卡片传「余量的一半」：两块碰到一起 = 间距刚好到余量
+  setCollisionInflate(m) {
+    this._collisionInflate = Math.max(0, Number(m) || 0);
+    if (this._collisionGeom) this.setCollision(this._collisionGeom);
+  },
   setCollision(geom) {
     for (const g of this._collisionGroups || []) {
       if (g.parent) g.parent.remove(g);
       g.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
     }
     this._collisionGroups = [];
+    this._collisionGeom = geom || null;
     if (!this.ready || !geom || !geom.links) { this.render(); return false; }
+    const inf = this._collisionInflate || 0;
     const sphereGeo = new THREE.SphereGeometry(1, 14, 10);
     const up = new THREE.Vector3(0, 1, 0);
     const m4 = new THREE.Matrix4();
@@ -814,7 +824,8 @@ const View = {
       if (spheres.length) {
         const inst = new THREE.InstancedMesh(sphereGeo.clone(), mat, spheres.length);
         spheres.forEach((p, i) => {
-          m4.makeScale(p[6], p[6], p[6]).setPosition(p[0], p[1], p[2]);
+          const r = p[6] + inf;
+          m4.makeScale(r, r, r).setPosition(p[0], p[1], p[2]);
           inst.setMatrixAt(i, m4);
         });
         inst.instanceMatrix.needsUpdate = true;
@@ -825,7 +836,7 @@ const View = {
         const a = new THREE.Vector3(p[0], p[1], p[2]);
         const b = new THREE.Vector3(p[3], p[4], p[5]);
         const len = a.distanceTo(b);
-        const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(p[6], len, 6, 14), mat);
+        const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(p[6] + inf, len, 6, 14), mat);
         mesh.position.copy(a).add(b).multiplyScalar(0.5);
         mesh.quaternion.setFromUnitVectors(up, b.clone().sub(a).normalize());
         group.add(mesh);
@@ -834,11 +845,13 @@ const View = {
       this._collisionGroups.push(group);
     }
     sphereGeo.dispose();
+    if (this._collisionHot) this.setCollisionHighlight(this._collisionHot);
     this.render();
     return true;
   },
   setCollisionHighlight(links) {
-    const hot = new Set(links || []);
+    this._collisionHot = links || [];
+    const hot = new Set(this._collisionHot);
     for (const g of this._collisionGroups || []) {
       const on = hot.has(g.userData.collisionLink);
       g.userData.mat.color.setHex(on ? 0xef4444 : 0x38bdf8);

@@ -879,11 +879,11 @@
               <label class="switch" title="关掉后手臂目标不再检查自碰撞（谨慎）">
                 <input id="col-on" type="checkbox" checked><span>启用碰撞检查</span>
               </label>
-              <label class="field speed" title="两处表面至少要留的间距。模型本身已偏保守，一般 0–10 mm">
+              <label class="field speed" title="两处表面至少要留的间距。模型本身已偏保守，一般 0–10 mm。勾了「三维显示碰撞体」时，碰撞体按它的一半加厚显示">
                 <span>安全余量 <b id="col-margin-val">5</b> mm</span>
                 <input id="col-margin" type="range" min="0" max="30" step="1" value="5">
               </label>
-              <label class="switch" title="在三维里画出碰撞体（半透明蓝），最近的 / 刚被拦的那两处标红">
+              <label class="switch" title="在三维里画出碰撞体（半透明蓝），按余量的一半加厚：两块碰到一起就是间距到了余量。比余量近的、刚被拦的标红">
                 <input id="col-show" type="checkbox"><span>三维显示碰撞体</span>
               </label>
             </div>

@@ -284,6 +284,10 @@ class CollisionGuard:
                         j = int(idx[np.argmin(d[idx])])
                         per_arm[arm] = {"pair_text": self._pair_text(j), "distance_mm": float(d[j]) * 1000.0}
                 out["per_arm"] = per_arm
+                # 比余量近的全部连杆对（三维里标红）
+                close = np.nonzero(d < self.margin_m)[0]
+                out["close"] = [{"pair": list(self.model.pairs[j]), "pair_text": self._pair_text(int(j)),
+                                 "distance_mm": float(d[j]) * 1000.0} for j in close[np.argsort(d[close])]]
         return out
 
     def geometry(self) -> dict:
