@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from robot_platform.hw.backends.base import LiftDriver, LiftReader
 from robot_platform.calib import lift as lift_calib
@@ -33,10 +33,13 @@ class LiftController:
         hispeed: LiftReader,
         agv: LiftDriver,
         stroke_max_m: float,
+        default_zero_m: Optional[float] = None,
     ) -> None:
         self._hispeed = hispeed
         self._agv = agv
         self._stroke_max_m = float(stroke_max_m)
+        # 出厂配置里的最低读数：运动范围按它算，不跟「记为最低点」走（记高了也还能降下去重记）
+        self._default_zero_m = None if default_zero_m is None else float(default_zero_m)
         self._lock = threading.Lock()
         self._target_m: Optional[float] = None
         self._busy = False
@@ -69,6 +72,8 @@ class LiftController:
             "zero_m": zero,
             "stroke_max_m": self._stroke_max_m,
             "stroke_max_mm": self._stroke_max_m * 1000.0,
+            "move_lo_m": self.move_limits()[0],
+            "move_hi_m": self.move_limits()[1],
             "error": err,
         }
 
@@ -76,10 +81,21 @@ class LiftController:
         st = self._hispeed.latest()
         return None if st is None else float(st.height_m)
 
-    def clamp_height(self, height_m: float) -> float:
+    def move_limits(self) -> Tuple[float, float]:
+        """允许运动的高度范围 (lo, hi)：出厂最低读数往上一个行程，再放宽到包住记下的最低点。
+
+        「记为最低点」只管三维从哪算起；记错了（比真最低高）也不会把立柱锁在那个点上。
+        没有出厂值时退回按记下的最低点算。
+        """
         zero = lift_calib.load_zero()
-        lo = zero
-        hi = zero + self._stroke_max_m
+        if self._default_zero_m is None:
+            return zero, zero + self._stroke_max_m
+        lo = self._default_zero_m
+        hi = self._default_zero_m + self._stroke_max_m
+        return min(lo, zero), max(hi, zero)
+
+    def clamp_height(self, height_m: float) -> float:
+        lo, hi = self.move_limits()
         return max(lo, min(hi, float(height_m)))
 
     def goto(self, height_m: float) -> Dict[str, Any]:
@@ -161,9 +177,9 @@ class LiftController:
                     break
                 height = float(st.height_m)
                 if jog is not None:
-                    zero = lift_calib.load_zero()
-                    at_top = jog > 0 and height >= zero + self._stroke_max_m - _JOG_END_MARGIN_M
-                    at_bottom = jog < 0 and height <= zero + _JOG_END_MARGIN_M
+                    lo, hi = self.move_limits()
+                    at_top = jog > 0 and height >= hi - _JOG_END_MARGIN_M
+                    at_bottom = jog < 0 and height <= lo + _JOG_END_MARGIN_M
                     if time.monotonic() > jog_until or at_top or at_bottom:
                         # 没续命（松键 / 断线）或到头：停
                         with self._lock:

@@ -43,7 +43,8 @@ class LiftMixin:
         with self._lock:
             if self._lift_ctrl is None:
                 self._lift_ctrl = LiftController(
-                    hispeed=hs, agv=agv, stroke_max_m=self.profile.lift.stroke_max_m
+                    hispeed=hs, agv=agv, stroke_max_m=self.profile.lift.stroke_max_m,
+                    default_zero_m=self.profile.lift.height_zero_m,
                 )
             return self._lift_ctrl
 
@@ -60,6 +61,15 @@ class LiftMixin:
         )
         return out
 
+    def lift_reset_zero_now(self) -> Dict[str, Any]:
+        out = lift_calib.reset_zero()
+        scene = self.both_scenes()
+        out["lift"] = scene.get("lift")
+        out["message"] = (
+            f"已恢复默认最低点 {out['height_zero_m']:.4f} m（{out['height_zero_m'] * 1000.0:.1f} mm）"
+        )
+        return out
+
     def lift_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         if self.profile.lift is None:
             if path == "/api/lift/stop":
@@ -67,6 +77,8 @@ class LiftMixin:
             return {"ok": False, "error": f"{self.profile.name} 没有立柱"}
         if path == "/api/lift/set-zero":
             return self.lift_set_zero_now()
+        if path == "/api/lift/reset-zero":
+            return self.lift_reset_zero_now()
         if path == "/api/lift/stop":
             if self._lift_ctrl is None and self._agv is None:
                 return {"ok": True, "busy": False, "message": "立柱本来就没在动"}

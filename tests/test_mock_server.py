@@ -128,6 +128,32 @@ def test_lift_jog_deadman(mock_server):
     assert not c.post("/api/lift/jog", {})[1]["ok"]
 
 
+def test_lift_zero_recorded_too_high_still_jogs_down(mock_server):
+    """最低点记高了：升降范围按机型默认算，仍能往下降到记的点以下；恢复默认后零位回到配置值。"""
+    import time as _t
+    c = mock_server
+    c.post("/api/lift/stop")
+    c.post("/api/lift/goto", {"stroke_mm": 40})
+    c.wait(lambda s: not (s["lift"].get("ctrl") or {}).get("busy"), timeout_s=15)
+    try:
+        code, d = c.post("/api/lift/set-zero")
+        assert code == 200 and d["ok"], d
+        h0 = c.get("/api/scene")["lift"]["height_mm"]
+        t0 = _t.monotonic()
+        while _t.monotonic() - t0 < 0.8:
+            code, d = c.post("/api/lift/jog", {"speed_mm_s": -30})
+            assert code == 200 and d["ok"], d
+            _t.sleep(0.1)
+        s = c.wait(lambda s: not (s["lift"].get("ctrl") or {}).get("busy"), timeout_s=3)
+        assert h0 - s["lift"]["height_mm"] > 15, (h0, s["lift"]["height_mm"])
+    finally:
+        code, d = c.post("/api/lift/reset-zero")
+    assert code == 200 and d["ok"], d
+    calib = c.get("/api/scene")["lift"]["calib"]
+    assert not calib["from_file"]
+    assert abs(calib["height_zero_m"] - calib["default_m"]) < 1e-9
+
+
 def test_lift_step_and_stop(mock_server):
     c = mock_server
     s0 = c.get("/api/scene")["lift"]["stroke_mm"]

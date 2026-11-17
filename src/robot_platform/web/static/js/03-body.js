@@ -40,7 +40,8 @@ function renderLift(lift) {
     const zeroTxt = zero != null
       ? `当前零位 ${Number(zero).toFixed(4)} m（${Number(calib.height_zero_mm).toFixed(1)} mm）`
       : "尚未标定零位";
-    deltaEl.textContent = `${zeroTxt}。降到机械最低后点「记为最低点」写入并应用到三维。`;
+    const def = calib.default_m != null ? `（默认 ${(Number(calib.default_m) * 1000).toFixed(1)} mm${calib.from_file ? "" : "，正在用默认"}）` : "";
+    deltaEl.textContent = `${zeroTxt}${def}。降到机械最低后点「记为最低点」写入并应用到三维；升降范围按默认算，不受它限制。`;
   }
 }
 
@@ -54,6 +55,21 @@ if ($("btn-lift-zero")) {
         renderLift(d.lift);
       }
       flash(d.message || "已记为最低点", true);
+      poll();
+    } catch (e) {
+      flash(String(e), false);
+    }
+  };
+}
+
+if ($("btn-lift-zero-reset")) {
+  $("btn-lift-zero-reset").onclick = async () => {
+    if (!confirm("删掉记下的最低点，恢复机型默认值？")) return;
+    try {
+      const d = await post("/api/lift/reset-zero", {});
+      if (!d.ok) { flash(d.error || "恢复默认失败", false); return; }
+      if (d.lift) { window.lastLift = d.lift; renderLift(d.lift); }
+      flash(d.message || "已恢复默认最低点", true);
       poll();
     } catch (e) {
       flash(String(e), false);

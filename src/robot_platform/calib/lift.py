@@ -67,6 +67,17 @@ def save_zero(height_m: float) -> Dict[str, Any]:
     return {"ok": True, **doc, "path": instances.active().to_stored(zero_path())}
 
 
+def reset_zero() -> Dict[str, Any]:
+    """删掉记下的最低点，回到机型配置里的默认值。"""
+    global _zero_m, _loaded
+    if zero_path().is_file():
+        zero_path().unlink()
+    with _lock:
+        _zero_m = None
+        _loaded = False
+    return {"ok": True, "height_zero_m": load_zero(), "source": "default"}
+
+
 def status() -> Dict[str, Any]:
     zero = load_zero()
     from_file = zero_path().is_file()
