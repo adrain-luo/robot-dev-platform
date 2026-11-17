@@ -45,6 +45,8 @@ MANUAL = {
 }
 # 离手臂近、要拟合得细一点的连杆
 NEAR = ("torso", "head", "logo", "yaw_link", "pitching")
+# 手臂垂下时手能伸到旁边的：立柱
+MID = ("lz_",)
 SKIP = ("dex1", "hand_", "d435", "mid360", "camera", "imu")
 
 
@@ -155,7 +157,8 @@ def main() -> int:
     ap.add_argument("--arm-spheres", action="store_true", help="手臂也用一组球（慢，薄件上会往外鼓）")
     ap.add_argument("--arm-parts", type=int, default=5, help="每节手臂最多几根胶囊体")
     ap.add_argument("--arm-gain", type=float, default=0.95, help="多一根胶囊体，总体积要小于这个倍数才加")
-    ap.add_argument("--cell-far", type=float, default=0.06, help="底盘 / 立柱 / 轮子，分块格子边长（m）")
+    ap.add_argument("--cell-mid", type=float, default=0.025, help="立柱，分块格子边长（m）")
+    ap.add_argument("--cell-far", type=float, default=0.06, help="底盘 / 轮子，分块格子边长（m）")
     ap.add_argument("--samples", type=int, default=3000, help="每个网格的表面采样点数")
     ap.add_argument("--acm-samples", type=int, default=3000, help="随机关节角采样数（找结构性贴合的连杆对）")
     ap.add_argument("--always", type=float, default=0.95, help="重叠比例 ≥ 它的连杆对视为结构性贴合、不查")
@@ -197,7 +200,9 @@ def main() -> int:
         elif name in arm_set:
             prims, shape = fit_spheres_inset(pts, nrm, args.cell_arm), "球"
         else:
-            cell = args.cell_near if any(k in name.lower() for k in NEAR) else args.cell_far
+            low = name.lower()
+            cell = (args.cell_near if any(k in low for k in NEAR)
+                    else args.cell_mid if any(k in low for k in MID) else args.cell_far)
             prims, shape = fit_spheres_inset(pts, nrm, cell), "球"
         links[name] = _jsonable(prims, src)
         print(f"{name:28s} {shape:6s} {len(prims):4d} {max(p['r'] for p in prims) * 1000:7.1f}mm {src}")
