@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """由 URDF 里的 STL 拟合碰撞体，写 robots/<机型>/collision.json。
 
-- 身体：表面按格子 × 法向朝向分块，每块一个球，球心往里挪（少往外鼓）；躯干、头格子细，立柱中，底盘粗；
+- 身体：两种都拟，按外鼓挑——一组球（表面按格子 × 法向分块，球心往里挪；躯干、头格子细，立柱中，底盘粗），
+  或沿连杆 z 分层（默认 1 cm）的凸多边形柱（每层横截面的外切 24 边形，平面贴得紧、个数少）；
 - 手臂：胶囊体（沿长度分段 × 横截面并排）和一组球各拟一遍，取「外鼓」小的（碰撞体外表面到实物表面的
   距离，95 分位；每个图元扣 --prim-cost）；
 - 末端（夹爪 / 吸盘，URDF 里没有网格）：按 MANUAL 手写，已有 collision.json 里的 manual 段原样保留；
@@ -25,7 +26,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from robot_platform.collision.geometry import (  # noqa: E402
-    bulge, fit_capsules, fit_spheres_inset, read_stl, sample_surface_normals,
+    bulge, fit_capsules, fit_prisms_slabs, fit_spheres_inset, read_stl, sample_surface_normals,
 )
 from robot_platform.collision.model import CollisionModel  # noqa: E402
 from robot_platform.control.urdf_fk import make_transform  # noqa: E402
@@ -117,6 +118,11 @@ def _has_mesh(link_el, kind, mesh_dir: Path) -> bool:
 def _jsonable(prims, src):
     out = []
     for p in prims:
+        if p.get("type") == "prism":
+            out.append({"type": "prism", "z": [round(float(v), 5) for v in p["z"]],
+                        "n2": [[round(float(x), 6) for x in r] for r in p["n2"]],
+                        "d2": [round(float(v), 5) for v in p["d2"]], "src": src})
+            continue
         out.append({"a": [round(float(x), 4) for x in p["a"]], "b": [round(float(x), 4) for x in p["b"]],
                     "r": round(float(p["r"]), 4), "src": src})
     return out
@@ -159,6 +165,9 @@ def main() -> int:
     ap.add_argument("--arm-parts", type=int, default=3, help="每节手臂沿长度最多分几段（每段再横截面拆成几根平行细胶囊体）")
     ap.add_argument("--arm-gain", type=float, default=0.93, help="多一根胶囊体，总体积要小于这个倍数才加")
     ap.add_argument("--cell-mid", type=float, default=0.025, help="立柱，分块格子边长（m）")
+    ap.add_argument("--slab", type=float, default=0.01, help="身体用多边形柱时每层厚度（m）")
+    ap.add_argument("--prism-slack", type=float, default=0.002,
+                    help="柱比球外鼓多不超过这么多（m）也选柱（柱个数少、算得快）")
     ap.add_argument("--cell-far", type=float, default=0.06, help="底盘 / 轮子，分块格子边长（m）")
     ap.add_argument("--samples", type=int, default=3000, help="每个网格的表面采样点数")
     ap.add_argument("--acm-samples", type=int, default=3000, help="随机关节角采样数（找结构性贴合的连杆对）")
@@ -200,7 +209,7 @@ def main() -> int:
             # 胶囊体拆分和一组球都拟一遍，取外鼓（bulge 95 分位）小的；每个图元扣 args.prim_cost 分（检查要算）
             caps = fit_capsules(pts, args.arm_parts, gain=args.arm_gain, rng=rng)
             sph = fit_spheres_inset(pts, nrm, args.cell_arm)
-            bc, bs = bulge(caps, pts), bulge(sph, pts)
+            bc, bs = bulge(caps, pts, nrm=nrm), bulge(sph, pts, nrm=nrm)
             if bs + args.prim_cost * len(sph) < bc + args.prim_cost * len(caps):
                 prims, shape = sph, f"球（外鼓 {bs * 1000:.0f} mm，胶囊 {bc * 1000:.0f}）"
             else:
@@ -209,9 +218,16 @@ def main() -> int:
             low = name.lower()
             cell = (args.cell_near if any(k in low for k in NEAR)
                     else args.cell_mid if any(k in low for k in MID) else args.cell_far)
-            prims, shape = fit_spheres_inset(pts, nrm, cell), "球"
+            sph = fit_spheres_inset(pts, nrm, cell)
+            # 也拟一套「分层多边形柱」（平面多的躯干、立柱这类贴得紧、个数少），按外鼓挑
+            pri = fit_prisms_slabs(pts, args.slab)
+            bs, bp = bulge(sph, pts, nrm=nrm), bulge(pri, pts, nrm=nrm)
+            if bp <= bs + args.prism_slack:
+                prims, shape = pri, f"柱（外鼓 {bp * 1000:.0f} mm，球 {bs * 1000:.0f}）"
+            else:
+                prims, shape = sph, f"球（外鼓 {bs * 1000:.0f} mm，柱 {bp * 1000:.0f}）"
         links[name] = _jsonable(prims, src)
-        print(f"{name:28s} {shape:6s} {len(prims):4d} {max(p['r'] for p in prims) * 1000:7.1f}mm {src}")
+        print(f"{name:28s} {shape:6s} {len(prims):4d} {src}")
 
     manual = old.get("manual") or MANUAL.get(args.robot, {})
     spec = {

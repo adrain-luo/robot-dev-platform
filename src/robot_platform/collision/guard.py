@@ -292,11 +292,19 @@ class CollisionGuard:
 
     def geometry(self) -> dict:
         """给三维显示：各连杆系下的图元。"""
-        links: Dict[str, List[list]] = {}
-        for i, li in enumerate(self.model.owner):
-            links.setdefault(self.model.prim_links[li], []).append(
-                [*np.round(self.model.A[i], 4).tolist(), *np.round(self.model.B[i], 4).tolist(), round(float(self.model.R[i]), 4)]
-            )
+        links: Dict[str, List] = {}
+        m = self.model
+        for i, li in enumerate(m.owner):
+            if m.is_poly[i]:
+                # 多边形柱：{"prism": {"poly": [[x,y],...], "z": [z0, z1]}}（连杆系，沿 z）
+                from robot_platform.collision.geometry import prism_poly
+
+                pr = m.prism_src[i]
+                item = {"prism": {"poly": np.round(prism_poly(pr), 4).tolist(),
+                                  "z": [round(float(v), 4) for v in pr["z"]]}}
+            else:
+                item = [*np.round(m.A[i], 4).tolist(), *np.round(m.B[i], 4).tolist(), round(float(m.R[i]), 4)]
+            links.setdefault(m.prim_links[li], []).append(item)
         return {"links": links}
 
 

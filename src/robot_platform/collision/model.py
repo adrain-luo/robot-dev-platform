@@ -111,18 +111,60 @@ class CollisionModel:
             for link, lst in (spec.get(src) or {}).items():
                 prims.setdefault(link, []).extend(lst)
         self.prim_links: List[str] = sorted(prims)
+        from robot_platform.collision.geometry import prism_planes, prism_poly
+
         A, B, R, owner = [], [], [], []
+        polys: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+        self.prism_src: Dict[int, dict] = {}
         for li, link in enumerate(self.prim_links):
             for p in prims[link]:
-                A.append(p["a"])
-                B.append(p["b"])
-                R.append(float(p["r"]))
+                if p.get("type") == "prism":
+                    # 凸多边形柱（沿连杆 z）：半空间 n·x ≤ d；A=B=中心，R=包围半径（粗筛用）
+                    N, D = prism_planes(p)
+                    V = prism_poly(p)
+                    z0, z1 = (float(v) for v in p["z"])
+                    c2 = V.mean(axis=0)
+                    c = np.array([c2[0], c2[1], 0.5 * (z0 + z1)])
+                    rb = float(np.sqrt((np.linalg.norm(V - c2, axis=1).max()) ** 2 + (0.5 * (z1 - z0)) ** 2))
+                    polys[len(A)] = (N, D)
+                    self.prism_src[len(A)] = p
+                    A.append(c)
+                    B.append(c)
+                    R.append(rb)
+                else:
+                    A.append(p["a"])
+                    B.append(p["b"])
+                    R.append(float(p["r"]))
                 owner.append(li)
         self.A = np.asarray(A, dtype=float).reshape(-1, 3)
         self.B = np.asarray(B, dtype=float).reshape(-1, 3)
         self.R = np.asarray(R, dtype=float)
         self.owner = np.asarray(owner, dtype=int)
-        self.is_sphere = np.all(np.abs(self.A - self.B) < 1e-12, axis=1)
+        n = len(self.R)
+        self.is_poly = np.zeros(n, dtype=bool)
+        K = max([len(prism_poly(pr)) for pr in self.prism_src.values()], default=3)
+        # 各柱：横截面顶点 V、侧面外法向 n2 / 偏移 d2、上下 z（连杆系）；边数不同的补最后一个顶点（退化边不影响）
+        self.polyV = np.zeros((n, K, 2))
+        self.polyN2 = np.zeros((n, K, 2))
+        self.polyD2 = np.full((n, K), -1e9)
+        self.polyZ = np.zeros((n, 2))
+        self.polyN = np.zeros((n, K + 2, 3))
+        self.polyD = np.full((n, K + 2), 1e9)
+        for i, (N, D) in polys.items():
+            self.polyN[i, :len(D)] = N
+            self.polyD[i, :len(D)] = D
+        for i, pr in self.prism_src.items():
+            self.is_poly[i] = True
+            V = prism_poly(pr)
+            n2 = np.asarray(pr["n2"], dtype=float)
+            d2 = np.asarray(pr["d2"], dtype=float)
+            k = len(V)
+            self.polyV[i, :k] = V
+            self.polyV[i, k:] = V[-1]
+            self.polyN2[i, :k] = n2
+            self.polyD2[i, :k] = d2
+            self.polyZ[i] = [float(v) for v in pr["z"]]
+        self.is_sphere = np.all(np.abs(self.A - self.B) < 1e-12, axis=1) & ~self.is_poly
         self.arm_links: Dict[str, List[str]] = {k: list(v) for k, v in (spec.get("arms") or {}).items()}
         self._build_bounds()
         self.set_pairs([tuple(p[:2]) for p in spec.get("pairs") or []])
@@ -227,6 +269,15 @@ class CollisionModel:
         B = np.einsum("nij,nj->ni", Rs, self.B) + ts
         bc = np.einsum("nij,nj->ni", Rl, self._bc) + tl
         self._last_T = (Rl, tl)
+        # 多边形柱：精确距离时把对方点换到柱所在连杆系；平面（快速下界用）换到躯干系
+        self._Rs, self._ts = Rs, ts
+        if self.is_poly.any():
+            pi = np.nonzero(self.is_poly)[0]
+            Nw = np.einsum("nij,nkj->nki", Rs[pi], self.polyN[pi])
+            self._polyNw = np.zeros_like(self.polyN)
+            self._polyDw = np.full_like(self.polyD, 1e9)
+            self._polyNw[pi] = Nw
+            self._polyDw[pi] = self.polyD[pi] + np.einsum("nki,ni->nk", Nw, ts[pi])
         return A, B, bc
 
     def evaluate(self, q: Mapping[str, float], near: float = 0.08, idx: Optional[np.ndarray] = None) -> np.ndarray:
@@ -265,14 +316,49 @@ class CollisionModel:
                 ga, gb = self._groups[la], self._groups[lb]
                 I = np.concatenate([np.repeat(ga[i], gb[j].size) for i, j in zip(ii[sl], jj[sl])])
                 J = np.concatenate([np.tile(gb[j], ga[i].size) for i, j in zip(ii[sl], jj[sl])])
-                best = min(best, self._pair_min(A, B, I, J))
+                best = min(best, self._pair_min(A, B, I, J, best))
             out[g] = best
         return out
 
-    def _pair_min(self, A, B, I, J) -> float:
-        """成对图元 (I[k], J[k]) 的最近表面距离的最小值。两端都是球的直接用球心距。"""
-        ss = self.is_sphere[I] & self.is_sphere[J]
+    def _pair_min(self, A, B, I, J, cutoff: float = np.inf) -> float:
+        """成对图元 (I[k], J[k]) 的最近表面距离的最小值。两端都是球的直接用球心距；有多边形柱的单独算。"""
+        px = self.is_poly[I] | self.is_poly[J]
         best = np.inf
+        if np.any(px):
+            i, j = I[px], J[px]
+            sw = self.is_poly[i] & ~self.is_poly[j]  # 让柱在 j 一侧
+            i, j = np.where(sw, j, i), np.where(sw, i, j)
+            both = self.is_poly[i]
+            if np.any(both):  # 柱对柱（身体对身体，一般不查）：按包围球，偏保守
+                bi, bj = i[both], j[both]
+                best = float((np.linalg.norm(A[bi] - A[bj], axis=1) - self.R[bi] - self.R[bj]).min())
+            i, j = i[~both], j[~both]
+            if i.size:
+                # 包围球初筛（柱的包围半径大，这一步最便宜）：线段按 a 端点 + 线段长算
+                pre = (np.linalg.norm(A[i] - A[j], axis=1) - self.R[i] - self.R[j]
+                       - np.linalg.norm(B[i] - A[i], axis=1)) < min(cutoff, best)
+                i, j = i[pre], j[pre]
+            if i.size:
+                # 快速下界：每个平面在线段两端取小的，再对平面取大（不大于真实距离）；够远的不细算
+                Nw, Dw = self._polyNw[j], self._polyDw[j]
+                la = np.einsum("nkj,nj->nk", Nw, A[i]) - Dw
+                lb = np.einsum("nkj,nj->nk", Nw, B[i]) - Dw
+                lower = np.minimum(la, lb).max(axis=1) - self.R[i]
+                keep = lower < min(cutoff, best)
+                if np.any(keep):
+                    i, j = i[keep], j[keep]
+                    # 先细算下界最小的一批，用它收紧门限，再算剩下的
+                    order = np.argsort(lower[keep])
+                    i, j, lw = i[order], j[order], lower[keep][order]
+                    for s0 in range(0, i.size, 256):
+                        if lw[s0] >= best:
+                            break
+                        sl = slice(s0, s0 + 256)
+                        best = min(best, float(self._poly_dist(A[i[sl]], B[i[sl]], self.R[i[sl]], j[sl]).min()))
+            I, J = I[~px], J[~px]
+            if I.size == 0:
+                return best
+        ss = self.is_sphere[I] & self.is_sphere[J]
         if np.any(ss):
             i, j = I[ss], J[ss]
             best = float((np.linalg.norm(A[i] - A[j], axis=1) - self.R[i] - self.R[j]).min())
@@ -280,6 +366,51 @@ class CollisionModel:
             i, j = I[~ss], J[~ss]
             best = min(best, float((segment_distances(A[i], B[i], A[j], B[j]) - self.R[i] - self.R[j]).min()))
         return best
+
+    def _poly_sdf(self, x: np.ndarray, j: np.ndarray) -> np.ndarray:
+        """点 x（躯干系）到柱 j 的精确有符号距离（外正内负）。拉伸体：2D 多边形距离与 z 区间距离合成。"""
+        R, t = self._Rs[j], self._ts[j]
+        p = np.einsum("nij,ni->nj", R, x - t)  # Rᵀ(x − t)：换到连杆系
+        xy = p[:, :2]
+        lin = np.einsum("nkj,nj->nk", self.polyN2[j], xy) - self.polyD2[j]
+        inside = lin.max(axis=1)
+        V = self.polyV[j]
+        W = np.roll(V, -1, axis=1)
+        e = W - V
+        L = np.maximum(np.einsum("nkj,nkj->nk", e, e), 1e-18)
+        tt = np.clip(np.einsum("nkj,nkj->nk", xy[:, None, :] - V, e) / L, 0.0, 1.0)
+        dseg = np.linalg.norm(xy[:, None, :] - (V + e * tt[..., None]), axis=2).min(axis=1)
+        s2 = np.where(inside <= 0.0, inside, dseg)
+        z0, z1 = self.polyZ[j, 0], self.polyZ[j, 1]
+        sz = np.maximum(z0 - p[:, 2], p[:, 2] - z1)
+        return np.minimum(np.maximum(s2, sz), 0.0) + np.hypot(np.maximum(s2, 0.0), np.maximum(sz, 0.0))
+
+    def _poly_dist(self, a, b, r, j, rounds: int = 3, n: int = 9) -> np.ndarray:
+        """球 / 胶囊体（a-b, r）到柱 j 的表面距离，成批。球直接算；胶囊体沿线段逐级加密取样：
+        到凸体的有符号距离沿线段是凸函数，每轮在 n 个等分点里取最小的，把区间缩到它左右各一格，
+        3 轮后区间只剩原长的 (2/(n−1))³（9 点时 1/64）。一次算一整批，比黄金分割的几十次调用快。"""
+        out = self._poly_sdf(a, j) - r
+        seg = np.any(np.abs(b - a) > 1e-12, axis=1)
+        if np.any(seg):
+            a2, d2, j2 = a[seg], (b - a)[seg], j[seg]
+            m = len(a2)
+            lo = np.zeros(m)
+            hi = np.ones(m)
+            u = np.linspace(0.0, 1.0, n)
+            jj = np.repeat(j2, n)
+            best = np.full(m, np.inf)
+            for _ in range(rounds):
+                t = lo[:, None] + (hi - lo)[:, None] * u[None, :]
+                x = (a2[:, None, :] + d2[:, None, :] * t[..., None]).reshape(-1, 3)
+                f = self._poly_sdf(x, jj).reshape(m, n)
+                k = np.argmin(f, axis=1)
+                best = np.minimum(best, f[np.arange(m), k])
+                step = (hi - lo) / (n - 1)
+                tk = t[np.arange(m), k]
+                lo = np.maximum(tk - step, 0.0)
+                hi = np.minimum(tk + step, 1.0)
+            out[seg] = best - r[seg]
+        return out
 
     @staticmethod
     def _near_ball(A, B, R, c, rc, near) -> np.ndarray:

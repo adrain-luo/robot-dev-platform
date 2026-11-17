@@ -157,3 +157,33 @@ def test_api_status_and_block(mock_server):
     code, d = c.post("/api/collision/status")
     assert d["collision"]["last_block"]["arm"] == "right"
     c.post("/api/release")
+
+
+def test_prism_distance_matches_box():
+    """多边形柱（这里取正方形截面）的精确距离 = 同尺寸长方体的解析有符号距离；胶囊体取线段上的最小值。"""
+    from pathlib import Path
+
+    from robot_platform.collision.model import CollisionModel
+
+    prof = load_profile("g1d")
+    hx, hy, z0, z1 = 0.05, 0.08, -0.02, 0.10
+    prism = {"type": "prism", "z": [z0, z1], "n2": [[1, 0], [0, 1], [-1, 0], [0, -1]], "d2": [hx, hy, hx, hy]}
+    spec = {"links": {"torso_link": [prism], "right_wrist_yaw_link": [{"a": [0, 0, 0], "b": [0, 0, 0], "r": 0.01}]},
+            "arms": {"right": ["right_wrist_yaw_link"]}, "pairs": []}
+    m = CollisionModel(Path(prof.urdf), spec)
+    m.world_prims({})
+    rng = np.random.default_rng(3)
+    x = rng.uniform(-0.2, 0.2, size=(500, 3))
+    j = np.full(len(x), int(np.nonzero(m.is_poly)[0][0]))
+    got = m._poly_sdf(x, j)
+    c = np.array([0, 0, 0.5 * (z0 + z1)])
+    h = np.array([hx, hy, 0.5 * (z1 - z0)])
+    q = np.abs(x - c) - h
+    want = np.linalg.norm(np.maximum(q, 0), axis=1) + np.minimum(q.max(axis=1), 0)
+    assert np.allclose(got, want, atol=1e-9)
+    # 胶囊体：线段穿过长方体 → 负；线段在外面平行于一个面 → 等于到该面的距离 − 半径
+    a = np.array([[0.0, 0.0, -0.3], [0.08, -0.05, 0.0]])
+    b = np.array([[0.0, 0.0, 0.3], [0.08, 0.05, 0.05]])
+    d = m._poly_dist(a, b, np.array([0.01, 0.01]), j[:2])
+    assert d[0] < 0
+    assert abs(d[1] - (0.08 - hx - 0.01)) < 1e-4

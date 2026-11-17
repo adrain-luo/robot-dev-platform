@@ -811,7 +811,7 @@ const View = {
     const sphereGeo = new THREE.SphereGeometry(1, 14, 10);
     const up = new THREE.Vector3(0, 1, 0);
     const m4 = new THREE.Matrix4();
-    for (const [link, prims] of Object.entries(geom.links)) {
+    for (let [link, prims] of Object.entries(geom.links)) {
       const parent = this.links.get(link);
       if (!parent) continue;
       const mat = new THREE.MeshStandardMaterial({
@@ -820,6 +820,33 @@ const View = {
       const group = new THREE.Group();
       group.userData.collisionLink = link;
       group.userData.mat = mat;
+      // 多边形柱（{prism: {poly: [[x,y]...], z: [z0,z1]}}，沿连杆 z）：横截面按 inf 外扩后拉伸
+      for (const p of prims) {
+        if (!p || !p.prism) continue;
+        const poly = p.prism.poly;
+        const n = poly.length;
+        const nrm = poly.map((v, k) => {
+          const w = poly[(k + 1) % n];
+          const ex = w[0] - v[0], ey = w[1] - v[1];
+          const l = Math.hypot(ex, ey) || 1;
+          return [ey / l, -ex / l];  // 逆时针多边形的外法向
+        });
+        const shape = new THREE.Shape();
+        for (let k = 0; k < n; k++) {
+          const n1 = nrm[(k - 1 + n) % n], n2 = nrm[k];
+          const c = 1 + n1[0] * n2[0] + n1[1] * n2[1];
+          const ox = c > 1e-6 ? inf * (n1[0] + n2[0]) / c : 0;
+          const oy = c > 1e-6 ? inf * (n1[1] + n2[1]) / c : 0;
+          const x = poly[k][0] + ox, y = poly[k][1] + oy;
+          if (k === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
+        }
+        shape.closePath();
+        const [z0, z1] = p.prism.z;
+        const geo = new THREE.ExtrudeGeometry(shape, { depth: z1 - z0 + 2 * inf, bevelEnabled: false });
+        geo.translate(0, 0, z0 - inf);
+        group.add(new THREE.Mesh(geo, mat));
+      }
+      prims = prims.filter((p) => Array.isArray(p));
       const spheres = prims.filter((p) => p[0] === p[3] && p[1] === p[4] && p[2] === p[5]);
       if (spheres.length) {
         const inst = new THREE.InstancedMesh(sphereGeo.clone(), mat, spheres.length);

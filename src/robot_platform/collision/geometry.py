@@ -256,14 +256,17 @@ def _fib_dirs(n: int = 48) -> np.ndarray:
     return _FIB
 
 
-def bulge(parts: List[Dict[str, object]], surf: np.ndarray, q: float = 95.0) -> float:
+def bulge(parts: List[Dict[str, object]], surf: np.ndarray, q: float = 95.0,
+          nrm: Optional[np.ndarray] = None) -> float:
     """碰撞体比实物往外鼓多少（m）：在各胶囊体表面取点，去掉落在别的胶囊体里面的（只留并集外表面），
     算到实物表面点的最近距离，取 q 分位。比并集体积更贴「看起来像不像」：空心、内部重叠都不算。"""
     D = _fib_dirs()
-    A = np.array([np.asarray(c["a"], dtype=float) for c in parts])
-    B = np.array([np.asarray(c["b"], dtype=float) for c in parts])
-    R = np.array([float(c["r"]) for c in parts])
-    pts = []
+    prisms = [c for c in parts if c.get("type") == "prism"]
+    caps = [c for c in parts if c.get("type") != "prism"]
+    A = np.array([np.asarray(c["a"], dtype=float) for c in caps]).reshape(-1, 3)
+    B = np.array([np.asarray(c["b"], dtype=float) for c in caps]).reshape(-1, 3)
+    R = np.array([float(c["r"]) for c in caps])
+    pts = [prism_surface_points(pr) for pr in prisms]
     for a, b, r in zip(A, B, R):
         L = float(np.linalg.norm(b - a))
         if L < 1e-9:
@@ -284,12 +287,93 @@ def bulge(parts: List[Dict[str, object]], surf: np.ndarray, q: float = 95.0) -> 
     inside = np.zeros(len(P), dtype=bool)
     for a, b, r in zip(A, B, R):
         inside |= point_segment_dist(P, a, b) < r - 1e-6
+    for pr in prisms:
+        inside |= prism_sdf_local(pr, P) < -1e-6
     P = P[~inside]
     if len(P) == 0:
         return 0.0
-    S = surf if len(surf) <= 4000 else surf[np.random.default_rng(0).choice(len(surf), 4000, replace=False)]
-    _, d = _nearest(P, S)
+    sel = np.arange(len(surf)) if len(surf) <= 12000 else np.random.default_rng(0).choice(len(surf), 12000, replace=False)
+    S = surf[sel]
+    j, d = _nearest(P, S)
+    if nrm is not None:
+        # 只算往外鼓的：在最近表面点的法向外侧才算（落在实物里面的碰撞体表面不算鼓）
+        Nn = nrm[sel]
+        c_all = surf.mean(axis=0)
+        if float(np.mean(np.einsum("ij,ij->i", surf - c_all, nrm))) < 0:
+            Nn = -Nn
+        out = np.einsum("ij,ij->i", P - S[j], Nn[j]) > 0
+        d = np.where(out, d, 0.0)
     return float(np.percentile(d, q))
+
+
+def prism_planes(pr: Dict[str, object]) -> Tuple[np.ndarray, np.ndarray]:
+    """凸多边形柱（沿连杆 z）→ 半空间 n·p ≤ d（连杆系）：侧面 K 个 + 上下两个。"""
+    n2 = np.asarray(pr["n2"], dtype=float).reshape(-1, 2)
+    d2 = np.asarray(pr["d2"], dtype=float).reshape(-1)
+    z0, z1 = (float(v) for v in pr["z"])
+    N = np.r_[np.c_[n2, np.zeros(len(n2))], [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]]
+    D = np.r_[d2, [z1, -z0]]
+    return N, D
+
+
+def prism_poly(pr: Dict[str, object]) -> np.ndarray:
+    """柱的横截面多边形顶点（相邻两条侧面线的交点，逆时针）。"""
+    n2 = np.asarray(pr["n2"], dtype=float).reshape(-1, 2)
+    d2 = np.asarray(pr["d2"], dtype=float).reshape(-1)
+    K = len(n2)
+    V = [np.linalg.solve(np.array([n2[k], n2[(k + 1) % K]]), [d2[k], d2[(k + 1) % K]]) for k in range(K)]
+    return np.asarray(V)
+
+
+def prism_sdf_local(pr: Dict[str, object], P: np.ndarray) -> np.ndarray:
+    """点（连杆系）到柱的「平面距离」max(n·p − d)：里面是真实有符号距离，外面不大于真实距离（偏保守）。"""
+    N, D = prism_planes(pr)
+    return (P @ N.T - D).max(axis=1)
+
+
+def prism_surface_points(pr: Dict[str, object], step: float = 0.004) -> np.ndarray:
+    V = prism_poly(pr)
+    z0, z1 = (float(v) for v in pr["z"])
+    zs = np.linspace(z0, z1, max(2, int(np.ceil((z1 - z0) / step)) + 1))
+    out = []
+    for k in range(len(V)):
+        a, b = V[k], V[(k + 1) % len(V)]
+        n = max(2, int(np.ceil(np.linalg.norm(b - a) / step)) + 1)
+        e = a + np.outer(np.linspace(0, 1, n), b - a)
+        out.append(np.c_[np.repeat(e, len(zs), axis=0), np.tile(zs, len(e))])
+    lo, hi = V.min(axis=0), V.max(axis=0)
+    gx, gy = np.meshgrid(np.arange(lo[0], hi[0], step), np.arange(lo[1], hi[1], step))
+    g = np.c_[gx.ravel(), gy.ravel()]
+    n2 = np.asarray(pr["n2"], dtype=float)
+    d2 = np.asarray(pr["d2"], dtype=float)
+    g = g[(g @ n2.T - d2).max(axis=1) <= 0]
+    # 上下端面：只取真实的（最上 / 最下层）；层与层之间的切面在实物里面，不算外表面
+    caps = pr.get("caps", [True, True])
+    for z, on in zip((z0, z1), caps):
+        if on:
+            out.append(np.c_[g, np.full(len(g), z)])
+    return np.concatenate(out)
+
+
+def fit_prisms_slabs(pts: np.ndarray, slab: float = 0.02, K: int = 24) -> List[Dict[str, object]]:
+    """沿连杆 z 切成厚 slab 的层，每层一个凸多边形柱：横截面取 K 个方向的支撑线（外切 K 边形），
+    包住该层全部点。平面贴合，弧面误差 < 1%（K=24）；上宽下窄靠分层跟上。"""
+    z = pts[:, 2]
+    z0, z1 = float(z.min()), float(z.max())
+    n = max(1, int(np.ceil((z1 - z0) / slab)))
+    edges = np.linspace(z0, z1, n + 1)
+    th = np.linspace(0.0, 2 * np.pi, K, endpoint=False)
+    n2 = np.c_[np.cos(th), np.sin(th)]
+    out: List[Dict[str, object]] = []
+    for k in range(n):
+        m = (z >= edges[k] - 1e-9) & (z <= edges[k + 1] + 1e-9)
+        if np.sum(m) < 3:
+            continue
+        xy = pts[m][:, :2]
+        d2 = (xy @ n2.T).max(axis=0)
+        out.append({"type": "prism", "z": [float(edges[k]), float(edges[k + 1])],
+                    "n2": n2.round(6).tolist(), "d2": d2.tolist(), "caps": [k == 0, k == n - 1]})
+    return out
 
 
 def _nearest(q: np.ndarray, pts: np.ndarray, chunk: int = 2048) -> Tuple[np.ndarray, np.ndarray]:
