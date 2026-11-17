@@ -209,3 +209,26 @@ def test_tool_capsule_follows_tcp():
     cur[0] = ()
     guard.sync_tools()
     assert len(guard.model.R) == n0
+
+
+def test_guard_build_race():
+    """两个线程同时要闸门（页面轮询 + 启动时挂控制循环）：后来的要等建完，不能拿到 None。"""
+    import threading
+    import time
+
+    from robot_platform.web.api.collision import CollisionMixin
+
+    class _App(CollisionMixin):
+        def _build_collision_guard(self):
+            time.sleep(0.3)
+            self._collision_guard = object()
+
+    app = _App()
+    got = []
+    ts = [threading.Thread(target=lambda: got.append(app.collision_guard())) for _ in range(3)]
+    for t in ts:
+        t.start()
+        time.sleep(0.05)
+    for t in ts:
+        t.join()
+    assert len(got) == 3 and all(g is not None for g in got) and len({id(g) for g in got}) == 1

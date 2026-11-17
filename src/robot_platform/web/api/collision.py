@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import threading
 import traceback
 from typing import Any, Dict, Optional
 
@@ -14,12 +15,21 @@ from robot_platform.calib import lift as lift_calib
 class CollisionMixin:
     _collision_guard = None
     _collision_tried = False
+    # 建闸门要一两秒：页面轮询状态和启动时建控制循环（attach_collision_guard）会同时来要，
+    # 不加锁时后来的那个会拿到「已经在建、但还是 None」，控制循环就挂上了空闸门、不再检查
+    _collision_build_lock = threading.Lock()
 
     def collision_guard(self):
         """按机型的 collision.json 建闸门；没有模型返回 None。"""
         if self._collision_tried:
             return self._collision_guard
-        self._collision_tried = True
+        with self._collision_build_lock:
+            if not self._collision_tried:
+                self._build_collision_guard()
+                self._collision_tried = True
+        return self._collision_guard
+
+    def _build_collision_guard(self) -> None:
         try:
             from robot_platform.collision.guard import CollisionGuard
             from robot_platform.collision.model import try_load
@@ -33,7 +43,6 @@ class CollisionMixin:
         except Exception:  # noqa: BLE001  模型坏了不影响别的功能，只是不查
             traceback.print_exc()
             self._collision_guard = None
-        return self._collision_guard
 
     def _collision_tools(self) -> tuple:
         """各手当前生效的 TCP（腕末端连杆系下的点）；没生效的手不给，末端就只有腕。"""
@@ -86,11 +95,14 @@ class CollisionMixin:
         if g is None:
             return {"available": False, "note": f"{self.profile.name} 没有碰撞模型（robots/<机型>/collision.json，用 tools/fit_collision.py 生成）"}
         try:
-            return g.status(self._collision_arms_q() if with_distance else None)
+            out = g.status(self._collision_arms_q() if with_distance else None)
         except Exception as exc:  # noqa: BLE001
             out = g.status(None)
             out["error"] = f"{type(exc).__name__}: {exc}"
-            return out
+        # 控制循环上挂的是不是这个闸门（没挂上 = 下目标时不检查）；只读模式没有控制循环
+        loop = getattr(self, "loop", None)
+        out["gate_attached"] = None if loop is None else (getattr(loop, "collision_guard", None) is g)
+        return out
 
     def collision_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         g = self.collision_guard()

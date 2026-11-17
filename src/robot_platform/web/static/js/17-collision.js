@@ -26,6 +26,7 @@ function renderCollision(st) {
     colInflate(st.margin_mm);
   }
   const parts = [st.enabled ? `已开 · 余量 ${Math.round(st.margin_mm)} mm` : "已关（手臂目标不查自碰撞）"];
+  if (st.gate_attached === false) parts.unshift("⚠ 控制循环没挂上碰撞检查，下目标时不会拦（重启服务）");
   const nClose = (st.close || []).length;
   if (nClose) parts.push(`${nClose} 处已比余量近（三维标红）`);
   const per = st.per_arm || {};
@@ -47,7 +48,7 @@ function renderCollision(st) {
   if (now) {
     now.textContent = parts.join(" · ");
     const n = st.nearest;
-    now.className = `note${!st.enabled ? " bad" : n && n.distance_mm < st.margin_mm ? " bad" : ""}`;
+    now.className = `note${!st.enabled || st.gate_attached === false ? " bad" : n && n.distance_mm < st.margin_mm ? " bad" : ""}`;
   }
   if (last) {
     const b = st.last_block;
