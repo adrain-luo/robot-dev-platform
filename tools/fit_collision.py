@@ -150,11 +150,11 @@ def dump_spec(spec: dict) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("robot", nargs="?", default="g1d")
-    ap.add_argument("--cell-near", type=float, default=0.02, help="躯干 / 头这类靠近手臂的连杆，分块格子边长（m）")
+    ap.add_argument("--cell-near", type=float, default=0.015, help="躯干 / 头这类靠近手臂的连杆，分块格子边长（m）")
     ap.add_argument("--cell-arm", type=float, default=0.035, help="手臂连杆分块格子边长（m）")
     ap.add_argument("--arm-spheres", action="store_true", help="手臂也用一组球（慢，薄件上会往外鼓）")
     ap.add_argument("--arm-parts", type=int, default=5, help="每节手臂最多几根胶囊体")
-    ap.add_argument("--arm-gain", type=float, default=0.93, help="多一根胶囊体，总体积要小于这个倍数才加")
+    ap.add_argument("--arm-gain", type=float, default=0.95, help="多一根胶囊体，总体积要小于这个倍数才加")
     ap.add_argument("--cell-far", type=float, default=0.06, help="底盘 / 立柱 / 轮子，分块格子边长（m）")
     ap.add_argument("--samples", type=int, default=3000, help="每个网格的表面采样点数")
     ap.add_argument("--acm-samples", type=int, default=3000, help="随机关节角采样数（找结构性贴合的连杆对）")
