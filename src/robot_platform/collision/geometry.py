@@ -240,42 +240,132 @@ def union_volume(caps: List[Dict[str, object]], step: float = 0.004) -> float:
     return float(inside.sum()) * step ** 3
 
 
-def fit_capsules(pts: np.ndarray, max_parts: int = 5, gain: float = 0.93,
-                 rng: Optional[np.random.Generator] = None) -> List[Dict[str, object]]:
-    """一到 max_parts 根胶囊体包住连杆，两种分法取并集体积最小的（多一根要小于 gain 倍才加）：
-    - 沿长度分段：点 k-means 分 k 块，每块一根（弯的连杆）；
-    - 横截面并排：沿最优轴向，把横截面 k-means 分 k 块，每块一根平行的细胶囊体（方截面的连杆，
-      单根圆胶囊体在四个角会往外鼓 1–2 cm）。
-    """
-    rng = rng or np.random.default_rng(0)
-    axis = _best_axis(pts, rng)
-    best = [_capsule_on_axis(pts, axis, rng)]
-    best_v = union_volume(best)
-    sub = pts if len(pts) <= 6000 else pts[rng.choice(len(pts), 6000, replace=False)]
+# 多一根胶囊体，比较用的分数加罚这么多（m；检查时每根都要算距离）
+PART_PENALTY = 0.0005
+
+_FIB = None
+
+
+def _fib_dirs(n: int = 48) -> np.ndarray:
+    global _FIB
+    if _FIB is None or len(_FIB) != n:
+        i = np.arange(n) + 0.5
+        phi = np.arccos(1 - 2 * i / n)
+        th = np.pi * (1 + 5 ** 0.5) * i
+        _FIB = np.c_[np.cos(th) * np.sin(phi), np.sin(th) * np.sin(phi), np.cos(phi)]
+    return _FIB
+
+
+def bulge(parts: List[Dict[str, object]], surf: np.ndarray, q: float = 95.0) -> float:
+    """碰撞体比实物往外鼓多少（m）：在各胶囊体表面取点，去掉落在别的胶囊体里面的（只留并集外表面），
+    算到实物表面点的最近距离，取 q 分位。比并集体积更贴「看起来像不像」：空心、内部重叠都不算。"""
+    D = _fib_dirs()
+    A = np.array([np.asarray(c["a"], dtype=float) for c in parts])
+    B = np.array([np.asarray(c["b"], dtype=float) for c in parts])
+    R = np.array([float(c["r"]) for c in parts])
+    pts = []
+    for a, b, r in zip(A, B, R):
+        L = float(np.linalg.norm(b - a))
+        if L < 1e-9:
+            pts.append(a + r * D)
+            continue
+        ax = (b - a) / L
+        e1, e2 = _perp_basis(ax)
+        # 端帽（各取朝外那半）+ 侧面一圈圈
+        pts.append(a + r * D[(D @ ax) <= 0])
+        pts.append(b + r * D[(D @ ax) >= 0])
+        n_ring = max(2, int(np.ceil(L / max(r, 0.004))) + 1)
+        th = np.linspace(0, 2 * np.pi, 16, endpoint=False)
+        ring = np.cos(th)[:, None] * e1 + np.sin(th)[:, None] * e2
+        for t in np.linspace(0, 1, n_ring):
+            pts.append(a + t * (b - a) + r * ring)
+    P = np.concatenate(pts)
+    # 只留并集外表面上的点
+    inside = np.zeros(len(P), dtype=bool)
+    for a, b, r in zip(A, B, R):
+        inside |= point_segment_dist(P, a, b) < r - 1e-6
+    P = P[~inside]
+    if len(P) == 0:
+        return 0.0
+    S = surf if len(surf) <= 4000 else surf[np.random.default_rng(0).choice(len(surf), 4000, replace=False)]
+    _, d = _nearest(P, S)
+    return float(np.percentile(d, q))
+
+
+def _nearest(q: np.ndarray, pts: np.ndarray, chunk: int = 2048) -> Tuple[np.ndarray, np.ndarray]:
+    """每个 q 最近的表面点下标和距离（分块暴力，float32）。"""
+    P = pts.astype(np.float32)
+    pn = (P * P).sum(axis=1)
+    idx = np.empty(len(q), dtype=np.int64)
+    dist = np.empty(len(q))
+    for i in range(0, len(q), chunk):
+        Q = q[i:i + chunk].astype(np.float32)
+        d2 = (Q * Q).sum(axis=1)[:, None] + pn[None, :] - 2.0 * Q @ P.T
+        j = np.argmin(d2, axis=1)
+        idx[i:i + chunk] = j
+        dist[i:i + chunk] = np.sqrt(np.maximum(d2[np.arange(len(Q)), j], 0.0))
+    return idx, dist
+
+
+def _perp_basis(axis: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     tmp = np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
     e1 = np.cross(axis, tmp)
     e1 /= np.linalg.norm(e1)
-    e2 = np.cross(axis, e1)
-    for k in range(2, max_parts + 1):
-        cands = []
-        # 沿长度
-        lab_sub = _kmeans(sub, k, rng)
-        cen = np.array([sub[lab_sub == i].mean(axis=0) for i in range(k) if np.any(lab_sub == i)])
-        lab = np.argmin(((pts[:, None, :] - cen[None, :, :]) ** 2).sum(-1), axis=1)
-        cands.append([fit_capsule(pts[lab == i], rng) for i in range(len(cen)) if np.sum(lab == i) >= 4])
-        # 横截面并排
+    return e1, np.cross(axis, e1)
+
+
+def _bundle(seg: np.ndarray, rng, max_k: int, gain: float) -> List[Dict[str, object]]:
+    """一段点用 1..max_k 根平行的胶囊体包住：横截面 k-means 分块，每块一根。
+    轴向试「单根最优轴」、三个主轴和连杆的三个坐标轴，取外鼓（bulge，每多一根加罚 PART_PENALTY）最小的。
+    短粗的圆柱（肘部电机）单根胶囊体两端各多鼓一个半径；拆成几根细的，端部只鼓细的那个半径。"""
+    sub = seg if len(seg) <= 4000 else seg[rng.choice(len(seg), 4000, replace=False)]
+    c = sub.mean(axis=0)
+    _, _, vt = np.linalg.svd(sub - c, full_matrices=False)
+    # URDF 网格一般和连杆坐标轴对齐（电机轴就是关节轴），三个坐标轴也试
+    axes = [_best_axis(seg, rng), vt[0], vt[1], vt[2], *np.eye(3)]
+    best, best_v = None, np.inf
+    for axis in axes:
+        e1, e2 = _perp_basis(axis)
         uv_sub = np.c_[sub @ e1, sub @ e2]
-        lab2 = _kmeans(uv_sub, k, rng)
-        cen2 = np.array([uv_sub[lab2 == i].mean(axis=0) for i in range(k) if np.any(lab2 == i)])
-        uv = np.c_[pts @ e1, pts @ e2]
-        lab2 = np.argmin(((uv[:, None, :] - cen2[None, :, :]) ** 2).sum(-1), axis=1)
-        cands.append([_capsule_on_axis(pts[lab2 == i], axis, rng) for i in range(len(cen2)) if np.sum(lab2 == i) >= 4])
-        for parts in cands:
-            if not parts:
-                continue
-            v = union_volume(parts)
-            if v < gain * best_v:
-                best, best_v = parts, v
+        uv = np.c_[seg @ e1, seg @ e2]
+        cur, cur_v = None, np.inf
+        for k in range(1, max_k + 1):
+            if k == 1:
+                parts = [_capsule_on_axis(seg, axis, rng)]
+            else:
+                lab_s = _kmeans(uv_sub, k, rng)
+                cen = np.array([uv_sub[lab_s == i].mean(axis=0) for i in range(k) if np.any(lab_s == i)])
+                lab = np.argmin(((uv[:, None, :] - cen[None, :, :]) ** 2).sum(-1), axis=1)
+                parts = [_capsule_on_axis(seg[lab == i], axis, rng) for i in range(len(cen)) if np.sum(lab == i) >= 4]
+            v = bulge(parts, seg) + PART_PENALTY * (len(parts) - 1)
+            if v < cur_v:
+                cur, cur_v = parts, v
+        if cur_v < best_v:
+            best, best_v = cur, cur_v
+    return best
+
+
+def fit_capsules(pts: np.ndarray, max_parts: int = 3, gain: float = 0.93,
+                 rng: Optional[np.random.Generator] = None, max_bundle: int = 9) -> List[Dict[str, object]]:
+    """胶囊体包住一节连杆，两级：先沿长度 k-means 分 1..max_parts 段（弯的连杆），每段再在横截面上拆成
+    1..max_bundle 根平行的细胶囊体（方截面、短粗圆柱）。都按外鼓（bulge）比，每多一根加罚 PART_PENALTY。"""
+    rng = rng or np.random.default_rng(0)
+    sub = pts if len(pts) <= 6000 else pts[rng.choice(len(pts), 6000, replace=False)]
+    best, best_v = None, np.inf
+    for k in range(1, max_parts + 1):
+        if k == 1:
+            segs = [pts]
+        else:
+            lab_s = _kmeans(sub, k, rng)
+            cen = np.array([sub[lab_s == i].mean(axis=0) for i in range(k) if np.any(lab_s == i)])
+            lab = np.argmin(((pts[:, None, :] - cen[None, :, :]) ** 2).sum(-1), axis=1)
+            segs = [pts[lab == i] for i in range(len(cen)) if np.sum(lab == i) >= 4]
+        parts = []
+        for seg in segs:
+            parts += _bundle(seg, rng, max_bundle, gain)
+        v = bulge(parts, pts) + PART_PENALTY * (len(parts) - 1)
+        if v < best_v:
+            best, best_v = parts, v
     return best
 
 

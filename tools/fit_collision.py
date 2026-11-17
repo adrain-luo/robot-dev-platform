@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """由 URDF 里的 STL 拟合碰撞体，写 robots/<机型>/collision.json。
 
-- 表面按格子 × 法向朝向分块，每块一个球，球心往里挪（少往外鼓）；手臂、躯干、头格子细，底盘 / 立柱粗；
-  （--arm-capsules：手臂改用一到三根胶囊体，快但方截面会胖 2 cm 左右）
+- 身体：表面按格子 × 法向朝向分块，每块一个球，球心往里挪（少往外鼓）；躯干、头格子细，立柱中，底盘粗；
+- 手臂：胶囊体（沿长度分段 × 横截面并排）和一组球各拟一遍，取「外鼓」小的（碰撞体外表面到实物表面的
+  距离，95 分位；每个图元扣 --prim-cost）；
 - 末端（夹爪 / 吸盘，URDF 里没有网格）：按 MANUAL 手写，已有 collision.json 里的 manual 段原样保留；
 - 要查的连杆对：至少一端在手臂上、树上隔 ≥ 2 个活动关节（同一只手 ≥ 3）；再随机采样两臂关节角，
   几乎总是重叠（≥ --always）的连杆对视为结构性贴合，去掉。
@@ -24,7 +25,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from robot_platform.collision.geometry import (  # noqa: E402
-    fit_capsules, fit_spheres_inset, read_stl, sample_surface_normals,
+    bulge, fit_capsules, fit_spheres_inset, read_stl, sample_surface_normals,
 )
 from robot_platform.collision.model import CollisionModel  # noqa: E402
 from robot_platform.control.urdf_fk import make_transform  # noqa: E402
@@ -153,10 +154,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("robot", nargs="?", default="g1d")
     ap.add_argument("--cell-near", type=float, default=0.015, help="躯干 / 头这类靠近手臂的连杆，分块格子边长（m）")
-    ap.add_argument("--cell-arm", type=float, default=0.035, help="手臂连杆分块格子边长（m）")
-    ap.add_argument("--arm-spheres", action="store_true", help="手臂也用一组球（慢，薄件上会往外鼓）")
-    ap.add_argument("--arm-parts", type=int, default=5, help="每节手臂最多几根胶囊体")
-    ap.add_argument("--arm-gain", type=float, default=0.95, help="多一根胶囊体，总体积要小于这个倍数才加")
+    ap.add_argument("--cell-arm", type=float, default=0.016, help="手臂连杆用球时的分块格子边长（m）")
+    ap.add_argument("--prim-cost", type=float, default=0.00001, help="手臂选拟合方式时每个图元扣的分（m）")
+    ap.add_argument("--arm-parts", type=int, default=3, help="每节手臂沿长度最多分几段（每段再横截面拆成几根平行细胶囊体）")
+    ap.add_argument("--arm-gain", type=float, default=0.93, help="多一根胶囊体，总体积要小于这个倍数才加")
     ap.add_argument("--cell-mid", type=float, default=0.025, help="立柱，分块格子边长（m）")
     ap.add_argument("--cell-far", type=float, default=0.06, help="底盘 / 轮子，分块格子边长（m）")
     ap.add_argument("--samples", type=int, default=3000, help="每个网格的表面采样点数")
@@ -195,10 +196,15 @@ def main() -> int:
         if got is None or len(got[0]) < 4:
             continue
         pts, nrm = got
-        if name in arm_set and not args.arm_spheres:
-            prims, shape = fit_capsules(pts, args.arm_parts, gain=args.arm_gain, rng=rng), "胶囊"
-        elif name in arm_set:
-            prims, shape = fit_spheres_inset(pts, nrm, args.cell_arm), "球"
+        if name in arm_set:
+            # 胶囊体拆分和一组球都拟一遍，取外鼓（bulge 95 分位）小的；每个图元扣 args.prim_cost 分（检查要算）
+            caps = fit_capsules(pts, args.arm_parts, gain=args.arm_gain, rng=rng)
+            sph = fit_spheres_inset(pts, nrm, args.cell_arm)
+            bc, bs = bulge(caps, pts), bulge(sph, pts)
+            if bs + args.prim_cost * len(sph) < bc + args.prim_cost * len(caps):
+                prims, shape = sph, f"球（外鼓 {bs * 1000:.0f} mm，胶囊 {bc * 1000:.0f}）"
+            else:
+                prims, shape = caps, f"胶囊（外鼓 {bc * 1000:.0f} mm，球 {bs * 1000:.0f}）"
         else:
             low = name.lower()
             cell = (args.cell_near if any(k in low for k in NEAR)

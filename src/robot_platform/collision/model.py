@@ -90,6 +90,12 @@ class UrdfTree:
         return {k: inv @ T[k] for k in keys if k in T}
 
 
+# 每组大约多少个图元（连杆内再分组的包围球筛选）
+GROUP = 12
+# 组对一批细算多少对
+BATCH = 32
+
+
 def load_spec(path: Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -116,6 +122,7 @@ class CollisionModel:
         self.B = np.asarray(B, dtype=float).reshape(-1, 3)
         self.R = np.asarray(R, dtype=float)
         self.owner = np.asarray(owner, dtype=int)
+        self.is_sphere = np.all(np.abs(self.A - self.B) < 1e-12, axis=1)
         self.arm_links: Dict[str, List[str]] = {k: list(v) for k, v in (spec.get("arms") or {}).items()}
         self._build_bounds()
         self.set_pairs([tuple(p[:2]) for p in spec.get("pairs") or []])
@@ -141,6 +148,36 @@ class CollisionModel:
             Rb.append(r)
         self._bc = np.asarray(C).reshape(-1, 3)
         self._br = np.asarray(Rb)
+        # 第二层：每个连杆的图元按位置分成约 GROUP 个一组，各组一个包围球（连杆系），细算前先按组筛
+        self._groups: List[List[np.ndarray]] = []
+        self._gc: List[np.ndarray] = []
+        self._gr: List[np.ndarray] = []
+        rng = np.random.default_rng(0)
+        for ids in self._link_prims:
+            mid = 0.5 * (self.A[ids] + self.B[ids])
+            k = max(1, int(np.ceil(len(ids) / GROUP)))
+            if k == 1:
+                lab = np.zeros(len(ids), dtype=int)
+            else:
+                cen = mid[rng.choice(len(ids), k, replace=False)]
+                for _ in range(15):
+                    lab = np.argmin(((mid[:, None, :] - cen[None, :, :]) ** 2).sum(-1), axis=1)
+                    cen = np.array([mid[lab == i].mean(axis=0) if np.any(lab == i) else cen[i] for i in range(k)])
+            groups, gc, gr = [], [], []
+            for i in range(k):
+                sel = ids[lab == i]
+                if sel.size == 0:
+                    continue
+                pts = np.r_[self.A[sel], self.B[sel]]
+                c = 0.5 * (pts.min(axis=0) + pts.max(axis=0))
+                r = float(np.max(np.r_[np.linalg.norm(self.A[sel] - c, axis=1) + self.R[sel],
+                                       np.linalg.norm(self.B[sel] - c, axis=1) + self.R[sel]]))
+                groups.append(sel)
+                gc.append(c)
+                gr.append(r)
+            self._groups.append(groups)
+            self._gc.append(np.asarray(gc).reshape(-1, 3))
+            self._gr.append(np.asarray(gr))
 
     def candidate_pairs(self, min_chain_gap: int = 2, same_arm_gap: int = 3) -> List[Tuple[str, str]]:
         """所有至少一端在手臂上的连杆对，去掉树上相隔太近的（相邻连杆本来就贴着）：
@@ -181,7 +218,7 @@ class CollisionModel:
 
     # ------------------------------------------------------------ 求值
     def world_prims(self, q: Mapping[str, float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """全部图元端点（躯干系）+ 各连杆包围球心。"""
+        """全部图元端点（躯干系）+ 各连杆包围球心（各连杆的旋转 / 平移留在 self._last_T，分组筛选用）。"""
         T = self.tree.transforms(q, self.prim_links)
         Rl = np.stack([T[l][:3, :3] for l in self.prim_links])
         tl = np.stack([T[l][:3, 3] for l in self.prim_links])
@@ -189,6 +226,7 @@ class CollisionModel:
         A = np.einsum("nij,nj->ni", Rs, self.A) + ts
         B = np.einsum("nij,nj->ni", Rs, self.B) + ts
         bc = np.einsum("nij,nj->ni", Rl, self._bc) + tl
+        self._last_T = (Rl, tl)
         return A, B, bc
 
     def evaluate(self, q: Mapping[str, float], near: float = 0.08, idx: Optional[np.ndarray] = None) -> np.ndarray:
@@ -204,20 +242,44 @@ class CollisionModel:
         A, B, bc = self.world_prims(q)
         gap = np.linalg.norm(bc[pa] - bc[pb], axis=1) - self._br[pa] - self._br[pb]
         out = gap.copy()
+        Rl, tl = self._last_T
         for g in np.nonzero(gap < near)[0]:
             la, lb = pa[g], pb[g]
-            ia, ib = self._link_prims[la], self._link_prims[lb]
-            ia = ia[self._near_ball(A[ia], B[ia], self.R[ia], bc[lb], self._br[lb], near)]
-            ib = ib[self._near_ball(A[ib], B[ib], self.R[ib], bc[la], self._br[la], near)]
-            # 筛掉的图元离对方至少 near：结果取 min(细算, near)，仍是真实距离的下界
-            if ia.size == 0 or ib.size == 0:
+            ca = self._gc[la] @ Rl[la].T + tl[la]
+            cb = self._gc[lb] @ Rl[lb].T + tl[lb]
+            gg = (np.linalg.norm(ca[:, None, :] - cb[None, :, :], axis=2)
+                  - self._gr[la][:, None] - self._gr[lb][None, :])
+            ii, jj = np.nonzero(gg < near)
+            # 筛掉的组离对方至少 near：结果取 min(细算, near)，仍是真实距离的下界
+            if ii.size == 0:
                 out[g] = near
                 continue
-            I = np.repeat(ia, ib.size)
-            J = np.tile(ib, ia.size)
-            d = segment_distances(A[I], B[I], A[J], B[J]) - self.R[I] - self.R[J]
-            out[g] = min(float(d.min()), near)
+            # 按组间隙从小到大一批批细算；下一批的组间隙已不小于当前最近距离就停（不可能更近）
+            order = np.argsort(gg[ii, jj])
+            ii, jj, gs = ii[order], jj[order], gg[ii, jj][order]
+            best = near
+            for s0 in range(0, ii.size, BATCH):
+                if gs[s0] >= best:
+                    break
+                sl = slice(s0, s0 + BATCH)
+                ga, gb = self._groups[la], self._groups[lb]
+                I = np.concatenate([np.repeat(ga[i], gb[j].size) for i, j in zip(ii[sl], jj[sl])])
+                J = np.concatenate([np.tile(gb[j], ga[i].size) for i, j in zip(ii[sl], jj[sl])])
+                best = min(best, self._pair_min(A, B, I, J))
+            out[g] = best
         return out
+
+    def _pair_min(self, A, B, I, J) -> float:
+        """成对图元 (I[k], J[k]) 的最近表面距离的最小值。两端都是球的直接用球心距。"""
+        ss = self.is_sphere[I] & self.is_sphere[J]
+        best = np.inf
+        if np.any(ss):
+            i, j = I[ss], J[ss]
+            best = float((np.linalg.norm(A[i] - A[j], axis=1) - self.R[i] - self.R[j]).min())
+        if not np.all(ss):
+            i, j = I[~ss], J[~ss]
+            best = min(best, float((segment_distances(A[i], B[i], A[j], B[j]) - self.R[i] - self.R[j]).min()))
+        return best
 
     @staticmethod
     def _near_ball(A, B, R, c, rc, near) -> np.ndarray:

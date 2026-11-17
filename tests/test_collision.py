@@ -108,9 +108,14 @@ def test_guard_allows_moving_out_of_start_overlap(g1d):
         e[j] = 1e-3
         grad[j] = (dist(start + e)[k] - dist(start - e)[k]) / 2e-3
     u = grad / np.linalg.norm(grad)
+    d0k = float(dist(start)[k])
     guard.check_move("right", start, start + 0.01 * u, others)
+    # 反方向走到这对再近 4 mm 以上，应被拦
+    step = 0.02
+    while step < 0.5 and dist(start - step * u)[k] > d0k - 0.004:
+        step *= 1.5
     with pytest.raises(CollisionBlocked):
-        guard.check_move("right", start, start - 0.05 * u, others)
+        guard.check_move("right", start, start - step * u, others)
 
 
 def test_api_status_and_block(mock_server):
