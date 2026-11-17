@@ -5,7 +5,7 @@
   或沿连杆 z 分层（默认 1 cm）的凸多边形柱（每层横截面的外切 24 边形，平面贴得紧、个数少）；
 - 手臂：胶囊体（沿长度分段 × 横截面并排）和一组球各拟一遍，取「外鼓」小的（碰撞体外表面到实物表面的
   距离，95 分位；每个图元扣 --prim-cost）；
-- 末端（夹爪 / 吸盘，URDF 里没有网格）：按 MANUAL 手写，已有 collision.json 里的 manual 段原样保留；
+- 末端（夹爪 / 吸盘，URDF 里没有网格）：不拟合，运行时按当前生效的 TCP 加一根法兰 → TCP 的胶囊体（tool 段给半径）；
 - 要查的连杆对：至少一端在手臂上、树上隔 ≥ 2 个活动关节（同一只手 ≥ 3）；再随机采样两臂关节角，
   几乎总是重叠（≥ --always）的连杆对视为结构性贴合，去掉。
 
@@ -32,19 +32,6 @@ from robot_platform.collision.model import CollisionModel  # noqa: E402
 from robot_platform.control.urdf_fk import make_transform  # noqa: E402
 from robot_platform.core.robot_profile import load_profile  # noqa: E402
 
-# 末端执行器（URDF 无网格）：连杆坐标系里的胶囊体，可手改 collision.json 的 manual 段
-MANUAL = {
-    "g1d": {
-        # 右手：夹爪本体 + 吸盘杆（right_dex1_tool_link 在腕 yaw 系约 (0.233, 0, -0.037)）
-        "right_wrist_yaw_link": [
-            {"a": [0.06, 0.0, 0.0], "b": [0.19, 0.0, 0.0], "r": 0.045, "note": "末端本体（估计）"},
-            {"a": [0.19, 0.0, 0.0], "b": [0.233, 0.0, -0.037], "r": 0.02, "note": "吸盘杆（估计）"},
-        ],
-        "left_wrist_yaw_link": [
-            {"a": [0.06, 0.0, 0.0], "b": [0.18, 0.0, 0.0], "r": 0.045, "note": "夹爪（估计）"},
-        ],
-    },
-}
 # 离手臂近、要拟合得细一点的连杆
 NEAR = ("torso", "head", "logo", "yaw_link", "pitching")
 # 手臂垂下时手能伸到旁边的：立柱
@@ -248,14 +235,14 @@ def main() -> int:
         links[name] = _jsonable(prims, src)
         print(f"{name:28s} {shape:6s} {len(prims):4d} {src}")
 
-    manual = old.get("manual") or MANUAL.get(args.robot, {})
+    tool = old.get("tool") or {"r": 0.03, "flange": [0.0, 0.0, 0.0]}
     spec = {
         "robot": args.robot,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "generator": "tools/fit_collision.py",
-        "note": "连杆系下的胶囊体（a-b 线段 + 半径 r，a==b 即球）。manual 段是手写的末端，重跑工具会保留。",
+        "note": "连杆系下的胶囊体（a-b 线段 + 半径 r，a==b 即球）。tool 段是末端胶囊体的半径 / 法兰点，重跑工具会保留。",
         "links": links,
-        "manual": manual,
+        "tool": tool,
         "arms": arm_links,
         "pairs": [],
         "ignored_pairs": [],

@@ -60,17 +60,25 @@ class CollisionGuard:
         arm_joints: Mapping[str, Sequence[str]],
         body_q: Callable[[], Dict[str, float]],
         source: Optional[tuple] = None,
+        tools_fn: Optional[Callable[[], tuple]] = None,
     ) -> None:
-        """source=(urdf 路径, base_link)：给了就在 IK 子进程里查（见 check_move），不占主进程 GIL。"""
-        self.model = model
+        """source=(urdf 路径, base_link)：给了就在 IK 子进程里查（见 check_move），不占主进程 GIL。
+        tools_fn() → ((腕末端连杆, TCP 点), ...)：当前生效的 TCP，末端胶囊体跟着它走（变了就重建模型）。"""
         self._source = source
         self.arm_joints = {k: list(v) for k, v in arm_joints.items()}
         self._body_q = body_q
+        self._tools_fn = tools_fn
         self._lock = threading.Lock()
+        self._model_lock = threading.Lock()
         self.enabled = True
         self.margin_m = DEFAULT_MARGIN_M
         self.last_block: Optional[dict] = None
         self.last_check: Optional[dict] = None
+        self._set_model(model)
+        self._load_config()
+
+    def _set_model(self, model: CollisionModel) -> None:
+        self.model = model
         # 每只手相关的连杆对（下标）
         arm_of = {l: k for k, ls in model.arm_links.items() for l in ls}
         self._arm_pairs = {
@@ -88,7 +96,29 @@ class CollisionGuard:
             ka = np.array([links.index(model.pairs[i][0]) if model.pairs[i][0] in links else n for i in idx], dtype=int)
             kb = np.array([links.index(model.pairs[i][1]) if model.pairs[i][1] in links else n for i in idx], dtype=int)
             self._pair_k[arm] = (ka, kb)
-        self._load_config()
+
+    def sync_tools(self) -> None:
+        """当前生效的 TCP 变了（换了 / 清掉 / 新标定）就按新末端重建模型。"""
+        if self._tools_fn is None:
+            return
+        try:
+            tools = tuple((str(l), tuple(round(float(v), 5) for v in p)) for l, p in self._tools_fn())
+        except Exception:  # noqa: BLE001  读不到 TCP 就当没有末端
+            tools = ()
+        if tools == self.model.tools:
+            return
+        with self._model_lock:
+            if tools == self.model.tools:
+                return
+            m = self.model
+            self._set_model(CollisionModel(m.urdf_path, m.spec, m.base_link, tools))
+
+    def _remote_source(self) -> tuple:
+        return (*self._source[:2], self.model.tools)
+
+    def tools_text(self) -> List[dict]:
+        return [{"link": l, "side": "left" if l.startswith("left_") else "right", "tcp_mm": [v * 1000.0 for v in p]}
+                for l, p in self.model.tools]
 
     # ------------------------------------------------------------ 配置
     def _load_config(self) -> None:
@@ -176,13 +206,14 @@ class CollisionGuard:
         if not self.enabled or arm not in self._arm_pairs:
             return {"checked": False}
         t0 = time.perf_counter()
+        self.sync_tools()
         args = (arm, np.asarray(q_from, dtype=float).reshape(-1), np.asarray(q_to, dtype=float).reshape(-1),
                 {k: [np.asarray(v, dtype=float) for v in vs] for k, vs in others.items()},
                 self._body_q(), float(self.margin_m))
         if self._source is not None:
             from robot_platform.tasks import ik_worker
 
-            res = ik_worker.run(_remote_check, self._source, self.arm_joints, *args)
+            res = ik_worker.run(_remote_check, self._remote_source(), self.arm_joints, *args)
         else:
             res = self._check_core(*args)
         res["ms"] = (time.perf_counter() - t0) * 1000.0
@@ -264,14 +295,15 @@ class CollisionGuard:
 
     # ------------------------------------------------------------ 状态
     def status(self, arms_q: Optional[Mapping[str, Sequence[float]]] = None) -> dict:
+        self.sync_tools()
         out = {**self.config(), "available": True, "last_block": self.last_block, "last_check": self.last_check,
-               "pairs": len(self.model.pairs), "prims": int(len(self.model.R))}
+               "pairs": len(self.model.pairs), "prims": int(len(self.model.R)), "tools": self.tools_text()}
         if arms_q:
             q = self._q(self._body_q(), {k: np.asarray(v, dtype=float) for k, v in arms_q.items() if k in self.arm_joints})
             if self._source is not None:
                 from robot_platform.tasks import ik_worker
 
-                d = ik_worker.run(_remote_eval, self._source, self.arm_joints, q, 0.15)
+                d = ik_worker.run(_remote_eval, self._remote_source(), self.arm_joints, q, 0.15)
             else:
                 d = self.model.evaluate(q, 0.15)
             if d.size:
@@ -292,6 +324,7 @@ class CollisionGuard:
 
     def geometry(self) -> dict:
         """给三维显示：各连杆系下的图元。"""
+        self.sync_tools()
         links: Dict[str, List] = {}
         m = self.model
         for i, li in enumerate(m.owner):
@@ -307,7 +340,7 @@ class CollisionGuard:
             else:
                 item = [*np.round(m.A[i], 4).tolist(), *np.round(m.B[i], 4).tolist(), round(float(m.R[i]), 4)]
             links.setdefault(m.prim_links[li], []).append(item)
-        return {"links": links}
+        return {"links": links, "tools": self.tools_text()}
 
 
 # ---------------------------------------------------------------- 子进程
@@ -315,15 +348,16 @@ _REMOTE: Dict[tuple, CollisionGuard] = {}
 
 
 def _remote_guard(source, arm_joints) -> Optional[CollisionGuard]:
-    """按 (urdf, base_link, collision.json 修改时间) 缓存一个闸门（子进程里用）。"""
+    """按 (urdf, base_link, 末端, collision.json 修改时间) 缓存一个闸门（子进程里用）。"""
     from robot_platform.collision.model import default_spec_path, try_load
 
-    urdf, base_link = source
+    urdf, base_link = source[:2]
+    tools = tuple(source[2]) if len(source) > 2 else ()
     spec = default_spec_path(urdf)
-    key = (str(urdf), base_link, spec.stat().st_mtime if spec.is_file() else 0.0)
+    key = (str(urdf), base_link, tools, spec.stat().st_mtime if spec.is_file() else 0.0)
     g = _REMOTE.get(key)
     if g is None:
-        model = try_load(urdf, base_link)
+        model = try_load(urdf, base_link, tools)
         if model is None:
             return None
         _REMOTE.clear()

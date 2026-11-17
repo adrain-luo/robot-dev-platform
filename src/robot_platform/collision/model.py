@@ -103,10 +103,15 @@ def load_spec(path: Path) -> dict:
 class CollisionModel:
     """几何 + 要查的连杆对。evaluate(q) → 各连杆对的最近表面距离（m，负数=穿透）。"""
 
-    def __init__(self, urdf_path: Path, spec: dict, base_link: str = "torso_link") -> None:
+    def __init__(self, urdf_path: Path, spec: dict, base_link: str = "torso_link", tools: Tuple = ()) -> None:
+        """tools：末端（见 tool_prims），按当前生效的 TCP 现加，不写在 collision.json 里。"""
+        self.urdf_path, self.base_link = Path(urdf_path), base_link
         self.tree = UrdfTree(urdf_path, base_link)
         self.spec = spec
+        self.tools = tuple(tools)
         prims: Dict[str, list] = {}
+        for link, lst in tool_prims(spec, self.tools).items():
+            prims.setdefault(link, []).extend(lst)
         for src in ("links", "manual"):
             for link, lst in (spec.get(src) or {}).items():
                 prims.setdefault(link, []).extend(lst)
@@ -424,15 +429,30 @@ class CollisionModel:
         return d < near
 
 
+TOOL_RADIUS_M = 0.03
+
+
+def tool_prims(spec: dict, tools: Sequence) -> Dict[str, list]:
+    """末端：每只手一根胶囊体，法兰（腕末端连杆系原点）→ TCP 点。tools = ((连杆, (x, y, z)), ...)，
+    没生效 TCP 的手不在里面，就只有腕本身。半径取 collision.json 的 tool.r。"""
+    cfg = spec.get("tool") or {}
+    r = float(cfg.get("r", TOOL_RADIUS_M))
+    flange = [float(v) for v in cfg.get("flange", [0.0, 0.0, 0.0])]
+    out: Dict[str, list] = {}
+    for link, tcp in tools:
+        out.setdefault(link, []).append({"a": flange, "b": [float(v) for v in tcp], "r": r, "tool": True})
+    return out
+
+
 def default_spec_path(urdf_path: Path) -> Path:
     return Path(urdf_path).parent / "collision.json"
 
 
-def try_load(urdf_path: Path, base_link: str = "torso_link") -> Optional[CollisionModel]:
+def try_load(urdf_path: Path, base_link: str = "torso_link", tools: Tuple = ()) -> Optional[CollisionModel]:
     p = default_spec_path(urdf_path)
     if not p.is_file():
         return None
-    return CollisionModel(urdf_path, load_spec(p), base_link)
+    return CollisionModel(urdf_path, load_spec(p), base_link, tools)
 
 
 def deg(x: float) -> float:

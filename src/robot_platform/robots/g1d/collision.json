@@ -3806,15 +3806,7 @@
    {"a": [0.035, -0.025, -0.0157], "b": [0.035, 0.0198, -0.0157], "r": 0.0102, "src": "collision"}
   ]
  },
- "manual": {
-  "right_wrist_yaw_link": [
-   {"a": [0.06, 0.0, 0.0], "b": [0.19, 0.0, 0.0], "r": 0.045, "note": "末端本体（估计）"},
-   {"a": [0.19, 0.0, 0.0], "b": [0.233, 0.0, -0.037], "r": 0.02, "note": "吸盘杆（估计）"}
-  ],
-  "left_wrist_yaw_link": [
-   {"a": [0.06, 0.0, 0.0], "b": [0.18, 0.0, 0.0], "r": 0.045, "note": "夹爪（估计）"}
-  ]
- },
+ "tool": {"r": 0.03, "flange": [0.0, 0.0, 0.0], "note": "末端：法兰（腕末端连杆系原点）→ 当前生效 TCP 的胶囊体，半径 r（m）；没生效 TCP 的手不加"},
  "arms": {"right": ["right_shoulder_pitch_link", "right_shoulder_roll_link", "right_shoulder_yaw_link", "right_elbow_link", "right_wrist_roll_link", "right_wrist_pitch_link", "right_wrist_yaw_link"], "left": ["left_shoulder_pitch_link", "left_shoulder_roll_link", "left_shoulder_yaw_link", "left_elbow_link", "left_wrist_roll_link", "left_wrist_pitch_link", "left_wrist_yaw_link"]},
  "pairs": [
   ["AGV_link", "left_elbow_link"],

@@ -35,6 +35,14 @@ function renderCollision(st) {
     const d = Number(p.distance_mm);
     parts.push(d >= 149 ? `${label}离最近处 >150 mm` : `${label}最近：${p.pair_text} ${colFmtMm(d)}`);
   }
+  // 末端胶囊体跟着生效的 TCP：没生效的手就只有腕
+  const tools = st.tools || [];
+  const toolSides = new Set(tools.map((t) => t.side));
+  const noTool = [["left", "左手"], ["right", "右手"]].filter(([a]) => !toolSides.has(a)).map(([, l]) => l);
+  if (noTool.length) parts.push(`${noTool.join("、")}没有生效 TCP，末端不算`);
+  const toolKey = JSON.stringify(tools);
+  if (colUi.toolKey !== undefined && colUi.toolKey !== toolKey && colUi.geomShown) collisionShowGeometry(true);
+  colUi.toolKey = toolKey;
   if (st.last_check && st.last_check.checked) parts.push(`上次检查 ${Number(st.last_check.ms).toFixed(0)} ms`);
   if (now) {
     now.textContent = parts.join(" · ");

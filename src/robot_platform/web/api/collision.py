@@ -28,12 +28,26 @@ class CollisionMixin:
             if model is not None:
                 self._collision_guard = CollisionGuard(
                     model, {n: lay.joint_names for n, lay in self.profile.arms.items()}, self._collision_body_q,
-                    source=(self.profile.urdf, self.settings.base_link),
+                    source=(self.profile.urdf, self.settings.base_link), tools_fn=self._collision_tools,
                 )
         except Exception:  # noqa: BLE001  模型坏了不影响别的功能，只是不查
             traceback.print_exc()
             self._collision_guard = None
         return self._collision_guard
+
+    def _collision_tools(self) -> tuple:
+        """各手当前生效的 TCP（腕末端连杆系下的点）；没生效的手不给，末端就只有腕。"""
+        from robot_platform.calib import tcp as tcp_calib
+
+        out = []
+        for arm, lay in self.profile.arms.items():
+            doc = tcp_calib.load_active_doc(arm) or {}
+            tcp = (doc.get("result") or {}).get("tcp_m")
+            if str(doc.get("arm") or "") != arm or tcp is None:
+                continue
+            link = str(doc.get("tip_link") or lay.tip_link)
+            out.append((link, tuple(float(v) for v in tcp)))
+        return tuple(out)
 
     def _collision_body_q(self) -> Dict[str, float]:
         """身体部分的关节：腰（按实测）、立柱各级（按实测高度）。拿不到就按 0。"""

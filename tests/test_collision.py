@@ -187,3 +187,25 @@ def test_prism_distance_matches_box():
     d = m._poly_dist(a, b, np.array([0.01, 0.01]), j[:2])
     assert d[0] < 0
     assert abs(d[1] - (0.08 - hx - 0.01)) < 1e-4
+
+
+def test_tool_capsule_follows_tcp():
+    """末端胶囊体跟着生效的 TCP：没 TCP 不加；设了就是法兰 → TCP 一根；换了就重建。"""
+    prof = load_profile("g1d")
+    model = try_load(prof.urdf)
+    if model is None:
+        pytest.skip("没有碰撞模型")
+    cur = [()]
+    guard = CollisionGuard(model, {n: lay.joint_names for n, lay in prof.arms.items()}, lambda: {},
+                           tools_fn=lambda: cur[0])
+    guard.sync_tools()
+    n0 = len(guard.model.R)
+    assert guard.tools_text() == []
+    cur[0] = (("right_wrist_yaw_link", (0.25, 0.0, -0.05)),)
+    guard.sync_tools()
+    assert len(guard.model.R) == n0 + 1
+    first = guard.geometry()["links"]["right_wrist_yaw_link"][0]
+    assert first[:3] == [0.0, 0.0, 0.0] and first[3:6] == [0.25, 0.0, -0.05]
+    cur[0] = ()
+    guard.sync_tools()
+    assert len(guard.model.R) == n0
