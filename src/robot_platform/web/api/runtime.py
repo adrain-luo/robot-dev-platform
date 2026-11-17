@@ -25,8 +25,9 @@ class RuntimeMixin:
                 )
                 arm = str(body.get("arm") or self.tcp.arm or "")
                 if arm in ("left", "right"):
-                    # 只看这只手：锁的是它、TCP 又换了就解锁；另一只手的锁不动
-                    self.work_pose_lock_for(arm, str(body.get("name") or ""))
+                    # 只看这只手：锁的是它、TCP 又换了（或不用了）就解锁；另一只手的锁不动
+                    nm = str(body.get("name") or "")
+                    self.work_pose_lock_for(arm, "" if nm == "__none__" else nm)
                 return out
             if path == "/api/runtime-config/work-pose":
                 # 不受配置锁定限制：确认后到位并锁定工作姿态

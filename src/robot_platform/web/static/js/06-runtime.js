@@ -125,13 +125,13 @@ ${fmtLive("右", live.right)}`
   for (const [selId, arm] of [["cfg-tcp-left", "left"], ["cfg-tcp-right", "right"]]) {
     const sel = $(selId);
     if (!sel || cfgSelectBusy(selId)) continue;
-    const rows = (rt.tcp?.saved || [])
+    const rows = [{ value: "__none__", label: "不用 TCP（末端为空）" }, ...(rt.tcp?.saved || [])
       .filter((s) => s.arm === arm)
       .map((s) => ({
         value: s.name,
         label: `${s.name}${s.residual_max_mm != null ? ` · max ${Number(s.residual_max_mm).toFixed(1)} mm` : ""}`,
-      }));
-    const keep = arm === "left" ? rt.tcp?.active_left : rt.tcp?.active_right;
+      }))];
+    const keep = (arm === "left" ? rt.tcp?.active_left : rt.tcp?.active_right) || "__none__";
     writeOptions(
       sel,
       rows.length ? `选择${arm === "left" ? "左" : "右"}臂 TCP…` : `还没有${arm === "left" ? "左" : "右"}臂 TCP`,
@@ -143,10 +143,11 @@ ${fmtLive("右", live.right)}`
   for (const [selId, arm] of [["cfg-wp-left", "left"], ["cfg-wp-right", "right"]]) {
     const sel = $(selId);
     if (!sel || cfgSelectBusy(selId)) continue;
-    const tcpName = arm === "left"
+    let tcpName = arm === "left"
       ? ($("cfg-tcp-left")?.value || rt.tcp?.active_left || "")
       : ($("cfg-tcp-right")?.value || rt.tcp?.active_right || "");
-    const all = wp.saved_all || window.lastWorkPoseAll || [];
+    if (tcpName === "__none__") tcpName = "";
+    const all =wp.saved_all || window.lastWorkPoseAll || [];
     const rows = all
       .filter((s) => s.tcp_name === tcpName && (!s.arm || s.arm === arm))
       .map((s) => ({ value: s.name, label: `${s.name}${wpFreeTag(s.free)}${s.note ? " · " + s.note : ""}` }));
@@ -245,14 +246,16 @@ $("btn-cfg-grav-right").onclick = async () => {
 $("btn-cfg-tcp-left").onclick = async () => {
   const name = $("cfg-tcp-left").value;
   if (!name) { flash("先选左臂 TCP", false); return; }
-  try { await cfgPost("/api/runtime-config/tcp", { arm: "left", name }, `左臂 TCP 已设为「${name}」`, ["cfg-tcp-left"]); }
+  const msg = name === "__none__" ? "左臂已不用 TCP（末端为空）" : `左臂 TCP 已设为「${name}」`;
+  try { await cfgPost("/api/runtime-config/tcp", { arm: "left", name }, msg, ["cfg-tcp-left"]); }
   catch (e) { flash(String(e), false); }
 };
 
 $("btn-cfg-tcp-right").onclick = async () => {
   const name = $("cfg-tcp-right").value;
   if (!name) { flash("先选右臂 TCP", false); return; }
-  try { await cfgPost("/api/runtime-config/tcp", { arm: "right", name }, `右臂 TCP 已设为「${name}」`, ["cfg-tcp-right"]); }
+  const msg = name === "__none__" ? "右臂已不用 TCP（末端为空）" : `右臂 TCP 已设为「${name}」`;
+  try { await cfgPost("/api/runtime-config/tcp", { arm: "right", name }, msg, ["cfg-tcp-right"]); }
   catch (e) { flash(String(e), false); }
 };
 
@@ -261,7 +264,7 @@ async function cfgApplyWorkPose(arm) {
   const wpSel = arm === "left" ? $("cfg-wp-left") : $("cfg-wp-right");
   const tcpName = tcpSel?.value || "";
   const name = wpSel?.value || "";
-  if (!tcpName) { flash("先选该侧 TCP", false); return; }
+  if (!tcpName || tcpName === "__none__") { flash("先选该侧 TCP", false); return; }
   if (!name) { flash("先选工作姿态", false); return; }
   if (window.lastCtrl?.arms?.[arm]?.float) { flash(`${arm === "left" ? "左" : "右"}臂在拖拽，先退出拖拽`, false); return; }
   if (!confirm(`将转到工作姿态「${name}」（TCP「${tcpName}」）并锁定方向。扶住、守急停。继续？`)) return;

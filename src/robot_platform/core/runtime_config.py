@@ -9,6 +9,9 @@ from typing import Any, Dict, List, Optional
 
 from robot_platform.core import instance as instances
 
+# 配置里「不用 TCP（末端为空）」的取值
+NO_TCP = "__none__"
+
 
 def lock_path() -> Path:
     return instances.path("runtime_lock")
@@ -249,6 +252,12 @@ class RuntimeConfig:
     def apply_tcp(self, name: str, arm: Optional[str] = None) -> Dict[str, Any]:
         self.require_unlocked()
         name = str(name or "").strip()
+        if name == NO_TCP:
+            # 这只手不用 TCP：末端为空（碰撞检查里末端只算腕）
+            if arm not in ("left", "right"):
+                raise ValueError("先选左臂或右臂")
+            self.app.tcp.clear_active(arm)
+            return self.snapshot()
         if not name:
             raise ValueError("先选 TCP 结果")
         st = self.app.tcp.load(name)

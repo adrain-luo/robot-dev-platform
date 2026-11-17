@@ -301,6 +301,21 @@ class TcpSession:
         _set_active_for_arm(self.arm, self.active_name)
         return self.status()
 
+    def clear_active(self, arm: str) -> Dict[str, Any]:
+        """这只手不用 TCP（末端为空）：清掉它的生效项，结果文件不删。"""
+        if arm not in ("left", "right"):
+            raise ValueError("先选左臂或右臂")
+        _set_active_for_arm(arm, "")
+        if self.arm == arm:
+            self.samples.clear()
+            self.arm = ""
+            self.tip_link = ""
+            self.result = None
+            self.active_name = ""
+            self.note = ""
+            self.restore_active()
+        return self.status()
+
     def delete(self, name: str) -> Dict[str, Any]:
         path = _result_path(name)
         if not path.is_file():
