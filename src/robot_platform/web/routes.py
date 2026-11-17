@@ -212,6 +212,12 @@ def _suction(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     return 200, app.suction_post(path, body)
 
 
+def _collision(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
+    if not path.startswith("/api/collision/"):
+        return None
+    return 200, app.collision_post(path, body)
+
+
 def _lift(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     if not path.startswith("/api/lift/"):
         return None
@@ -345,7 +351,7 @@ def _mock(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
 
 
 POST_GROUPS: List[Callable[[Any, str, Dict[str, Any]], Optional[Reply]]] = [
-    _mock, _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _single_pose, _suction, _lift, _chassis,
+    _mock, _runtime, _locked, _handeye_payload, _tcp, _work_pose, _board, _detect, _points, _single_pose, _suction, _collision, _lift, _chassis,
 ]
 
 

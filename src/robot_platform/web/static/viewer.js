@@ -788,6 +788,64 @@ const View = {
   render() {
     if (this.renderer && this.scene3 && this.camera) this.renderer.render(this.scene3, this.camera);
   },
+  // ---------------------------------------------------------------- 碰撞体（/api/collision/geometry）
+  // 各连杆系下的胶囊体 / 球（[ax,ay,az,bx,by,bz,r]），挂在对应连杆上随关节动；半透明，highlight 的连杆标红。
+  _collisionGroups: null,
+  setCollision(geom) {
+    for (const g of this._collisionGroups || []) {
+      if (g.parent) g.parent.remove(g);
+      g.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    }
+    this._collisionGroups = [];
+    if (!this.ready || !geom || !geom.links) { this.render(); return false; }
+    const sphereGeo = new THREE.SphereGeometry(1, 14, 10);
+    const up = new THREE.Vector3(0, 1, 0);
+    const m4 = new THREE.Matrix4();
+    for (const [link, prims] of Object.entries(geom.links)) {
+      const parent = this.links.get(link);
+      if (!parent) continue;
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8, transparent: true, opacity: 0.28, depthWrite: false, roughness: 0.6, metalness: 0,
+      });
+      const group = new THREE.Group();
+      group.userData.collisionLink = link;
+      group.userData.mat = mat;
+      const spheres = prims.filter((p) => p[0] === p[3] && p[1] === p[4] && p[2] === p[5]);
+      if (spheres.length) {
+        const inst = new THREE.InstancedMesh(sphereGeo.clone(), mat, spheres.length);
+        spheres.forEach((p, i) => {
+          m4.makeScale(p[6], p[6], p[6]).setPosition(p[0], p[1], p[2]);
+          inst.setMatrixAt(i, m4);
+        });
+        inst.instanceMatrix.needsUpdate = true;
+        group.add(inst);
+      }
+      for (const p of prims) {
+        if (spheres.includes(p)) continue;
+        const a = new THREE.Vector3(p[0], p[1], p[2]);
+        const b = new THREE.Vector3(p[3], p[4], p[5]);
+        const len = a.distanceTo(b);
+        const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(p[6], len, 6, 14), mat);
+        mesh.position.copy(a).add(b).multiplyScalar(0.5);
+        mesh.quaternion.setFromUnitVectors(up, b.clone().sub(a).normalize());
+        group.add(mesh);
+      }
+      parent.add(group);
+      this._collisionGroups.push(group);
+    }
+    sphereGeo.dispose();
+    this.render();
+    return true;
+  },
+  setCollisionHighlight(links) {
+    const hot = new Set(links || []);
+    for (const g of this._collisionGroups || []) {
+      const on = hot.has(g.userData.collisionLink);
+      g.userData.mat.color.setHex(on ? 0xef4444 : 0x38bdf8);
+      g.userData.mat.opacity = on ? 0.5 : 0.28;
+    }
+    this.render();
+  },
   // ---------------------------------------------------------------- 传感器位置标记（/api/sensors）
   // 相机：小机身 + 视锥（光学系 z 朝前）；雷达：圆柱。挂在对应 URDF 连杆上，随躯干一起动。
   // 传感器多在头壳里面，标记不做深度遮挡，透过外壳也看得见。

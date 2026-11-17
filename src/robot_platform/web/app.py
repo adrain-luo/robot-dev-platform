@@ -30,10 +30,11 @@ from robot_platform.web.api.points import PointsMixin
 from robot_platform.web.api.runtime import RuntimeMixin
 from robot_platform.web.api.single_pose import SinglePoseMixin
 from robot_platform.web.api.suction import SuctionMixin
+from robot_platform.web.api.collision import CollisionMixin
 
 
 class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMixin,
-          SinglePoseMixin, SuctionMixin):
+          SinglePoseMixin, SuctionMixin, CollisionMixin):
     def __init__(self, settings, kin: RobotKinematics, allow_real_motion: bool, backend: Backend):
         self.settings = settings
         self.profile = settings.profile
@@ -94,6 +95,7 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
                         torso_imu=torso_imu,
                     )
                     self.payload.restore(self.loop)
+                    self.attach_collision_guard(self.loop)
             return self._reader
 
     def require_motion(self) -> None:

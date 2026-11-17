@@ -35,6 +35,7 @@ LAYOUT: Dict[str, str] = {
     "lift_zero": "state/lift_zero.json",
     "runtime_lock": "state/runtime_lock.json",
     "pose_ik_mode": "state/pose_ik_mode.json",
+    "collision_config": "state/collision.json",
     "handeye_config": "state/handeye.json",
     "lidar_config": "state/lidar.json",
     "handeye_sessions": "data/handeye",

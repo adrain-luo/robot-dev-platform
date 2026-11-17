@@ -95,6 +95,8 @@ class ArmLoop:
             limits = self.kin.arms[layout.name].model.joint_limits()
             self._arms[layout.name] = _ArmState(layout, limits, ArmGravity(layout.name, urdf, base_link), q0)
         self._engaged = False
+        # 自碰撞闸门（collision/guard.py）：由 app 装上；None 时不查
+        self.collision_guard = None
         self._stop = threading.Event()
         self._last_err: Optional[str] = None
         self._thread = threading.Thread(target=self._loop, name="arm-loop", daemon=True)
@@ -342,14 +344,27 @@ class ArmLoop:
             raise ValueError(f"需要 {a.layout.n} 个有限关节角")
         if self._engaged:
             self._require_ready("走点")
-        with self._lock:
+
+        def _gate() -> None:
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再设目标")
             if a.float:
                 raise PermissionErrorMotion(f"{side_label(arm)}臂在拖拽，先退出拖拽再走点")
             if a.owner is not None and a.owner != owner:
                 raise PermissionErrorMotion(f"{side_label(arm)}臂正被「{a.owner}」使用，等它结束或先急停")
-            a.desired_q = a.clamp(arr)
+
+        target = a.clamp(arr)
+        guard = self.collision_guard
+        if guard is not None and guard.enabled:
+            # 自碰撞检查：从当前指令角沿关节直线走到目标；另一只手按它的指令角和目标角各查一遍
+            with self._lock:
+                _gate()
+                q_from = a.cmd_q.copy()
+                others = {n: [o.cmd_q.copy(), o.desired_q.copy()] for n, o in self._arms.items() if n != arm}
+            guard.check_move(arm, q_from, target, others)
+        with self._lock:
+            _gate()
+            a.desired_q = target
 
     def view(self, arm: str, owner: Optional[str] = None) -> "ArmView":
         """给只管一只手的流程（负载测量、到位对比、手眼采集、棋盘触摸……）用的单臂接口。"""
