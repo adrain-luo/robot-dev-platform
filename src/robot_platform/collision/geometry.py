@@ -306,22 +306,40 @@ def bulge(parts: List[Dict[str, object]], surf: np.ndarray, q: float = 95.0,
     return float(np.percentile(d, q))
 
 
+# 柱的轴向：w 沿哪根连杆坐标轴；F 的三列是柱自身 (u, v, w) 三轴在连杆系里的方向（右手系）
+AXIS_FRAMES = {
+    2: np.eye(3),
+    0: np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),  # u=y, v=z, w=x
+    1: np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]),  # u=z, v=x, w=y
+}
+
+
+def prism_frame(pr: Dict[str, object]) -> np.ndarray:
+    return np.asarray(pr.get("F", np.eye(3)), dtype=float).reshape(3, 3)
+
+
 def prism_planes(pr: Dict[str, object]) -> Tuple[np.ndarray, np.ndarray]:
-    """凸多边形柱（沿连杆 z）→ 半空间 n·p ≤ d（连杆系）：侧面 K 个 + 上下两个。"""
+    """凸多边形柱 → 半空间 n·p ≤ d（连杆系）：侧面 K 个 + 两个端面。"""
     n2 = np.asarray(pr["n2"], dtype=float).reshape(-1, 2)
     d2 = np.asarray(pr["d2"], dtype=float).reshape(-1)
     z0, z1 = (float(v) for v in pr["z"])
     N = np.r_[np.c_[n2, np.zeros(len(n2))], [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]]
     D = np.r_[d2, [z1, -z0]]
-    return N, D
+    return N @ prism_frame(pr).T, D
 
 
 def prism_poly(pr: Dict[str, object]) -> np.ndarray:
-    """柱的横截面多边形顶点（相邻两条侧面线的交点，逆时针）。"""
+    """柱横截面多边形顶点（柱自身 uv 坐标，逆时针）：相邻两条侧面线的交点。"""
     n2 = np.asarray(pr["n2"], dtype=float).reshape(-1, 2)
     d2 = np.asarray(pr["d2"], dtype=float).reshape(-1)
     K = len(n2)
-    V = [np.linalg.solve(np.array([n2[k], n2[(k + 1) % K]]), [d2[k], d2[(k + 1) % K]]) for k in range(K)]
+    V = []
+    for k in range(K):
+        M = np.array([n2[k], n2[(k + 1) % K]])
+        if abs(np.linalg.det(M)) < 1e-12:
+            V.append(V[-1] if V else np.zeros(2))
+            continue
+        V.append(np.linalg.solve(M, [d2[k], d2[(k + 1) % K]]))
     return np.asarray(V)
 
 
@@ -347,32 +365,83 @@ def prism_surface_points(pr: Dict[str, object], step: float = 0.004) -> np.ndarr
     n2 = np.asarray(pr["n2"], dtype=float)
     d2 = np.asarray(pr["d2"], dtype=float)
     g = g[(g @ n2.T - d2).max(axis=1) <= 0]
-    # 上下端面：只取真实的（最上 / 最下层）；层与层之间的切面在实物里面，不算外表面
+    # 两个端面：只取真实的（第一 / 最后一层）；层与层之间的切面在实物里面，不算外表面
     caps = pr.get("caps", [True, True])
     for z, on in zip((z0, z1), caps):
         if on:
             out.append(np.c_[g, np.full(len(g), z)])
-    return np.concatenate(out)
+    return np.concatenate(out) @ prism_frame(pr).T
 
 
-def fit_prisms_slabs(pts: np.ndarray, slab: float = 0.02, K: int = 24) -> List[Dict[str, object]]:
-    """沿连杆 z 切成厚 slab 的层，每层一个凸多边形柱：横截面取 K 个方向的支撑线（外切 K 边形），
-    包住该层全部点。平面贴合，弧面误差 < 1%（K=24）；上宽下窄靠分层跟上。"""
-    z = pts[:, 2]
+def convex_hull_2d(p: np.ndarray) -> np.ndarray:
+    """二维凸包（单调链，逆时针）。先在 720 个方向取最远点减少点数（凸包顶点必在其中，
+    方向之间漏掉的顶点由后面按全部点重算边线偏移补上）。"""
+    th = np.linspace(0.0, 2 * np.pi, 720, endpoint=False)
+    D = np.c_[np.cos(th), np.sin(th)]
+    q = np.unique(np.round(p[np.unique(np.argmax(p @ D.T, axis=0))], 6), axis=0)
+    if len(q) < 3:
+        return q
+    q = q[np.lexsort((q[:, 1], q[:, 0]))]
+
+    def half(pts):
+        h = []
+        for r in pts:
+            while len(h) >= 2:
+                a, b = h[-2], h[-1]
+                if (b[0] - a[0]) * (r[1] - a[1]) - (b[1] - a[1]) * (r[0] - a[0]) <= 0:
+                    h.pop()
+                else:
+                    break
+            h.append(r)
+        return h
+
+    lower, upper = half(q), half(q[::-1])
+    return np.asarray(lower[:-1] + upper[:-1])
+
+
+def _hull_lines(xy: np.ndarray, max_edges: int = 40, min_turn_deg: float = 2.0) -> Tuple[np.ndarray, np.ndarray]:
+    """一层的横截面：凸包的各条边 → 外法向 n2、偏移 d2（按全部点重算，保证包住）。
+    转角很小的顶点合并（边太多算得慢），最多 max_edges 条边。"""
+    H = convex_hull_2d(xy)
+    if len(H) < 3:
+        c = xy.mean(axis=0)
+        r = float(np.linalg.norm(xy - c, axis=1).max()) + 1e-4
+        th = np.linspace(0.0, 2 * np.pi, 8, endpoint=False)
+        n2 = np.c_[np.cos(th), np.sin(th)]
+        return n2, n2 @ c + r
+    while len(H) > 3:
+        prev, nxt = np.roll(H, 1, axis=0), np.roll(H, -1, axis=0)
+        e1, e2 = H - prev, nxt - H
+        ang = np.abs(np.arctan2(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0], (e1 * e2).sum(axis=1)))
+        k = int(np.argmin(ang))
+        if np.degrees(ang[k]) >= min_turn_deg and len(H) <= max_edges:
+            break
+        H = np.delete(H, k, axis=0)
+    e = np.roll(H, -1, axis=0) - H
+    n2 = np.c_[e[:, 1], -e[:, 0]]
+    n2 /= np.linalg.norm(n2, axis=1, keepdims=True)
+    d2 = (xy @ n2.T).max(axis=0)
+    return n2, d2
+
+
+def fit_prisms_slabs(pts: np.ndarray, slab: float = 0.01, axis: int = 2) -> List[Dict[str, object]]:
+    """沿连杆某根轴（axis）切成厚 slab 的层，每层一个凸多边形柱：横截面取该层点的凸包（真凸包，
+    不会在尖角外多出三角）。平面贴合；上宽下窄靠分层跟上。"""
+    F = AXIS_FRAMES[axis]
+    q = pts @ F  # 柱自身 (u, v, w)
+    z = q[:, 2]
     z0, z1 = float(z.min()), float(z.max())
     n = max(1, int(np.ceil((z1 - z0) / slab)))
     edges = np.linspace(z0, z1, n + 1)
-    th = np.linspace(0.0, 2 * np.pi, K, endpoint=False)
-    n2 = np.c_[np.cos(th), np.sin(th)]
     out: List[Dict[str, object]] = []
     for k in range(n):
         m = (z >= edges[k] - 1e-9) & (z <= edges[k + 1] + 1e-9)
         if np.sum(m) < 3:
             continue
-        xy = pts[m][:, :2]
-        d2 = (xy @ n2.T).max(axis=0)
+        n2, d2 = _hull_lines(q[m][:, :2])
         out.append({"type": "prism", "z": [float(edges[k]), float(edges[k + 1])],
-                    "n2": n2.round(6).tolist(), "d2": d2.tolist(), "caps": [k == 0, k == n - 1]})
+                    "n2": n2.round(6).tolist(), "d2": d2.tolist(), "caps": [k == 0, k == n - 1],
+                    "F": F.tolist()})
     return out
 
 

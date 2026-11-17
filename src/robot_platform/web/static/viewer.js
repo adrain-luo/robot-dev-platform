@@ -844,6 +844,10 @@ const View = {
         const [z0, z1] = p.prism.z;
         const geo = new THREE.ExtrudeGeometry(shape, { depth: z1 - z0 + 2 * inf, bevelEnabled: false });
         geo.translate(0, 0, z0 - inf);
+        const F = p.prism.F;  // 按行 9 个：三列是柱的 u、v、w 在连杆系里的方向（不给就是沿 z）
+        if (F && F.length === 9) {
+          geo.applyMatrix4(new THREE.Matrix4().set(F[0], F[1], F[2], 0, F[3], F[4], F[5], 0, F[6], F[7], F[8], 0, 0, 0, 0, 1));
+        }
         group.add(new THREE.Mesh(geo, mat));
       }
       prims = prims.filter((p) => Array.isArray(p));

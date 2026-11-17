@@ -111,7 +111,7 @@ class CollisionModel:
             for link, lst in (spec.get(src) or {}).items():
                 prims.setdefault(link, []).extend(lst)
         self.prim_links: List[str] = sorted(prims)
-        from robot_platform.collision.geometry import prism_planes, prism_poly
+        from robot_platform.collision.geometry import prism_frame, prism_planes, prism_poly
 
         A, B, R, owner = [], [], [], []
         polys: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
@@ -124,7 +124,7 @@ class CollisionModel:
                     V = prism_poly(p)
                     z0, z1 = (float(v) for v in p["z"])
                     c2 = V.mean(axis=0)
-                    c = np.array([c2[0], c2[1], 0.5 * (z0 + z1)])
+                    c = prism_frame(p) @ np.array([c2[0], c2[1], 0.5 * (z0 + z1)])
                     rb = float(np.sqrt((np.linalg.norm(V - c2, axis=1).max()) ** 2 + (0.5 * (z1 - z0)) ** 2))
                     polys[len(A)] = (N, D)
                     self.prism_src[len(A)] = p
@@ -146,8 +146,9 @@ class CollisionModel:
         # 各柱：横截面顶点 V、侧面外法向 n2 / 偏移 d2、上下 z（连杆系）；边数不同的补最后一个顶点（退化边不影响）
         self.polyV = np.zeros((n, K, 2))
         self.polyN2 = np.zeros((n, K, 2))
-        self.polyD2 = np.full((n, K), -1e9)
+        self.polyD2 = np.full((n, K), 1e9)  # 补的行：n=0、d 很大 → n·p − d 很负，取 max 时不起作用
         self.polyZ = np.zeros((n, 2))
+        self.polyF = np.tile(np.eye(3), (n, 1, 1))
         self.polyN = np.zeros((n, K + 2, 3))
         self.polyD = np.full((n, K + 2), 1e9)
         for i, (N, D) in polys.items():
@@ -161,9 +162,10 @@ class CollisionModel:
             k = len(V)
             self.polyV[i, :k] = V
             self.polyV[i, k:] = V[-1]
-            self.polyN2[i, :k] = n2
-            self.polyD2[i, :k] = d2
+            self.polyN2[i, :len(n2)] = n2
+            self.polyD2[i, :len(d2)] = d2
             self.polyZ[i] = [float(v) for v in pr["z"]]
+            self.polyF[i] = prism_frame(pr)
         self.is_sphere = np.all(np.abs(self.A - self.B) < 1e-12, axis=1) & ~self.is_poly
         self.arm_links: Dict[str, List[str]] = {k: list(v) for k, v in (spec.get("arms") or {}).items()}
         self._build_bounds()
@@ -271,6 +273,7 @@ class CollisionModel:
         self._last_T = (Rl, tl)
         # 多边形柱：精确距离时把对方点换到柱所在连杆系；平面（快速下界用）换到躯干系
         self._Rs, self._ts = Rs, ts
+        self._RF = np.einsum("nij,njk->nik", Rs, self.polyF) if self.is_poly.any() else Rs
         if self.is_poly.any():
             pi = np.nonzero(self.is_poly)[0]
             Nw = np.einsum("nij,nkj->nki", Rs[pi], self.polyN[pi])
@@ -369,8 +372,8 @@ class CollisionModel:
 
     def _poly_sdf(self, x: np.ndarray, j: np.ndarray) -> np.ndarray:
         """点 x（躯干系）到柱 j 的精确有符号距离（外正内负）。拉伸体：2D 多边形距离与 z 区间距离合成。"""
-        R, t = self._Rs[j], self._ts[j]
-        p = np.einsum("nij,ni->nj", R, x - t)  # Rᵀ(x − t)：换到连杆系
+        R, t = self._RF[j], self._ts[j]
+        p = np.einsum("nij,ni->nj", R, x - t)  # (R F)ᵀ(x − t)：换到柱自身 (u, v, w)
         xy = p[:, :2]
         lin = np.einsum("nkj,nj->nk", self.polyN2[j], xy) - self.polyD2[j]
         inside = lin.max(axis=1)

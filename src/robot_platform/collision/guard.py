@@ -296,12 +296,14 @@ class CollisionGuard:
         m = self.model
         for i, li in enumerate(m.owner):
             if m.is_poly[i]:
-                # 多边形柱：{"prism": {"poly": [[x,y],...], "z": [z0, z1]}}（连杆系，沿 z）
-                from robot_platform.collision.geometry import prism_poly
+                # 多边形柱：{"prism": {"poly": [[u,v],...], "z": [w0, w1], "F": 按行 9 个}}
+                # （柱自身 uvw 坐标；F 的三列是 u、v、w 在连杆系里的方向）
+                from robot_platform.collision.geometry import prism_frame, prism_poly
 
                 pr = m.prism_src[i]
                 item = {"prism": {"poly": np.round(prism_poly(pr), 4).tolist(),
-                                  "z": [round(float(v), 4) for v in pr["z"]]}}
+                                  "z": [round(float(v), 4) for v in pr["z"]],
+                                  "F": np.round(prism_frame(pr).reshape(-1), 6).tolist()}}
             else:
                 item = [*np.round(m.A[i], 4).tolist(), *np.round(m.B[i], 4).tolist(), round(float(m.R[i]), 4)]
             links.setdefault(m.prim_links[li], []).append(item)

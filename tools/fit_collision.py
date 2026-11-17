@@ -49,7 +49,10 @@ MANUAL = {
 NEAR = ("torso", "head", "logo", "yaw_link", "pitching")
 # 手臂垂下时手能伸到旁边的：立柱
 MID = ("lz_",)
-SKIP = ("dex1", "hand_", "d435", "mid360", "camera", "imu")
+# 身体里强制用柱的（见下面选择处的说明）
+PRISM_ALWAYS = ("agv", "pitching")
+# 不参与碰撞：末端（手写）、传感器；胸前标志贴在躯干上没有凸起，躯干的柱已经包住它
+SKIP = ("dex1", "hand_", "d435", "mid360", "camera", "imu", "logo")
 
 
 def _geom_points(link_el, kind, mesh_dir: Path, rng, n_samples: int):
@@ -119,9 +122,13 @@ def _jsonable(prims, src):
     out = []
     for p in prims:
         if p.get("type") == "prism":
-            out.append({"type": "prism", "z": [round(float(v), 5) for v in p["z"]],
-                        "n2": [[round(float(x), 6) for x in r] for r in p["n2"]],
-                        "d2": [round(float(v), 5) for v in p["d2"]], "src": src})
+            item = {"type": "prism", "z": [round(float(v), 5) for v in p["z"]],
+                    "n2": [[round(float(x), 6) for x in r] for r in p["n2"]],
+                    "d2": [round(float(v), 5) for v in p["d2"]], "src": src}
+            F = np.asarray(p.get("F", np.eye(3)))
+            if not np.allclose(F, np.eye(3)):
+                item["F"] = F.round(6).tolist()
+            out.append(item)
             continue
         out.append({"a": [round(float(x), 4) for x in p["a"]], "b": [round(float(x), 4) for x in p["b"]],
                     "r": round(float(p["r"]), 4), "src": src})
@@ -161,17 +168,17 @@ def main() -> int:
     ap.add_argument("robot", nargs="?", default="g1d")
     ap.add_argument("--cell-near", type=float, default=0.015, help="躯干 / 头这类靠近手臂的连杆，分块格子边长（m）")
     ap.add_argument("--cell-arm", type=float, default=0.016, help="手臂连杆用球时的分块格子边长（m）")
-    ap.add_argument("--prim-cost", type=float, default=0.00001, help="手臂选拟合方式时每个图元扣的分（m）")
+    ap.add_argument("--prim-cost", type=float, default=0.000003, help="手臂选拟合方式时每个图元扣的分（m）")
     ap.add_argument("--arm-parts", type=int, default=3, help="每节手臂沿长度最多分几段（每段再横截面拆成几根平行细胶囊体）")
     ap.add_argument("--arm-gain", type=float, default=0.93, help="多一根胶囊体，总体积要小于这个倍数才加")
     ap.add_argument("--cell-mid", type=float, default=0.025, help="立柱，分块格子边长（m）")
     ap.add_argument("--slab", type=float, default=0.01, help="身体用多边形柱时每层厚度（m）")
-    ap.add_argument("--prism-slack", type=float, default=0.002,
+    ap.add_argument("--prism-slack", type=float, default=0.006,
                     help="柱比球外鼓多不超过这么多（m）也选柱（柱个数少、算得快）")
     ap.add_argument("--cell-far", type=float, default=0.06, help="底盘 / 轮子，分块格子边长（m）")
     ap.add_argument("--samples", type=int, default=3000, help="每个网格的表面采样点数")
     ap.add_argument("--acm-samples", type=int, default=3000, help="随机关节角采样数（找结构性贴合的连杆对）")
-    ap.add_argument("--always", type=float, default=0.95, help="重叠比例 ≥ 它的连杆对视为结构性贴合、不查")
+    ap.add_argument("--always", type=float, default=0.9, help="重叠比例 ≥ 它的连杆对视为结构性贴合、不查")
     args = ap.parse_args()
 
     prof = load_profile(args.robot)
@@ -189,6 +196,7 @@ def main() -> int:
     arm_set = {l for v in arm_links.values() for l in v}
 
     links = {}
+    arm_choice: dict = {}
     print(f"{'连杆':28s} {'形状':6s} {'个数':>4s} {'最大半径':>8s} 来源")
     for link_el in root.findall("link"):
         name = link_el.get("name")
@@ -206,11 +214,16 @@ def main() -> int:
             continue
         pts, nrm = got
         if name in arm_set:
-            # 胶囊体拆分和一组球都拟一遍，取外鼓（bulge 95 分位）小的；每个图元扣 args.prim_cost 分（检查要算）
+            # 胶囊体拆分和一组球都拟一遍，取外鼓（bulge 95 分位）小的；每个图元扣 args.prim_cost 分（检查要算）。
+            # 左右同一节用同一种（两种分数接近时别一边球一边胶囊）：先遇到的那边定
+            part = name.replace("left_", "").replace("right_", "")
             caps = fit_capsules(pts, args.arm_parts, gain=args.arm_gain, rng=rng)
             sph = fit_spheres_inset(pts, nrm, args.cell_arm)
             bc, bs = bulge(caps, pts, nrm=nrm), bulge(sph, pts, nrm=nrm)
-            if bs + args.prim_cost * len(sph) < bc + args.prim_cost * len(caps):
+            use_sph = arm_choice.get(part)
+            if use_sph is None:
+                use_sph = arm_choice[part] = bs + args.prim_cost * len(sph) < bc + args.prim_cost * len(caps)
+            if use_sph:
                 prims, shape = sph, f"球（外鼓 {bs * 1000:.0f} mm，胶囊 {bc * 1000:.0f}）"
             else:
                 prims, shape = caps, f"胶囊（外鼓 {bc * 1000:.0f} mm，球 {bs * 1000:.0f}）"
@@ -220,9 +233,15 @@ def main() -> int:
                     else args.cell_mid if any(k in low for k in MID) else args.cell_far)
             sph = fit_spheres_inset(pts, nrm, cell)
             # 也拟一套「分层多边形柱」（平面多的躯干、立柱这类贴得紧、个数少），按外鼓挑
-            pri = fit_prisms_slabs(pts, args.slab)
-            bs, bp = bulge(sph, pts, nrm=nrm), bulge(pri, pts, nrm=nrm)
-            if bp <= bs + args.prism_slack:
+            # 柱的轴向三根都试（轮子这类横着的圆盘沿它自己的轴切），取外鼓最小的
+            cands = [fit_prisms_slabs(pts, args.slab, axis=ax) for ax in (2, 0, 1)]
+            scores = [bulge(c, pts, nrm=nrm) for c in cands]
+            pri, bp = cands[int(np.argmin(scores))], float(min(scores))
+            bs = bulge(sph, pts, nrm=nrm)
+            # 身体默认用柱（平面贴合、个数少）；柱比球外鼓多出 prism_slack 以上才用球。
+            # 底盘 / 腰座顶上有开口（立柱、腰插进去的地方），柱的端面会盖住开口、外鼓算出来很大，但那里本来
+            # 就被别的连杆占着，不影响碰撞，强制用柱
+            if bp <= bs + args.prism_slack or any(k in name.lower() for k in PRISM_ALWAYS):
                 prims, shape = pri, f"柱（外鼓 {bp * 1000:.0f} mm，球 {bs * 1000:.0f}）"
             else:
                 prims, shape = sph, f"球（外鼓 {bs * 1000:.0f} mm，柱 {bp * 1000:.0f}）"
