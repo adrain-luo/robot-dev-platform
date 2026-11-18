@@ -106,8 +106,9 @@ async function armGotoFromUi(confirmGo) {
   if (busy) { flash(busy, false); return; }
   if (confirmGo && !confirm(`将限速把${ARM_SIDE[arm]}臂走到目标关节角。扶住、守急停。继续？`)) return;
   try {
-    await post("/api/target", { q, arm });
-    flash(`${ARM_SIDE[arm]}臂目标已更新`, true);
+    const d = await post("/api/target", { q, arm });
+    flash(d && d.detour ? `${ARM_SIDE[arm]}臂直线会碰，已绕行：${collisionPlanText(d.detour)}`
+                        : `${ARM_SIDE[arm]}臂目标已更新`, true);
     armTargetDirty = false;
     poll();
   } catch (e) { flash(String(e), false); }

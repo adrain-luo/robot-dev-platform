@@ -283,8 +283,9 @@ async function gotoPose(i) {
     return;
   }
   try {
-    await post("/api/posesets/goto", { name: window.currentSet.name, index: i });
-    flash(`正在去 ${window.currentSet.poses[i].name}`, true);
+    const d = await post("/api/posesets/goto", { name: window.currentSet.name, index: i });
+    flash(d && d.detour ? `正在去 ${window.currentSet.poses[i].name}（直线会碰，绕行：${collisionPlanText(d.detour)}）`
+                        : `正在去 ${window.currentSet.poses[i].name}`, true);
   } catch (e) { flash(String(e), false); }
 }
 

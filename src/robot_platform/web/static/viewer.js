@@ -789,7 +789,8 @@ const View = {
     if (this.renderer && this.scene3 && this.camera) this.renderer.render(this.scene3, this.camera);
   },
   // ---------------------------------------------------------------- 碰撞体（/api/collision/geometry）
-  // 各连杆系下的胶囊体 / 球（[ax,ay,az,bx,by,bz,r]），挂在对应连杆上随关节动；半透明，highlight 的连杆标红。
+  // 各连杆系下的胶囊体 / 球（[ax,ay,az,bx,by,bz,r]）、多边形柱、凸包（coal 后端），挂在对应连杆上随关节动；
+  // 半透明，highlight 的连杆标红。
   _collisionGroups: null,
   _collisionGeom: null,
   _collisionInflate: 0,
@@ -847,6 +848,22 @@ const View = {
         const F = p.prism.F;  // 按行 9 个：三列是柱的 u、v、w 在连杆系里的方向（不给就是沿 z）
         if (F && F.length === 9) {
           geo.applyMatrix4(new THREE.Matrix4().set(F[0], F[1], F[2], 0, F[3], F[4], F[5], 0, F[6], F[7], F[8], 0, 0, 0, 0, 1));
+        }
+        group.add(new THREE.Mesh(geo, mat));
+      }
+      // 凸包（{hull: {v: 顶点展平, f: 三角形展平}}，coal 后端的手臂各节）：顶点沿法向外推 inf
+      for (const p of prims) {
+        if (!p || !p.hull) continue;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.Float32BufferAttribute(p.hull.v, 3));
+        geo.setIndex(p.hull.f);
+        geo.computeVertexNormals();
+        if (inf > 0) {
+          const pos = geo.attributes.position, nrm = geo.attributes.normal;
+          for (let k = 0; k < pos.count; k++) {
+            pos.setXYZ(k, pos.getX(k) + inf * nrm.getX(k), pos.getY(k) + inf * nrm.getY(k), pos.getZ(k) + inf * nrm.getZ(k));
+          }
+          pos.needsUpdate = true;
         }
         group.add(new THREE.Mesh(geo, mat));
       }

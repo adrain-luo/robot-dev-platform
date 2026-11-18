@@ -103,6 +103,8 @@ def load_spec(path: Path) -> dict:
 class CollisionModel:
     """几何 + 要查的连杆对。evaluate(q) → 各连杆对的最近表面距离（m，负数=穿透）。"""
 
+    backend = "builtin"
+
     def __init__(self, urdf_path: Path, spec: dict, base_link: str = "torso_link", tools: Tuple = ()) -> None:
         """tools：末端（见 tool_prims），按当前生效的 TCP 现加，不写在 collision.json 里。"""
         self.urdf_path, self.base_link = Path(urdf_path), base_link
@@ -448,11 +450,35 @@ def default_spec_path(urdf_path: Path) -> Path:
     return Path(urdf_path).parent / "collision.json"
 
 
-def try_load(urdf_path: Path, base_link: str = "torso_link", tools: Tuple = ()) -> Optional[CollisionModel]:
+BACKENDS = {"builtin": "内置（Python，球 / 胶囊 / 凸柱）", "coal": "coal（GJK，手臂按凸包，快约 10 倍、略保守）"}
+
+
+def backend_available(name: str) -> bool:
+    if name == "builtin":
+        return True
+    if name == "coal":
+        from robot_platform.collision import coal_model
+
+        return coal_model.available()
+    return False
+
+
+def build_model(urdf_path: Path, spec: dict, base_link: str = "torso_link", tools: Tuple = (),
+                backend: str = "builtin") -> CollisionModel:
+    """按后端名建模型；要的后端用不了（没装库）就退回内置。"""
+    if backend == "coal" and backend_available("coal"):
+        from robot_platform.collision.coal_model import CoalModel
+
+        return CoalModel(urdf_path, spec, base_link, tools)
+    return CollisionModel(urdf_path, spec, base_link, tools)
+
+
+def try_load(urdf_path: Path, base_link: str = "torso_link", tools: Tuple = (),
+             backend: str = "builtin") -> Optional[CollisionModel]:
     p = default_spec_path(urdf_path)
     if not p.is_file():
         return None
-    return CollisionModel(urdf_path, load_spec(p), base_link, tools)
+    return build_model(urdf_path, load_spec(p), base_link, tools, backend)
 
 
 def deg(x: float) -> float:

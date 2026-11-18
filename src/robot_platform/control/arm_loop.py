@@ -46,12 +46,34 @@ class _ArmState:
         self.limits = limits
         self.grav = grav
         self.cmd_q = q0.copy()
-        self.desired_q = q0.copy()
+        self._desired = q0.copy()
+        # 绕行的剩余中间点（desired_q 是当前这一段的终点，走到就接下一个）；任何地方改 desired_q 都会清掉
+        self.path: List[np.ndarray] = []
         self.float = False
         self.payload_theta: Optional[np.ndarray] = None
         self.payload_name: Optional[str] = None
         self.last_tau_ff = np.zeros(layout.n)
         self.owner: Optional[str] = None
+
+    @property
+    def desired_q(self) -> np.ndarray:
+        return self._desired
+
+    @desired_q.setter
+    def desired_q(self, q: np.ndarray) -> None:
+        self._desired = q
+        self.path = []
+
+    def set_path(self, waypoints: Sequence[np.ndarray]) -> None:
+        """按折线走：先去第一个点，到了再接下一个。"""
+        pts = [self.clamp(np.asarray(p, dtype=float)) for p in waypoints]
+        self._desired = pts[0]
+        self.path = pts[1:]
+
+    def next_waypoint(self) -> None:
+        """当前段走完了就切到下一个中间点。"""
+        if self.path and float(np.max(np.abs(self._desired - self.cmd_q))) <= 1e-9:
+            self._desired = self.path.pop(0)
 
     def clamp(self, q: np.ndarray) -> np.ndarray:
         lo, hi = self.limits[:, 0], self.limits[:, 1]
@@ -336,8 +358,12 @@ class ArmLoop:
             "g_torso": [float(v) for v in g],
         }
 
-    def set_target(self, q: Sequence[float], *, arm: str, owner: Optional[str] = None) -> None:
-        """给一只手设目标，另一只手不受影响。owner 是占用这只手的任务名（手动来源为 None）。"""
+    def set_target(self, q: Sequence[float], *, arm: str, owner: Optional[str] = None,
+                   detour: bool = False) -> Optional[dict]:
+        """给一只手设目标，另一只手不受影响。owner 是占用这只手的任务名（手动来源为 None）。
+
+        detour=True（「到位」类单次目标）：直线会碰时规划一条绕行折线，按中间点依次走；
+        返回规划摘要（没绕行返回 None）。连续发的小步目标（点动、跟踪）不要开，规划要零点几秒到几秒。"""
         a = self._arm(arm)
         arr = np.asarray(q, dtype=float).reshape(-1)
         if arr.size != a.layout.n or not np.all(np.isfinite(arr)):
@@ -356,15 +382,33 @@ class ArmLoop:
         target = a.clamp(arr)
         guard = self.collision_guard
         if guard is not None and guard.enabled:
-            # 自碰撞检查：从当前指令角沿关节直线走到目标；另一只手按它的指令角和目标角各查一遍
+            from robot_platform.collision.guard import CollisionBlocked
+
+            # 自碰撞检查：从当前指令角沿关节直线走到目标；另一只手按它的指令角、目标角、剩余中间点各查一遍
             with self._lock:
                 _gate()
                 q_from = a.cmd_q.copy()
-                others = {n: [o.cmd_q.copy(), o.desired_q.copy()] for n, o in self._arms.items() if n != arm}
-            guard.check_move(arm, q_from, target, others)
+                others = {n: [o.cmd_q.copy(), o.desired_q.copy(), *[p.copy() for p in o.path]]
+                          for n, o in self._arms.items() if n != arm}
+            try:
+                guard.check_move(arm, q_from, target, others)
+            except CollisionBlocked as exc:
+                if not (detour and guard.detour):
+                    raise
+                res = guard.plan_move(arm, q_from, target, others, a.limits)
+                path = res.get("path")
+                if not path:
+                    raise CollisionBlocked(f"{exc}\n绕行也没找到：{res.get('reason') or '没有路线'}") from None
+                with self._lock:
+                    _gate()
+                    if float(np.max(np.abs(a.cmd_q - q_from))) > 1e-3:
+                        raise PermissionErrorMotion(f"规划绕行期间{side_label(arm)}臂动了，路线作废，请重新下目标")
+                    a.set_path(path)
+                return guard.last_plan
         with self._lock:
             _gate()
             a.desired_q = target
+        return None
 
     def view(self, arm: str, owner: Optional[str] = None) -> "ArmView":
         """给只管一只手的流程（负载测量、到位对比、手眼采集、棋盘触摸……）用的单臂接口。"""
@@ -379,7 +423,7 @@ class ArmLoop:
 
     def _arm_status_locked(self, a: _ArmState) -> dict:
         cmd = a.cmd_q
-        moving = bool(cmd.size and float(np.max(np.abs(a.desired_q - cmd))) > 1e-4)
+        moving = bool(a.path) or bool(cmd.size and float(np.max(np.abs(a.desired_q - cmd))) > 1e-4)
         return {
             "arm": a.layout.name,
             "float": a.float,
@@ -387,6 +431,9 @@ class ArmLoop:
             "moving": moving,
             "cmd_rad": cmd.tolist(),
             "desired_rad": a.desired_q.tolist(),
+            # 绕行：还剩几个点（含当前这段的终点）、最终目标
+            "detour_left": len(a.path) + 1 if a.path else 0,
+            "final_rad": (a.path[-1] if a.path else a.desired_q).tolist(),
             "payload_theta": None if a.payload_theta is None else a.payload_theta.tolist(),
             "payload_name": a.payload_name,
             "gravity_mass_kg": a.grav.moving_mass_kg,
@@ -426,7 +473,10 @@ class ArmLoop:
         n = float(np.max(np.abs(delta))) if delta.size else 0.0
         if n > step and n > 1e-12:
             delta = delta * (step / n)
-        a.cmd_q = a.clamp(a.cmd_q + delta)
+            a.cmd_q = a.clamp(a.cmd_q + delta)
+        else:
+            a.cmd_q = a.clamp(a.desired_q.copy())
+        a.next_waypoint()
 
     def _publish(self) -> None:
         snap = self.reader.snapshot()
@@ -552,8 +602,8 @@ class ArmView:
             return nullcontext()
         return self.loop.claim(self.arm, self.owner)
 
-    def set_target(self, q: Sequence[float]) -> None:
-        self.loop.set_target(q, arm=self.arm, owner=self.owner)
+    def set_target(self, q: Sequence[float], detour: bool = False) -> Optional[dict]:
+        return self.loop.set_target(q, arm=self.arm, owner=self.owner, detour=detour)
 
     def arm_sample(self, wait: bool = False) -> dict:
         return self.loop.arm_sample(self.arm, wait=wait)

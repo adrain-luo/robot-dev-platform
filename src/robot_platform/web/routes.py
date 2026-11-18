@@ -288,11 +288,12 @@ def _speed(app, loop, body: Dict[str, Any]) -> None:
     app.settings.max_speed_rad_s = loop.max_speed
 
 
-def _target(app, loop, body: Dict[str, Any]) -> None:
+def _target(app, loop, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     arm = app.body_arm(body)
     if not app._work_pose_motion:
         app.unlock_work_pose("arm_control", arm)
-    loop.set_target(body["q"], arm=arm)
+    plan = loop.set_target(body["q"], arm=arm, detour=True)
+    return {"detour": plan} if plan else None
 
 
 def _arm_stop(app, loop, body: Dict[str, Any]) -> None:
@@ -309,7 +310,7 @@ def _waist(app, loop, body: Dict[str, Any]) -> None:
     )
 
 
-ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], None]] = {
+ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], Optional[Dict[str, Any]]]] = {
     "/api/engage": lambda app, loop, body: loop.engage(),
     "/api/release": lambda app, loop, body: loop.release(),
     "/api/hold": _hold,
@@ -330,11 +331,12 @@ def _arm(app, path: str, body: Dict[str, Any]) -> Reply:
     fn = ARM_COMMANDS.get(path)
     if fn is None:
         return NOT_FOUND
-    fn(app, loop, body)
+    extra = fn(app, loop, body)
     return 200, {
         "ok": True,
         "ctrl": app.ctrl_status(),
         "work_pose": app.work_pose.status(app.tcp.active_name or ""),
+        **(extra if isinstance(extra, dict) else {}),
     }
 
 

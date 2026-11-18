@@ -113,15 +113,24 @@ class CollisionMixin:
         if path == "/api/collision/config":
             try:
                 margin = body.get("margin_mm")
+                switch = any(body.get(k) is not None for k in ("backend", "planner", "detour"))
                 g.configure(
                     enabled=None if body.get("enabled") is None else bool(body.get("enabled")),
                     margin_m=None if margin in (None, "") else float(margin) / 1000.0,
+                    detour=None if body.get("detour") is None else bool(body.get("detour")),
+                    backend=None if body.get("backend") in (None, "") else str(body.get("backend")),
+                    planner=None if body.get("planner") in (None, "") else str(body.get("planner")),
                 )
             except (TypeError, ValueError) as exc:
                 return {"ok": False, "error": str(exc), "collision": self.collision_status()}
             st = self.collision_status()
-            msg = (f"碰撞检查已开，余量 {g.margin_m * 1000:.0f} mm" if g.enabled
-                   else "碰撞检查已关：手臂目标不再检查自碰撞")
+            if switch:
+                msg = (f"避障：碰撞检测用{'coal' if g.model.backend == 'coal' else '内置'}，"
+                       f"绕行规划用{'OMPL' if g.planner == 'ompl' else '内置 RRT'}，"
+                       f"{'直线会碰时自动绕行' if g.detour else '只拦不绕'}")
+            else:
+                msg = (f"碰撞检查已开，余量 {g.margin_m * 1000:.0f} mm" if g.enabled
+                       else "碰撞检查已关：手臂目标不再检查自碰撞")
             return {"ok": True, "message": msg, "collision": st}
         if path == "/api/collision/geometry":
             return {"ok": True, **g.geometry()}

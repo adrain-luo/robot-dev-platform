@@ -186,8 +186,13 @@ class PayloadAPI:
             i = int(body["index"])
             if not (0 <= i < len(d["poses"])):
                 raise IndexError("姿态下标越界")
-            loop.set_target(d["poses"][i]["q"], arm=d["arm"])
-            return {"ok": True, "ctrl": self.app.ctrl_status()}
+            plan = loop.set_target(d["poses"][i]["q"], arm=d["arm"], detour=True)
+            out = {"ok": True, "ctrl": self.app.ctrl_status()}
+            if plan:
+                out["detour"] = plan
+                out["message"] = (f"直线会碰，已绕行：{plan.get('waypoints', 0)} 个中间点"
+                                  f"（规划 {plan.get('ms', 0) / 1000:.1f} s）")
+            return out
         raise FileNotFoundError(path)
 
     def _identify_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
