@@ -221,10 +221,116 @@
         </div>
       </div>
     </div>
+    <div class="page" data-page="config">
+      <div class="page-sheet">
+        <div class="page-head"><strong>配置</strong><span>5 张卡片</span></div>
+        <div class="page-cards">
+          <article class="float" id="panel-config">
+            <button type="button" class="float-toggle">当前配置 <span id="cfg-lock-badge" class="aside"></span></button>
+            <div class="float-body">
+              <p class="note">手眼、各手的重力补偿 / TCP 在这里应用。锁定后其它板块不能改这些配置，解锁只在这里；IK 策略、避障、工作姿态不上锁。</p>
+              <div id="cfg-now" class="cfg-now"></div>
+              <div class="cmds">
+                <button id="btn-cfg-lock" class="danger" type="button">锁定配置</button>
+                <button id="btn-cfg-unlock" class="primary" type="button">解锁</button>
+              </div>
+            </div>
+          </article>
+          <article class="float" id="panel-config-handeye">
+            <button type="button" class="float-toggle">手眼</button>
+            <div class="float-body">
+              <div class="fields">
+                <label class="field grow">手眼结果（自动带上对应双目 yaml）
+                  <select id="cfg-he"></select>
+                </label>
+                <button id="btn-cfg-stereo" type="button">应用手眼</button>
+              </div>
+              <p class="note" id="cfg-stereo-bound">双目 yaml：—</p>
+            </div>
+          </article>
+          <article class="float" id="panel-config-arms">
+            <button type="button" class="float-toggle">手臂（重力 / TCP / 工作姿态）</button>
+            <div class="float-body">
+              <div class="cfg-arms">
+                <section class="cfg-arm" data-arm="left">
+                  <header class="cfg-arm-head">左臂</header>
+                  <p class="cfg-arm-now" id="cfg-now-left">—</p>
+                  <label class="field grow">重力补偿
+                    <select id="cfg-grav-left"></select>
+                  </label>
+                  <button id="btn-cfg-grav-left" type="button">应用重力</button>
+                  <label class="field grow">TCP
+                    <select id="cfg-tcp-left"></select>
+                  </label>
+                  <button id="btn-cfg-tcp-left" type="button">应用 TCP</button>
+                  <label class="field grow">工作姿态（不上锁）
+                    <select id="cfg-wp-left"></select>
+                  </label>
+                  <button id="btn-cfg-wp-left" type="button">应用工作姿态</button>
+                </section>
+                <section class="cfg-arm" data-arm="right">
+                  <header class="cfg-arm-head">右臂</header>
+                  <p class="cfg-arm-now" id="cfg-now-right">—</p>
+                  <label class="field grow">重力补偿
+                    <select id="cfg-grav-right"></select>
+                  </label>
+                  <button id="btn-cfg-grav-right" type="button">应用重力</button>
+                  <label class="field grow">TCP
+                    <select id="cfg-tcp-right"></select>
+                  </label>
+                  <button id="btn-cfg-tcp-right" type="button">应用 TCP</button>
+                  <label class="field grow">工作姿态（不上锁）
+                    <select id="cfg-wp-right"></select>
+                  </label>
+                  <button id="btn-cfg-wp-right" type="button">应用工作姿态</button>
+                </section>
+              </div>
+            </div>
+          </article>
+          <article class="float" id="panel-config-ik">
+            <button type="button" class="float-toggle">IK 策略 <span class="aside">不上锁</span></button>
+            <div class="float-body">
+              <div class="fields">
+                <label class="field grow">锁定姿态时的 IK（不上锁，随时可改）
+                  <select id="cfg-pose-ik-mode">
+                    <option value="robust">新·多初值（推荐）</option>
+                    <option value="single">旧·当前角单次局部 IK</option>
+                    <option value="luo">罗-IK（SLSQP 紧约束 + 少动 / 居中挑解）</option>
+                  </select>
+                </label>
+                <button id="btn-cfg-pose-ik-mode" type="button">应用 IK 策略</button>
+              </div>
+              <p class="note">影响「工作姿态已锁定」时的碰点/棋盘/调用姿态和单姿态到位；未锁定的碰点仍是纯位置 IK。罗-IK 要求 1 mm / 1° 到位，在合格解里挑离当前近、关节居中、离限位远的，需要 scipy。</p>
+            </div>
+          </article>
+          <article class="float" id="panel-config-collision">
+            <button type="button" class="float-toggle">避障 <span class="aside">不上锁</span></button>
+            <div class="float-body">
+              <div class="fields">
+                <label class="field grow" title="碰撞检查和绕行规划都用它算距离">碰撞检测
+                  <select id="cfg-col-backend"></select>
+                </label>
+                <label class="field grow" title="直线会碰时找绕行路线">绕行规划
+                  <select id="cfg-col-planner"></select>
+                </label>
+                <button id="btn-cfg-col" type="button">应用避障</button>
+              </div>
+              <label class="switch" title="「单姿态到位」「走到目标」这类单次目标：直线会碰时自动找一条绕开的折线，按中间点走过去；关掉就只拦不绕">
+                <input id="cfg-col-detour" type="checkbox" checked><span>直线会碰时自动绕行</span>
+              </label>
+              <p class="note" id="cfg-col-note">碰撞检测：—</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
   </div>
   <nav class="bookmarks" aria-label="左侧书签">
     <button type="button" class="bookmark" data-page="vision" aria-pressed="false">
       感知<span class="count">4</span>
+    </button>
+    <button type="button" class="bookmark" data-page="config" aria-pressed="false">
+      配置<span class="count">5</span>
     </button>
   </nav>
 </section>
@@ -580,84 +686,6 @@
       <div class="page-sheet">
         <div class="page-head"><strong>控制</strong><span>9 张卡片</span></div>
         <div class="page-cards">
-          <article class="float" id="panel-config">
-            <button type="button" class="float-toggle">配置 <span id="cfg-lock-badge" class="aside"></span></button>
-            <div class="float-body">
-              <p class="note">共用项在上；左右臂分两列。锁定后其它板块不能改这些配置；解锁只在这里。</p>
-              <div id="cfg-now" class="cfg-now"></div>
-              <div class="cfg-shared">
-                <div class="fields">
-                  <label class="field grow">手眼结果（自动带上对应双目 yaml）
-                    <select id="cfg-he"></select>
-                  </label>
-                  <button id="btn-cfg-stereo" type="button">应用手眼</button>
-                </div>
-                <p class="note" id="cfg-stereo-bound">双目 yaml：—</p>
-                <div class="fields">
-                  <label class="field grow">锁定姿态时的 IK（不上锁，随时可改）
-                    <select id="cfg-pose-ik-mode">
-                      <option value="robust">新·多初值（推荐）</option>
-                      <option value="single">旧·当前角单次局部 IK</option>
-                      <option value="luo">罗-IK（SLSQP 紧约束 + 少动 / 居中挑解）</option>
-                    </select>
-                  </label>
-                  <button id="btn-cfg-pose-ik-mode" type="button">应用 IK 策略</button>
-                </div>
-                <p class="note">影响「工作姿态已锁定」时的碰点/棋盘/调用姿态和单姿态到位；未锁定的碰点仍是纯位置 IK。罗-IK 要求 1 mm / 1° 到位，在合格解里挑离当前近、关节居中、离限位远的，需要 scipy。</p>
-                <div class="fields">
-                  <label class="field grow" title="碰撞检查和绕行规划都用它算距离">碰撞检测（不上锁）
-                    <select id="cfg-col-backend"></select>
-                  </label>
-                  <label class="field grow" title="直线会碰时找绕行路线">绕行规划
-                    <select id="cfg-col-planner"></select>
-                  </label>
-                  <button id="btn-cfg-col" type="button">应用避障</button>
-                </div>
-                <label class="switch" title="「单姿态到位」「走到目标」这类单次目标：直线会碰时自动找一条绕开的折线，按中间点走过去；关掉就只拦不绕">
-                  <input id="cfg-col-detour" type="checkbox" checked><span>直线会碰时自动绕行</span>
-                </label>
-                <p class="note" id="cfg-col-note">碰撞检测：—</p>
-              </div>
-              <div class="cfg-arms">
-                <section class="cfg-arm" data-arm="left">
-                  <header class="cfg-arm-head">左臂</header>
-                  <p class="cfg-arm-now" id="cfg-now-left">—</p>
-                  <label class="field grow">重力补偿
-                    <select id="cfg-grav-left"></select>
-                  </label>
-                  <button id="btn-cfg-grav-left" type="button">应用重力</button>
-                  <label class="field grow">TCP
-                    <select id="cfg-tcp-left"></select>
-                  </label>
-                  <button id="btn-cfg-tcp-left" type="button">应用 TCP</button>
-                  <label class="field grow">工作姿态（不上锁）
-                    <select id="cfg-wp-left"></select>
-                  </label>
-                  <button id="btn-cfg-wp-left" type="button">应用工作姿态</button>
-                </section>
-                <section class="cfg-arm" data-arm="right">
-                  <header class="cfg-arm-head">右臂</header>
-                  <p class="cfg-arm-now" id="cfg-now-right">—</p>
-                  <label class="field grow">重力补偿
-                    <select id="cfg-grav-right"></select>
-                  </label>
-                  <button id="btn-cfg-grav-right" type="button">应用重力</button>
-                  <label class="field grow">TCP
-                    <select id="cfg-tcp-right"></select>
-                  </label>
-                  <button id="btn-cfg-tcp-right" type="button">应用 TCP</button>
-                  <label class="field grow">工作姿态（不上锁）
-                    <select id="cfg-wp-right"></select>
-                  </label>
-                  <button id="btn-cfg-wp-right" type="button">应用工作姿态</button>
-                </section>
-              </div>
-              <div class="cmds">
-                <button id="btn-cfg-lock" class="danger" type="button">锁定配置</button>
-                <button id="btn-cfg-unlock" class="primary" type="button">解锁</button>
-              </div>
-            </div>
-          </article>
 
           <article class="float" id="panel-joints">
             <button type="button" class="float-toggle">关节</button>
@@ -798,7 +826,7 @@
             <button type="button" class="float-toggle">单姿态记录和到位 <span id="sp-mode" class="aside"></span></button>
             <div class="float-body">
               <div class="arm-pick-row"><span>手</span><span class="arm-pick" data-pick="single"></span></div>
-              <p class="note">一个名字就是所选那只手的一个姿态。拖拽或点动到位后命名「记录」；点<strong>名字</strong>或「到位」按底栏限速走过去，用控制页「配置」里已应用的 IK 策略解末端位姿。到位会解开这只手锁着的工作姿态。</p>
+              <p class="note">一个名字就是所选那只手的一个姿态。拖拽或点动到位后命名「记录」；点<strong>名字</strong>或「到位」按底栏限速走过去，用左侧「配置」里已应用的 IK 策略解末端位姿。到位会解开这只手锁着的工作姿态。</p>
               <div class="fields">
                 <label class="field grow">命名
                   <input id="sp-name" placeholder="例如 初步起手式" maxlength="48">
