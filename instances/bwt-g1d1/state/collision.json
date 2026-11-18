@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "margin_m": 0.002,
+  "detour": true,
+  "backend": "coal",
+  "planner": "ompl"
+}

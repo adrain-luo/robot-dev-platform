@@ -1,11 +1,11 @@
 {
+  "intrinsics": "calib/handeye/双目侧身20261112.yaml",
+  "board_size": "11x8",
+  "square_size_mm": 15.0,
+  "session": "20261112_164528_right",
+  "eye": "both",
   "camera_source": "teleimager",
   "camera_host": "192.168.123.164",
   "teleimager_path": "/home/robot/yx/teleimager_src_copy",
-  "intrinsics": "calib/handeye/1029手眼.yaml",
-  "board_size": "11x8",
-  "square_size_mm": 15.0,
-  "session": "20261104_150244_right",
-  "eye": "both",
-  "active_result": "1029手眼"
+  "active_result": "双目侧身20261112"
 }
