@@ -18,6 +18,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 robot_platform = ["robots/**/*", "web/static/**/*"]
+g1_guardian = ["configs/*.json", "README.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
