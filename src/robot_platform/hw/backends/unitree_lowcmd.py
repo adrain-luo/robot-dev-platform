@@ -1,6 +1,10 @@
 """unitree_lowcmd：退出高层运动后，由本程序发全身 rt/lowcmd（G1D）。
 
 状态订阅 rt/lowstate；立柱读 rt/hispeed_state、经 AgvClient.HeightAdjust 升降。
+
+G1D 上 rt/lowcmd 一断流，手臂（和腰）就失能掉落，所以「释放」不能直接停发：
+先在 release_ramp_s 秒内把刚度 kp 和前馈 τ 平滑降到 0（阻尼 kd 不变），让手臂慢慢落下，
+降完才停发。过渡期间 busy() 为真，ArmLoop 继续发帧、拒绝新目标。
 """
 
 from __future__ import annotations
@@ -8,17 +12,76 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from robot_platform.hw.backends.base import Backend, Commander, LiftDriver, LiftReader, StateSource, check_idle_motors
 from robot_platform.hw.cmd_monitor import CmdMonitor, hints_for
 from robot_platform.hw.dds.sdk import init_channel
 from robot_platform.core.robot_profile import RobotProfile
 
+DEFAULT_RELEASE_RAMP_S = 3.0
+
+
+def _smooth(u: float) -> float:
+    u = min(1.0, max(0.0, u))
+    return u * u * (3.0 - 2.0 * u)
+
+
+class LowCmdReleaseRamp:
+    """lowcmd 释放过渡，纯计时逻辑（不碰 SDK，便于测试）。
+
+    阶段：idle → active（接管）→ releasing（kp、τ 从 1 降到 0）→ idle
+    step() 返回本帧的刚度比例：active 为 1，releasing 中平滑降到 0，idle 为 0。
+    """
+
+    def __init__(self, release_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self.release_s = max(1e-3, float(release_s))
+        self._clock = clock
+        self._lock = threading.Lock()
+        self.state = "idle"
+        self._t0 = 0.0
+        self.scale = 0.0
+
+    def start(self) -> None:
+        with self._lock:
+            self.state, self.scale = "active", 1.0
+
+    def release(self) -> None:
+        with self._lock:
+            if self.state != "active":
+                return
+            self.state, self._t0 = "releasing", self._clock()
+
+    def step(self) -> float:
+        with self._lock:
+            if self.state == "releasing":
+                u = (self._clock() - self._t0) / self.release_s
+                self.scale = 1.0 - _smooth(u)
+                if u >= 1.0:
+                    self.state, self.scale = "idle", 0.0
+            elif self.state == "active":
+                self.scale = 1.0
+            return self.scale
+
+    def busy(self) -> bool:
+        with self._lock:
+            return self.state == "releasing"
+
+    def ready(self) -> bool:
+        with self._lock:
+            return self.state != "releasing"
+
+
+def scale_frame(kp: Sequence[float], tau: Sequence[float], scale: float) -> Tuple[List[float], List[float]]:
+    """释放过渡中的一帧：刚度与前馈按同一比例缩小，阻尼与目标角不动。"""
+    s = min(1.0, max(0.0, float(scale)))
+    return [float(k) * s for k in kp], [float(t) * s for t in tau]
+
 
 class LowCmdCommander(Commander):
     def __init__(self, *, reader: StateSource, monitor: CmdMonitor, idle_motors: Sequence[int], command_topic: str, release_motion_mode: bool,
-                 dds_domain: int, network_interface: str, sdk_path: Optional[Path]) -> None:
+                 dds_domain: int, network_interface: str, sdk_path: Optional[Path],
+                 release_ramp_s: float = DEFAULT_RELEASE_RAMP_S) -> None:
         if command_topic != "rt/lowcmd":
             raise ValueError(f"Only rt/lowcmd is implemented, got {command_topic}")
         init_channel(dds_domain, network_interface, sdk_path)
@@ -36,8 +99,27 @@ class LowCmdCommander(Commander):
         self._cmd = unitree_hg_msg_dds__LowCmd_()
         self._pub = ChannelPublisher(command_topic, LowCmd_)
         self._pub.Init()
+        self._ramp = LowCmdReleaseRamp(release_ramp_s)
 
     def prepare(self) -> None:
+        self._prepare_takeover()
+        self._ramp.start()
+
+    def release(self) -> None:
+        self._ramp.release()
+
+    def busy(self) -> bool:
+        return self._ramp.busy()
+
+    def ready(self) -> bool:
+        return self._ramp.ready()
+
+    def phase(self) -> str:
+        if not self._ramp.busy():
+            return ""
+        return f"释放：刚度下降 · 比例 {self._ramp.scale:.2f}"
+
+    def _prepare_takeover(self) -> None:
         # 每次接管都查：机器人可能在两次接管之间换过状态
         check_idle_motors(self._reader, self._idle_motors)
         if self._released_mode or not self._release:
@@ -69,6 +151,8 @@ class LowCmdCommander(Commander):
 
     def write(self, q: Sequence[float], kp: Sequence[float], kd: Sequence[float], tau: Sequence[float],
               *, mode_machine: Optional[int] = None) -> None:
+        if self._ramp.busy():
+            kp, tau = scale_frame(kp, tau, self._ramp.step())
         self._cmd.mode_pr = 0
         self._cmd.mode_machine = int(mode_machine or 0)
         n = min(len(q), len(self._cmd.motor_cmd))
@@ -144,6 +228,7 @@ class UnitreeLowCmdBackend(Backend):
                     dds_domain=self._domain,
                     network_interface=self._iface,
                     sdk_path=self._sdk,
+                    release_ramp_s=float(self.profile.control.options.get("release_ramp_s", DEFAULT_RELEASE_RAMP_S)),
                 )
             return self._commander
 
