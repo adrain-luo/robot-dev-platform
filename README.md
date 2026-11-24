@@ -45,6 +45,8 @@ python serve.py --backend mock   # 不接机器人，仿真
 | `tools/` | 零散脚本：只读看 lowstate、旧数据迁移 |
 | `tests/` | `python -m pytest`（`pyproject.toml` 已配好搜索路径） |
 | `third_party/unitree_sdk2_python/` | Unitree SDK |
+| `src/g1_guardian/` | 本体执行守护层：跑在机器人本体上、唯一发 `rt/lowcmd` 的小进程，Box 断联时保持手臂不掉。独立包，不依赖 `robot_platform`，见 [`g1_guardian/README.md`](src/g1_guardian/README.md) |
+| `deploy/` | 守护层的 systemd 单元 |
 | `功能说明.md` | 按模块写的详细说明（算法、坐标、文件路径） |
 
 **边界：** 只有 `hw/` 的后端订阅 / 发布机器人话题（G1D 发 `rt/lowcmd`，G1 发 `rt/arm_sdk`；立柱另用 Agv + `rt/hispeed_state`）。其它模块经 `control/arm_loop.py` 发令，不另起服务、不另发 DDS。唯一例外是雷达：`perception/lidar_worker.py` 在子进程里只读订阅宇树转发的点云话题，不发任何指令（放进子进程是为了不拖慢本进程的 `rt/lowstate`）。页面只有 `web/static/` 一份。

@@ -1,0 +1,41 @@
+# G1/G1D body-side execution guardian: the only writer of rt/lowcmd (G1D).
+# Install on the robot's own computer (G1D body, e.g. 192.168.123.164):
+#   sudo mkdir -p /opt/g1-guardian && sudo cp -r src/g1_guardian /opt/g1-guardian/
+#   sudo cp deploy/g1-guardian.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now g1-guardian
+# Before enabling: stop every other program that writes rt/lowcmd
+# (refactor stage-B executor services, fatigue.service's lowcmd publisher, ...).
+# The guardian refuses to engage while it sees foreign frames on its topic.
+
+[Unit]
+Description=G1/G1D execution guardian (sole rt/lowcmd writer, holds on link loss)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=unitree
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/g1-guardian
+ExecStart=/usr/bin/python3 -m g1_guardian.service \
+    --config g1d \
+    --bind 192.168.123.164 --port 18090 \
+    --net eth0 \
+    --sdk-path /home/unitree/unitree_sdk2_python \
+    --blackbox-dir /var/lib/g1-guardian/blackbox
+# Real-time scheduling for the control loop. Pick a core that the camera,
+# YOLO and visualizer services do not use, then uncomment CPUAffinity.
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=80
+#CPUAffinity=5
+AmbientCapabilities=CAP_SYS_NICE
+StateDirectory=g1-guardian
+# SIGTERM makes the guardian release with its ramp (release_ramp_s, 3 s on
+# G1D) before exiting, so the arm is lowered instead of dropped.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
