@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Sequence
 
@@ -486,11 +486,6 @@ class ArmLoop:
             a.desired_q = target
         return None
 
-    def view(self, arm: str, owner: Optional[str] = None) -> "ArmView":
-        """给只管一只手的流程（负载测量、到位对比、手眼采集、棋盘触摸……）用的单臂接口。"""
-        self._arm(arm)
-        return ArmView(self, arm, owner)
-
     # ------------------------------------------------------------ 状态
     def arm_status(self, arm: str) -> dict:
         a = self._arm(arm)
@@ -653,68 +648,3 @@ class ArmLoop:
             time.sleep(0.05)
         self._stop.set()
 
-
-class ArmView:
-    """ArmLoop 的单臂视图：接口与旧的单臂 ArmLoop 一致，发目标时带上占用者。
-
-    status() 是整机状态加上这只手的字段（float / cmd_rad / desired_rad / payload_* / kp_vec），
-    所以按旧接口写的流程（只认一只手）不用改。
-    """
-
-    def __init__(self, loop: ArmLoop, arm: str, owner: Optional[str] = None) -> None:
-        self.loop = loop
-        self.arm = arm
-        self.owner = owner
-
-    @property
-    def layout(self) -> ArmLayout:
-        return self.loop.layout(self.arm)
-
-    @property
-    def limits(self) -> np.ndarray:
-        return self.loop.limits(self.arm)
-
-    @property
-    def max_speed(self) -> float:
-        return self.loop.max_speed
-
-    @property
-    def kin(self) -> RobotKinematics:
-        return self.loop.kin
-
-    @property
-    def reader(self) -> StateSource:
-        return self.loop.reader
-
-    def claim(self):
-        """占用这只手（owner 为 None 时不占用）。用法：with view.claim(): ..."""
-        if self.owner is None:
-            return nullcontext()
-        return self.loop.claim(self.arm, self.owner)
-
-    def set_target(self, q: Sequence[float], detour: bool = False) -> Optional[dict]:
-        return self.loop.set_target(q, arm=self.arm, owner=self.owner, detour=detour)
-
-    # 过渡用：和租约句柄（control/motion_core.CoreLease）同名，让还没改用租约的调用方能用同一套到位等待
-    move_to = set_target
-
-    def arm_sample(self, wait: bool = False) -> dict:
-        return self.loop.arm_sample(self.arm, wait=wait)
-
-    def arm_gains(self) -> tuple:
-        return self.loop.arm_gains(self.arm)
-
-    def set_payload_theta(self, theta, name: Optional[str] = None) -> None:
-        self.loop.set_payload_theta(theta, name, arm=self.arm)
-
-    def payload_theta(self) -> Optional[list]:
-        return self.loop.payload_theta(self.arm)
-
-    def estop_hold(self) -> None:
-        """单臂流程自己中止时只停这只手；整机急停走 ArmLoop.estop_hold。"""
-        self.loop.hold_arm(self.arm)
-
-    def status(self) -> dict:
-        st = self.loop.status()
-        st.update(st["arms"][self.arm])
-        return st

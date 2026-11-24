@@ -15,8 +15,6 @@ from robot_platform.control.motion_core import MotionCore
 from robot_platform.core.robot_profile import active
 from robot_platform.hw.backends.mock import MockBackend
 
-from test_arm_loop_frame import Recorder
-
 FAST_STILL = {"still_dq_rad_s": 0.05, "still_drift_rad": 0.01, "still_window_s": 0.2, "settle_timeout_s": 3.0}
 
 
@@ -25,7 +23,8 @@ def core():
     profile = active()
     backend = MockBackend(profile)
     kin = RobotKinematics(profile.urdf, profile.base_link, list(profile.arms))
-    loop = ArmLoop(reader=backend.state(), commander=Recorder(), kin=kin,
+    # mock 自己的指令出口：手臂模型真的跟着指令走（到位类任务要看实测角）
+    loop = ArmLoop(reader=backend.state(), commander=backend.commander(), kin=kin,
                    urdf_path=profile.urdf, base_link=profile.base_link, max_speed_rad_s=0.3)
     c = MotionCore(loop)
     c.engage()
@@ -241,3 +240,95 @@ def test_refused_manual_target_does_not_unlock_the_work_pose():
     app.motion = lambda: SimpleNamespace(manual_target=lambda q, *, arm, detour: None)
     assert routes._target(app, None, {"q": [0.0] * 7, "arm": "right"}) is None
     assert unlocked == [("arm_control", "right")]
+
+
+# ---------------------------------------------------------------- 棋盘触摸：不拿 App，只拿注入的能力
+
+# mock 手臂从这个姿态竖直上下 4 cm 都解得到（初始姿态往下解不到）
+BOARD_START_Q = [0.57, -0.42, -0.05, 0.49, -0.12, -0.16, 0.12]
+
+
+def _go(core, q, arm="right", timeout=10.0):
+    with core.lease_arm(arm, "测试准备") as lease:
+        lease.move_to(q)
+        deadline = time.monotonic() + timeout
+        while float(np.max(np.abs(np.asarray(lease.arm_sample()["q_meas"]) - np.asarray(q)))) > 0.01:
+            assert time.monotonic() < deadline, "没走到准备姿态"
+            time.sleep(0.05)
+        time.sleep(0.3)
+
+
+def _board(core):
+    from robot_platform.tasks.board_touch import BoardTouch, BoardTouchEnv
+
+    _go(core, BOARD_START_Q)
+
+    def no_camera():
+        raise AssertionError("这些测试不看棋盘")
+
+    env = BoardTouchEnv(
+        motion=lambda: core,
+        kin=core.loop.kin,
+        stereo=no_camera,
+        tcp_for_arm=lambda arm: ("法兰", np.zeros(3)),
+        work_pose_lock=lambda arm, tcp: (None, None),
+        work_pose_free_axis=lambda: None,
+        work_pose_info=lambda: ("", "robust"),
+    )
+    b = BoardTouch(env)
+    # 一个点：上方 = 当前法兰位置，往下摸 3 cm 再抬 3 cm
+    q = np.asarray(core.arm_sample("right")["q_meas"], float)
+    t, _ = core.loop.kin.arms["right"].model.fk(q)
+    b.points = (np.asarray(t, float) - np.array([0.0, 0.0, 0.05])).reshape(1, 3)
+    return b
+
+
+def _wait_board(b, timeout=20.0):
+    deadline = time.monotonic() + timeout
+    while b.status()["running"]:
+        assert time.monotonic() < deadline, b.status()
+        time.sleep(0.05)
+    return b.status()
+
+
+def test_board_touch_runs_on_a_lease_without_the_app(core):
+    b = _board(core)
+    assert not hasattr(b, "app")
+    st = b.start(0.05, 0.03, 0.03, "right")
+    assert st["ok"] and st["running"], st
+    assert (core.loop.owner("right") or "").startswith("棋盘触摸#")
+    st = _wait_board(b)
+    assert st["error"] is None, st
+    assert core.status()["leases"] == [] and core.loop.owner("right") is None
+
+
+@pytest.mark.parametrize("stopper", ["estop", "stop_button"])
+def test_board_touch_stops_on_estop_or_stop_button(core, stopper):
+    b = _board(core)
+    assert b.start(0.05, 0.04, 0.04, "right")["ok"]
+    deadline = time.monotonic() + 5
+    while "下降" not in (b.status()["phase"] or ""):
+        assert time.monotonic() < deadline, b.status()
+        time.sleep(0.02)
+    if stopper == "estop":
+        core.estop("测试")
+    else:
+        b.request_stop()
+    st = _wait_board(b, timeout=5.0)
+    assert st["error"] and ("急停" in st["error"] or "已停止" in st["error"] or "撤销" in st["error"]), st
+    assert core.status()["leases"] == [] and core.loop.owner("right") is None
+    held = np.asarray(core.arm_status("right")["desired_rad"])
+    time.sleep(0.3)
+    assert np.asarray(core.arm_status("right")["desired_rad"]) == pytest.approx(held)
+
+
+def test_board_touch_start_refused_when_latched_or_arm_taken(core):
+    b = _board(core)
+    core.estop("测试")
+    st = b.start(0.05, 0.03, 0.03, "right")
+    assert not st["ok"] and "急停已锁定" in st["error"], st
+    core.reset_estop()
+    with core.lease_arm("right", "空间点碰点"):
+        st = b.start(0.05, 0.03, 0.03, "right")
+        assert not st["ok"] and "空间点碰点" in st["error"], st
+    assert not b.status()["running"]

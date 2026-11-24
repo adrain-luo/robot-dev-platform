@@ -254,15 +254,14 @@ def _waist_step(app, loop, body: Dict[str, Any]) -> None:
 def _hold(app, loop, body: Dict[str, Any]) -> None:
     """急停（锁存）：底盘停、运控核心急停、立柱停。
 
-    运控核心急停在一步里撤销全部租约（任务的下一步一律被拒）、两手锁在实测角、
-    禁止一切新运动，直到「复位急停」。各项互不影响：某项出错也继续往下停，最后再报错。
-    还没改用租约的任务先按老办法通知停止（逐个改完后这里只剩底盘、核心、立柱）。
+    运控核心急停在一步里撤销全部租约（任务的下一步一律被拒，在等的任务也马上醒来停下）、
+    两手锁在实测角、禁止一切新运动，直到「复位急停」。所以这里不用再逐个通知任务。
+    各项互不影响：某项出错也继续往下停，最后再报错。
     """
     failed: List[BaseException] = []
     stoppers = (
         lambda: app.chassis_stop("急停"),  # 底盘最先停（它不受手臂接管影响）
         lambda: app.motion().estop("页面急停"),
-        app.board.request_stop,          # 棋盘触摸
         lambda: app.lift_post("/api/lift/stop", {}),
     )
     for stop in stoppers:

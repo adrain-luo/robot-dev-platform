@@ -19,7 +19,7 @@ from robot_platform.hw.lift_control import LiftController
 from robot_platform.perception.detect_localize import DetectLocalize
 from robot_platform.perception.lidar_api import LidarAPI
 from robot_platform.tasks import ik_worker
-from robot_platform.tasks.board_touch import BoardTouch
+from robot_platform.tasks.board_touch import BoardTouch, BoardTouchEnv
 from robot_platform.tasks.spatial_points import SpatialPoints
 from robot_platform.tasks.work_pose import WorkPoseSession
 from robot_platform.web.api.state import StateMixin
@@ -56,7 +56,16 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         self.tcp = TcpSession()
         self.points = SpatialPoints()
         self.work_pose = WorkPoseSession()
-        self.board = BoardTouch(self)
+        # 任务不拿 App：注入运控客户端、只读运动学和它要的几样能力
+        self.board = BoardTouch(BoardTouchEnv(
+            motion=self.motion,
+            kin=kin,
+            stereo=self._board_stereo,
+            tcp_for_arm=self._tcp_for_arm,
+            work_pose_lock=self.work_pose_lock_for,
+            work_pose_free_axis=self.work_pose_free_axis,
+            work_pose_info=lambda: (self.work_pose.active_name or "", getattr(self.work_pose, "ik_mode", "robust")),
+        ))
         self.detect = DetectLocalize(self)
         self.runtime = RuntimeConfig(self)
         try:
@@ -107,6 +116,20 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         if self.loop is None:
             raise PermissionErrorMotion("未开 --allow-real-motion，不能发令")
         return self.loop
+
+    def _board_stereo(self):
+        """棋盘触摸「看一眼」用：(左目→躯干变换, 双目相机, 匹配器工厂)。"""
+        from robot_platform.calib.handeye.config import load_config
+
+        cfg = load_config()
+        he = self.handeye
+        T = he._left_cam_to_torso(cfg)
+        if T is None:
+            raise ValueError("先调用一组手眼结果，角点才能变到躯干上")
+        cam = he._camera(cfg)
+        if getattr(cam, "kind", "stereo") != "stereo":
+            raise ValueError("棋盘触摸目前只支持双目相机（G1D）；RGB-D 相机的深度取点还没接入")
+        return T, cam, lambda: he._matcher_for(he._calib_yaml(cfg))
 
     def motion(self) -> MotionCore:
         """任务拿运控客户端（进程内就是运控核心本身）；只读模式下抛 PermissionErrorMotion。"""
