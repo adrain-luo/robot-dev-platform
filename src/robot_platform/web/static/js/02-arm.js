@@ -204,8 +204,10 @@ function applyCtrl(ctrl) {
     if (a.payload_mass_kg != null) t += ` 载${Number(a.payload_mass_kg).toFixed(2)}kg`;
     return `${ARM_SIDE[name]}:${t}`;
   };
+  // 经守护层发令：守护层急停 / 失联 / 被别人接管时，显示原因（不是"过渡中"）
+  const gproblem = ctrl.engaged && ctrl.commander && ctrl.commander.kind === "guardian" ? ctrl.commander.problem : null;
   $("engage-state").textContent = allow
-    ? (ctrl.transition ? `过渡中 · ${ctrl.transition}` : ctrl.engaged
+    ? gproblem ? `守护层 · ${gproblem}` : (ctrl.transition ? `过渡中 · ${ctrl.transition}` : ctrl.engaged
         ? `已接管 · ${["left", "right"].filter((n) => arms[n]).map(armText).join(" ")}${
             ctrl.waist_locked ? " · 腰保持" : ""}${gravText}${ctrl.loop_hz ? ` · ${Math.round(ctrl.loop_hz)} Hz` : ""}`
         : `未接管${gravText}`)
@@ -248,16 +250,29 @@ function applyCtrl(ctrl) {
 $("btn-engage").onclick = async () => {
   const sdk = window.ROBOT?.transitions;
   const secs = (k, d) => Math.round(Number(window.ROBOT?.transition_s?.[k]) || d);
-  const ask = sdk
+  const g = window.ROBOT?.guardian;
+  const ask = g
+    ? `将经本体守护层（${g.address}）接管：守护层退出高层运动模式后保持当前姿态。之后本页面卡住或断网，手臂原地保持、不会掉。请扶住机器人。继续？`
+    : sdk
     ? `将经 rt/arm_sdk 接管腰与手臂（运控保持站立），约 ${secs("engage", 3)} 秒过渡后才能走点。请有人看护、守急停。继续？`
     : "将发布 rt/lowcmd 接管（会退出高层运动模式）。请扶住机器人。继续？";
   if (!confirm(ask)) return;
-  try { await post("/api/engage", {}); flash("已接管：保持当前姿态", true); } catch (e) { flash(String(e), false); }
+  try { await post("/api/engage", {}); flash("已接管：保持当前姿态", true); } catch (e) {
+    // 守护层急停 / 故障锁存：现场确认安全后可以在这里复位并重新接管
+    if (g && /复位/.test(String(e)) && confirm(`${String(e)}\n\n现场已确认安全，复位守护层并重新接管？`)) {
+      try { await post("/api/guardian/reset", {}); flash("守护层已复位，已重新接管：保持当前姿态", true); } catch (e2) { flash(String(e2), false); }
+      return;
+    }
+    flash(String(e), false);
+  }
 };
 
 $("btn-release").onclick = async () => {
   const rel = Math.round(Number(window.ROBOT?.transition_s?.release) || 3);
-  const ask = window.ROBOT?.transitions
+  const g = window.ROBOT?.guardian;
+  const ask = g
+    ? `释放：守护层约 ${Math.round(Number(g.release_s) || 3)} 秒内把刚度降到 0，之后停止发令，手臂会慢慢垂下，请扶住。继续？`
+    : window.ROBOT?.transitions
     ? `释放：约 ${rel} 秒内把手臂交还运控（手臂会回到运控自己的姿态），之后停止发令。继续？`
     : "释放后停止发令，手臂可能下垂，请扶住。继续？";
   if (!confirm(ask)) return;

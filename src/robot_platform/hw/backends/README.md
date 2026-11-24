@@ -15,9 +15,40 @@
 | 名字 | 说明 |
 | --- | --- |
 | `unitree_lowcmd` | G1D：接管前 `ReleaseMode` 退出高层运动，之后由本程序发全身 `rt/lowcmd`；状态 `rt/lowstate`；立柱 `rt/hispeed_state` + `AgvClient.HeightAdjust` |
+| `guardian` | 手臂指令经本体守护层 `g1_guardian` 发出（UDP 设定），**本程序不写 `rt/lowcmd`**；状态、立柱、底盘、IMU 照旧由读后端（G1D 为 `unitree_lowcmd`）直接读 DDS。见下文 |
 | `mock` | 仿真机器人：电机一阶跟随指令角，拖拽时停住；立柱按速度积分。不依赖 SDK / DDS，Windows 上也能跑 |
 
 机型默认后端写在 `robots/<机型>/robot.json` 的 `control.backend`；`serve.py --backend mock` 或环境变量 `ARM_BACKEND` 可覆盖。mock 后端下运动按钮默认可用。
+
+## guardian：经本体守护层发令
+
+```bash
+# 本体上先起守护层（见 src/g1_guardian/README.md）
+python3 -m g1_guardian.service --config g1d --bind 127.0.0.1 --net eth0 --sdk-path ~/unitree_sdk2_python
+# 平台改走守护层
+ARM_BACKEND=guardian python serve.py --allow-real-motion      # 或 --backend guardian
+```
+
+ArmLoop 一行没改发帧逻辑：它照旧每拍拼一整帧，`GuardianCommander` 只是把帧里
+`right_arm` / `left_arm` / `waist` 各组的角度、前馈和刚度比例（帧里的 kp ÷ 机型 kp，拖拽时为 0，钳在 [0, 1]）
+转成守护层设定，有效期 100 ms。于是：
+
+| 情况 | 结果 |
+| --- | --- |
+| 平台循环卡顿 > 100 ms | 守护层减速、原地保持；卡顿过去自动继续 |
+| 平台进程卡死 / 崩溃 / 网络断 | 守护层锁存 `link_lost`、原地保持（不会掉）；页面显示原因，**重新接管**后从实测角继续 |
+| 守护层急停（任何客户端、按钮） | 平台停止往前走指令角、不能走点；接管时提示复位，确认后 `/api/guardian/reset` 复位并从实测角重新接管 |
+| 别的程序已占用守护层 | 拒绝接管，提示等它释放 |
+| 守护层的配置与本机型不符（机型、通道、每只手的电机、锁腰电机） | 拒绝接管 |
+| 拖拽 | 该组 `kp_scale = 0`：守护层的指令角贴着实测走、阻尼换成 `TEACH_KD`，松手后停在松手处 |
+| 释放 / 服务退出 | 守护层约 3 s 把刚度降到 0 再停发 |
+
+页面上「指令话题」胶囊改为显示守护层（发帧频率、有没有别的写入者由守护层自己检测）。
+设置在 `robot.json` 的 `control.guardian`，环境变量 `ARM_GUARDIAN_HOST / ARM_GUARDIAN_PORT / ARM_GUARDIAN_CLIENT / ARM_GUARDIAN_READ` 可覆盖。
+平台的「急停」按钮仍是平台级的保持（不锁存守护层）；要锁存的急停用 `python -m g1_guardian.client estop` 或以后的实体按钮。
+
+测试：`tests/test_guardian_backend.py` 用进程内真的守护层（真 UDP）驱动 mock 机器人，跑通整条链路；
+另有一条测试逐电机核对守护层配置与机型（增益、分组、前馈上限、拖拽阻尼、腿部空闲电机）。
 
 ## 本地开发
 

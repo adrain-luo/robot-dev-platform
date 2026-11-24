@@ -94,6 +94,9 @@ class Commander(ABC):
     def prepare(self) -> None:
         """接管前调用一次（例如退出高层运动模式）。"""
 
+    def activate(self) -> None:
+        """接管：ArmLoop 已按实测角重置完指令后调用；之后的 write 属于这一次接管。"""
+
     @abstractmethod
     def write(
         self,
@@ -120,6 +123,10 @@ class Commander(ABC):
     def phase(self) -> str:
         """给页面看的过渡阶段（空串表示无过渡）。"""
         return ""
+
+    def info(self) -> Optional[Dict[str, Any]]:
+        """给页面看的指令出口详情（例如守护层状态）；没有就 None。"""
+        return None
 
 
 class TorsoImu(ABC):

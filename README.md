@@ -29,7 +29,7 @@ python serve.py --backend mock   # 不接机器人，仿真
 |------|------|
 | `core/` | 机器实例（数据放哪）、运行设置、机型档案加载、关节布局、可锁定的成套配置 |
 | `robots/<机型>/` | 机型描述：`robot.json` + URDF + 网格，见 [`robots/README.md`](src/robot_platform/robots/README.md) |
-| `hw/` | 硬件：`backends/`（G1D `unitree_lowcmd`、G1 `unitree_arm_sdk`、`mock`）、`dds/`、立柱闭环 |
+| `hw/` | 硬件：`backends/`（G1D `unitree_lowcmd`、G1 `unitree_arm_sdk`、经本体守护层发令的 `guardian`、`mock`）、`dds/`、立柱闭环 |
 | `control/` | 臂控循环 `ArmLoop`（限速、接管、拖拽、腰保持）、URDF 正运动学、重力前馈 |
 | `calib/` | 标定：`tcp.py`、`lift.py`、`handeye/`（采集、求解、结果、内参）、`payload/`（负载辨识、姿态集、摩擦、到位对比） |
 | `perception/` | 相机（双目 / RGB-D / mock）、立体匹配、深度点云、相机与点云接口 `cloud_api.py`、G1D 调试口 `debug_port.py`、识别定位、雷达（`lidar*.py`，G1 的 MID-360） |

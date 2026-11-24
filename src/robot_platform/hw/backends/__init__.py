@@ -2,6 +2,7 @@
 
     unitree_lowcmd  退出高层运动后发全身 rt/lowcmd（G1D）
     unitree_arm_sdk 运控保持站立，只经 rt/arm_sdk 接管腰与双臂（G1）
+    guardian        指令经本体守护层 g1_guardian 发出（本程序不写指令话题），状态照旧直接读 DDS
     mock            仿真机器人，不接硬件
 """
 
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 from robot_platform.hw.backends.base import Backend
 
-BACKENDS = ("unitree_lowcmd", "unitree_arm_sdk", "mock")
+BACKENDS = ("unitree_lowcmd", "unitree_arm_sdk", "guardian", "mock")
 
 
 def create_backend(name: str, settings) -> Backend:
@@ -34,6 +35,11 @@ def create_backend(name: str, settings) -> Backend:
             sdk_path=settings.unitree_sdk_path,
             timeout_s=settings.lowstate_timeout_s,
         )
+    if name == "guardian":
+        from robot_platform.hw.backends.guardian import GuardianBackend, guardian_settings
+
+        gs = guardian_settings(profile)
+        return GuardianBackend(profile, create_backend(gs.read_backend, settings), gs)
     if name == "mock":
         from robot_platform.hw.backends.mock import MockBackend
 

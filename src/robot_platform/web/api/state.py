@@ -118,6 +118,13 @@ class StateMixin:
         return {"engage": float(o.get("acquire_s", 8.0)) + float(o.get("gain_ramp_s", 4.0)),
                 "release": float(o.get("release_gain_s", 2.0)) + float(o.get("release_s", 3.0))}
 
+    def _guardian_caps(self):
+        gs = getattr(self.backend, "settings", None)
+        if self.backend.name != "guardian" or gs is None:
+            return None
+        return {"address": gs.address, "client_id": gs.client_id, "release_s": gs.release_s,
+                "read_backend": gs.read_backend}
+
     def robot_caps(self) -> Dict[str, Any]:
         """给前端的机型能力：决定显示哪些控件。"""
         p = self.profile
@@ -146,6 +153,8 @@ class StateMixin:
             # 接管 / 释放有过渡（arm_sdk）：页面显示进度，过渡中不能走点
             "transitions": self.backend.name == "unitree_arm_sdk",
             "transition_s": self._transition_s(),
+            # 经本体守护层发令（guardian 后端）：页面据此改接管 / 释放的提示，并提供守护层复位
+            "guardian": self._guardian_caps(),
             # 腿式机型：三维里根在骨盆，要按腿部实测贴地
             "legged": bool(p.display_joints),
         }

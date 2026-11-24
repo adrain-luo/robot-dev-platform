@@ -111,6 +111,8 @@ class ArmLoop:
         self._waist_cmd: Optional[dict] = None
         self._waist_target: Optional[dict] = None
         self._lock = threading.Lock()
+        # 发帧与接管互斥：接管时先重置指令角、再让指令出口启用新一轮接管，中间不会夹进一帧旧指令
+        self._publish_lock = threading.Lock()
         self._arms: Dict[str, _ArmState] = {}
         for layout in self.profile.arms.values():
             q0 = np.asarray(reader.read_arm(layout).q, dtype=float)
@@ -193,17 +195,19 @@ class ArmLoop:
         if self._commander.busy() and not self._engaged:
             raise PermissionErrorMotion("上次释放还在过渡，稍等再接管")
         self._commander.prepare()
-        qs = {name: a.clamp(self._measured(a)) for name, a in self._arms.items()}
-        waist_now = self._read_waist()
-        with self._lock:
-            for name, a in self._arms.items():
-                a.cmd_q = qs[name].copy()
-                a.desired_q = qs[name].copy()
-                a.float = False
-                a.owner = None
-            self._waist_cmd = waist_now
-            self._waist_target = dict(waist_now)
-            self._engaged = True
+        with self._publish_lock:
+            qs = {name: a.clamp(self._measured(a)) for name, a in self._arms.items()}
+            waist_now = self._read_waist()
+            with self._lock:
+                for name, a in self._arms.items():
+                    a.cmd_q = qs[name].copy()
+                    a.desired_q = qs[name].copy()
+                    a.float = False
+                    a.owner = None
+                self._waist_cmd = waist_now
+                self._waist_target = dict(waist_now)
+                self._engaged = True
+            self._commander.activate()
 
     def release(self) -> None:
         # 拖拽中的手：先把指令角对齐实测，过渡期间按它保持，避免跳回拖拽前的旧指令
@@ -463,6 +467,8 @@ class ArmLoop:
             # 接管 / 释放过渡（arm_sdk 后端有，其它为空）
             "ready": engaged and self._commander.ready(),
             "transition": self._commander.phase(),
+            # 指令出口详情（守护层后端有：守护层状态、锁存、循环抖动），其它为 None
+            "commander": self._commander.info(),
         }
 
     # ------------------------------------------------------------ 循环
@@ -536,13 +542,15 @@ class ArmLoop:
                 engaged = self._engaged
                 # 释放过渡中（arm_sdk）仍要发帧，按最后的指令角保持
                 if engaged or self._commander.busy():
-                    if engaged:
+                    # 指令出口没就绪（过渡中、守护层急停 / 失联）时不往前走：重新接管会从实测角开始
+                    if engaged and self._commander.ready():
                         with self._lock:
                             for a in self._arms.values():
                                 if not a.float:
                                     self._slew(a, dt)
                             self._slew_waist(dt)
-                    self._publish()
+                    with self._publish_lock:
+                        self._publish()
                     self._last_err = None
                 elif self._waist_cmd is not None:
                     self._clear_waist()

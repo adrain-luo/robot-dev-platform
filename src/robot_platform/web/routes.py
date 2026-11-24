@@ -273,6 +273,17 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
     loop.estop_hold()
 
 
+def _guardian_reset(app, loop, body: Dict[str, Any]) -> None:
+    """守护层急停 / 故障锁存后：复位守护层，再从实测角重新接管。只有 guardian 后端有。
+
+    复位是现场确认安全之后的操作：页面在调用前要让人确认。"""
+    reset = getattr(app.backend, "reset_guardian", None)
+    if reset is None:
+        raise PermissionErrorMotion("当前后端不经守护层，没有守护层可复位")
+    reset()
+    loop.engage()
+
+
 def _teach(app, loop, body: Dict[str, Any]) -> None:
     """拖拽：body.arm 指定哪只手（不给 = 两只手）；另一只手照常受控。"""
     arm = str(body.get("arm") or "")
@@ -313,6 +324,7 @@ def _waist(app, loop, body: Dict[str, Any]) -> None:
 ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], Optional[Dict[str, Any]]]] = {
     "/api/engage": lambda app, loop, body: loop.engage(),
     "/api/release": lambda app, loop, body: loop.release(),
+    "/api/guardian/reset": _guardian_reset,
     "/api/hold": _hold,
     "/api/teach": _teach,
     "/api/gravity": lambda app, loop, body: loop.set_gravity_ff(bool(body.get("enabled", True))),
