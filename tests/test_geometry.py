@@ -1,13 +1,11 @@
-"""公共点云几何（robot_platform/geometry.py）：从棋盘触摸搬出来后行为不变，感知不再导入任务。"""
+"""公共点云几何（robot_platform/geometry.py）：从棋盘触摸搬出来后行为不变。
 
-import ast
-from pathlib import Path
+感知不导入任务的规则在 test_import_rules.py。
+"""
 
 import numpy as np
 
 from robot_platform.geometry import fit_plane, sample_point
-
-SRC = Path(__file__).resolve().parents[1] / "src" / "robot_platform"
 
 
 def test_fit_plane_recovers_tilted_plane():
@@ -50,15 +48,3 @@ def test_sample_point_direct_hole_and_rejects():
     sparse[0, 0] = [0.0, 0.0, 1.0]
     assert sample_point(sparse, 10, 10) is None
 
-
-def test_perception_does_not_import_tasks():
-    for path in (SRC / "perception").rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            mods = []
-            if isinstance(node, ast.ImportFrom) and node.module:
-                mods = [node.module]
-            elif isinstance(node, ast.Import):
-                mods = [a.name for a in node.names]
-            for m in mods:
-                assert not m.startswith("robot_platform.tasks"), f"{path.name} imports {m}"

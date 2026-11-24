@@ -1,9 +1,9 @@
-"""g1_contracts: validation of the motion interface types, stable wire values, stdlib-only imports."""
+"""g1_contracts: validation of the motion interface types and stable wire values.
 
-import ast
+The stdlib-only rule is checked in test_import_rules.py.
+"""
+
 import math
-import sys
-from pathlib import Path
 
 import pytest
 
@@ -12,8 +12,6 @@ from g1_contracts.motion import (
     CONTRACT_VERSION, Ack, GoalRequest, LeaseRequest, LeaseRevoked, MotionRejected, Reason, Resource,
     SafetyState, Stamp, StreamSetpoint, Verdict, rejection,
 )
-
-PKG = Path(g1_contracts.__file__).resolve().parent
 
 
 def _stream(**kw):
@@ -96,18 +94,3 @@ def test_rejection_maps_revoked_reasons_to_lease_revoked():
     assert exc.reason is Reason.COLLISION and str(exc) == "collision"
     assert Ack(seq=0, verdict=Verdict.CLAMPED, reason=Reason.LIMIT).ok
 
-
-def test_package_imports_only_the_standard_library():
-    stdlib = set(sys.stdlib_module_names) | {"__future__"}
-    for path in PKG.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.level == 0:
-                names = [node.module or ""]
-            else:
-                continue
-            for name in names:
-                top = name.split(".")[0]
-                assert top in stdlib or top == "g1_contracts", f"{path.name} imports {name}"
