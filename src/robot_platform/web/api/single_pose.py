@@ -2,7 +2,7 @@
 
 到位用「已应用的 IK 策略」（工作姿态那边的 single / robust / luo）解记下的法兰位姿（以记录时的关节角
 为起点和参照，冗余的手肘也按记录复现），限速走过去、
-等停稳、用实测角复核。走的期间占用这只手；到位后若这只手锁着工作姿态就解锁（姿态已变）。
+等停稳、用实测角复核。走的期间租着这只手（急停撤销租约就停）；到位后若这只手锁着工作姿态就解锁（姿态已变）。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from typing import Any, Dict
 
 import numpy as np
 
+from g1_contracts.motion import MotionRejected
 from robot_platform.calib.payload import identify as iden
 from robot_platform.control.arm_loop import PermissionErrorMotion
 from robot_platform.tasks import single_pose as sp
@@ -45,7 +46,8 @@ class SinglePoseMixin:
             if path == "/api/single-pose/goto":
                 return self._single_pose_goto(str(body.get("name") or ""))
             return {"ok": False, "error": "没有这个单姿态接口"}
-        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion, RuntimeError) as exc:
+        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion, MotionRejected,
+                RuntimeError) as exc:
             return {"ok": False, "error": str(exc)}
 
     def _single_pose_record(self, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -71,23 +73,22 @@ class SinglePoseMixin:
                 "message": f"已记录{side}手姿态「{d['name']}」"}
 
     def _single_pose_goto(self, name: str) -> Dict[str, Any]:
-        loop = self.require_loop()
+        motion = self.motion()
         doc = sp.load(name)
         arm = sp.check_arm(str(doc.get("arm") or ""))
         side = "左" if arm == "left" else "右"
-        st = loop.status()
+        st = motion.arm_view_status(arm)
         if not st.get("engaged"):
             raise PermissionErrorMotion("先接管再到位")
-        if st["arms"][arm].get("float"):
+        if st.get("float"):
             raise PermissionErrorMotion(f"{side}臂在拖拽，先退出拖拽再到位")
         model = self.kin.arms[arm].model
         p_t = np.asarray(doc["p"], dtype=float).reshape(3)
         R_t = np.asarray(doc["R"], dtype=float).reshape(3, 3)
         q_rec = np.asarray(doc["q"], dtype=float).reshape(-1)
         zero = np.zeros(3)
-        view = loop.view(arm, OWNER)
-        with view.claim():
-            q_now = np.asarray(self.reader().read_arm(loop.layout(arm)).q, dtype=float)
+        with motion.lease_arm(arm, OWNER) as lease:
+            q_now = np.asarray(self.reader().read_arm(lease.layout).q, dtype=float)
             mode = self.work_pose.ik_mode
             # 7 轴有冗余：同一末端位姿有一族关节解。以记录时的关节角为起点 / 参照，
             # 求解器取最贴近记录姿态的那组（手肘也复现），而不是离当前角最近的那组
@@ -96,18 +97,13 @@ class SinglePoseMixin:
             )
             if miss_mm > PLAN_MAX_MM or ori_deg > PLAN_MAX_DEG:
                 raise ValueError(f"到不了「{name}」：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°")
-            self.motion_stop.clear()
-            self._work_pose_motion = True
-            try:
-                settle = iden.wait_settle(view, q, self.motion_stop, SETTLE)
-            finally:
-                self._work_pose_motion = False
-            if self.motion_stop.is_set():
+            settle = iden.wait_settle(lease, q, lease.cancelled, SETTLE)
+            if lease.cancelled.is_set():
                 raise RuntimeError("已停止")
-            st2 = view.status()
+            st2 = lease.status()
             if not st2.get("engaged") or st2.get("float"):
                 raise PermissionErrorMotion("到位前已释放或进入拖拽")
-            q_meas = np.asarray(view.arm_sample(wait=True)["q_meas"], dtype=float)
+            q_meas = np.asarray(lease.arm_sample(wait=True)["q_meas"], dtype=float)
         p2, R2 = model.fk(q_meas)
         pos_miss = float(np.linalg.norm(p2 - p_t) * 1000.0)
         ori_miss = float(pose_ori_miss_deg(R_t, R2))

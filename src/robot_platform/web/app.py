@@ -59,10 +59,6 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         self.board = BoardTouch(self)
         self.detect = DetectLocalize(self)
         self.runtime = RuntimeConfig(self)
-        # 工作姿态到位 / 已锁定下的碰点与棋盘：set_target 时不自动解锁
-        self._work_pose_motion = False
-        # 限速到位共用：急停 / 工作流「停止」置位，打断 wait_settle
-        self.motion_stop = threading.Event()
         try:
             self.tcp.restore_active()
             self.points.restore_active()

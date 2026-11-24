@@ -194,9 +194,9 @@ def _points(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     if not path.startswith("/api/points/"):
         return None
     if path == "/api/points/goto":
-        return 200, app.point_goto(body, app.require_loop())
+        return 200, app.point_goto(body, app.motion())
     if path == "/api/points/goto-xyz":
-        return 200, app.point_goto_xyz(body, app.require_loop())
+        return 200, app.point_goto_xyz(body, app.motion())
     return 200, app.point_post(path, body)
 
 
@@ -258,7 +258,6 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
     禁止一切新运动，直到「复位急停」。各项互不影响：某项出错也继续往下停，最后再报错。
     还没改用租约的任务先按老办法通知停止（逐个改完后这里只剩底盘、核心、立柱）。
     """
-    app.motion_stop.set()  # 空间点碰点、工作姿态调用、单姿态到位
     failed: List[BaseException] = []
     stoppers = (
         lambda: app.chassis_stop("急停"),  # 底盘最先停（它不受手臂接管影响）
@@ -311,9 +310,9 @@ def _speed(app, loop, body: Dict[str, Any]) -> None:
 
 def _target(app, loop, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     arm = app.body_arm(body)
-    if not app._work_pose_motion:
-        app.unlock_work_pose("arm_control", arm)
-    plan = loop.set_target(body["q"], arm=arm, detour=True)
+    plan = app.motion().manual_target(body["q"], arm=arm, detour=True)
+    # 手动目标被接受了才解锁这只手的工作姿态：手被任务租着（拒绝）时，任务依赖的锁定不能被这一下解掉
+    app.unlock_work_pose("arm_control", arm)
     return {"detour": plan} if plan else None
 
 
