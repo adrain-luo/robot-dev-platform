@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 
 from robot_platform.core import instance as instances
+from robot_platform.geometry import fit_plane, sample_point
 
 
 def log_dir() -> Path:
@@ -21,36 +22,6 @@ PLANE_RMS_MM = 10.0
 PLANE_MAX_MM = 20.0
 # 理想网格把角点挪得太远，说明横竖方向和实测对不上。
 IDEAL_MAX_MM = 20.0
-
-
-def _sample_point(points: np.ndarray, x: float, y: float) -> Optional[np.ndarray]:
-    h, w = points.shape[:2]
-    xi = int(np.clip(round(x), 0, w - 1))
-    yi = int(np.clip(round(y), 0, h - 1))
-    p = points[yi, xi]
-    if np.isfinite(p).all() and 0.2 < float(p[2]) < 2.0:
-        return p.astype(float)
-    r = 4
-    patch = points[max(0, yi - r):yi + r + 1, max(0, xi - r):xi + r + 1].reshape(-1, 3)
-    ok = np.isfinite(patch).all(axis=1) & (patch[:, 2] > 0.2) & (patch[:, 2] < 2.0)
-    if int(ok.sum()) < 5:
-        return None
-    return np.median(patch[ok], axis=0)
-
-
-def _fit_plane(pts: np.ndarray) -> Dict[str, Any]:
-    center = pts.mean(axis=0)
-    _, _, vt = np.linalg.svd(pts - center, full_matrices=False)
-    normal = vt[-1]
-    dist_mm = (pts - center) @ normal * 1000.0
-    flat = pts - dist_mm[:, None] / 1000.0 * normal
-    return {
-        "center": center,
-        "normal": normal,
-        "rms_mm": float(np.sqrt(np.mean(dist_mm ** 2))),
-        "max_mm": float(np.max(np.abs(dist_mm))),
-        "flat": flat,
-    }
 
 
 def _ideal_grid(flat: np.ndarray, cols: int, rows: int, normal: np.ndarray):
@@ -188,7 +159,7 @@ class BoardTouch:
             raw = []
             missed = 0
             for i, xy in enumerate(corners.reshape(-1, 2)):
-                p = _sample_point(points_m, float(xy[0]), float(xy[1]))
+                p = sample_point(points_m, float(xy[0]), float(xy[1]))
                 if p is None:
                     missed += 1
                     raw.append(np.full(3, np.nan))
@@ -198,7 +169,7 @@ class BoardTouch:
             self._log(f"有深度的角点 {pts.shape[0] - missed}/{pts.shape[0]}")
             if missed:
                 raise RuntimeError(f"{missed} 个角点没有深度，棋盘可能出了匹配范围")
-            plane = _fit_plane(pts)
+            plane = fit_plane(pts)
             self._log(f"平面残差 平均 {plane['rms_mm']:.1f} mm，最大 {plane['max_mm']:.1f} mm")
             if plane["rms_mm"] > PLANE_RMS_MM or plane["max_mm"] > PLANE_MAX_MM:
                 raise RuntimeError(
