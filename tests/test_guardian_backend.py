@@ -271,6 +271,44 @@ def test_guardian_estop_freezes_the_loop_and_reset_reengages_without_motion(g):
     assert np.max(np.abs(_meas(g, g.right) - held)) < 5e-3
 
 
+def test_guardian_estop_revokes_motion_core_leases_and_latches_stay_separate(g):
+    """守护层急停：运控核心立刻撤销租约（任务马上停，不用等到位超时）。
+    两处锁存互不解除：核心复位不清守护层，守护层复位不清核心；页面急停不锁守护层。"""
+    from g1_contracts.motion import LeaseRevoked, Resource, SafetyState
+    from robot_platform.control.motion_core import MotionCore
+
+    core = MotionCore(g.loop)
+    core.engage()
+    lease = core.lease([Resource.RIGHT_ARM], "task:test")
+    tgt = _meas(g, g.right)
+    tgt[3] += 0.5
+    lease.move_to(tgt.tolist())
+    time.sleep(0.2)
+    g.other("panel").estop()
+    assert lease.cancelled.wait(1.0), "守护层急停后租约应被撤销"
+    assert core.safety() is SafetyState.ESTOP_LATCHED and core.latched is None
+    with pytest.raises(LeaseRevoked):
+        lease.move_to(tgt.tolist())
+    core.reset_estop()
+    with pytest.raises(PermissionErrorMotion, match="复位"):
+        core.engage()
+    g.backend.reset_guardian()
+    core.engage()
+    wait_until(lambda: g.loop.status()["ready"], 1.0, "重新接管就绪")
+
+    core.estop("页面急停")
+    time.sleep(0.1)
+    assert _gstate(g) in ("holding", "tracking"), "页面急停目前不锁存守护层（HANDOFF §6 待定）"
+    g.backend.reset_guardian()
+    core.engage()
+    assert core.latched and core.safety() is SafetyState.ESTOP_LATCHED
+    with pytest.raises(PermissionErrorMotion, match="急停已锁定"):
+        g.loop.set_target(tgt.tolist(), arm="right")
+    core.reset_estop()
+    with core.lease([Resource.RIGHT_ARM], "task:after") as l2:
+        l2.move_to(_meas(g, g.right).tolist())
+
+
 def test_engage_refused_while_another_program_owns_the_guardian(g):
     node = g.other("refactor-node")
     node.engage()
