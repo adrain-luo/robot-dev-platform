@@ -11,7 +11,8 @@ GuardianCommander 把帧里各组（right_arm / left_arm / waist）的角度、�
 读不占指令话题；读后端的 commander() 从不创建，本进程没有 lowcmd 的写入者。
 
 设置（robot.json 的 control.guardian，环境变量可覆盖）：
-    host        守护层地址          ARM_GUARDIAN_HOST   默认 127.0.0.1（平台与守护层同在本体上）
+    host        守护层地址          ARM_GUARDIAN_HOST   默认 192.168.123.164（本体内网地址：守护层按 README 绑在这个地址上，
+                                                       平台在本体上或在 Box 上都能连到；守护层绑 127.0.0.1 时才改成 127.0.0.1）
     port        守护层 UDP 端口     ARM_GUARDIAN_PORT   默认 18090
     client_id   本程序在守护层的名字 ARM_GUARDIAN_CLIENT 默认 robot-platform
     read_backend 读状态用的后端      ARM_GUARDIAN_READ   默认按指令话题选 unitree_lowcmd / unitree_arm_sdk
@@ -41,7 +42,7 @@ POKE_PERIOD_S = 1.0
 
 @dataclass(frozen=True)
 class GuardianSettings:
-    host: str = "127.0.0.1"
+    host: str = "192.168.123.164"
     port: int = DEFAULT_PORT
     client_id: str = "robot-platform"
     read_backend: str = "unitree_lowcmd"
@@ -59,7 +60,7 @@ def guardian_settings(profile: RobotProfile, env: Mapping[str, str] = os.environ
     if read == "guardian":
         raise ValueError("control.guardian.read_backend 不能是 guardian 自己")
     return GuardianSettings(
-        host=str(env.get("ARM_GUARDIAN_HOST") or o.get("host") or "127.0.0.1"),
+        host=str(env.get("ARM_GUARDIAN_HOST") or o.get("host") or "192.168.123.164"),
         port=int(env.get("ARM_GUARDIAN_PORT") or o.get("port") or DEFAULT_PORT),
         client_id=str(env.get("ARM_GUARDIAN_CLIENT") or o.get("client_id") or "robot-platform"),
         read_backend=read,

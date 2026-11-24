@@ -24,7 +24,7 @@
 
 ```bash
 # 本体上先起守护层（见 src/g1_guardian/README.md）
-python3 -m g1_guardian.service --config g1d --bind 127.0.0.1 --net eth0 --sdk-path ~/unitree_sdk2_python
+python3 -m g1_guardian.service --config g1d --bind 192.168.123.164 --net eth0 --sdk-path ~/unitree_sdk2_python
 # 平台改走守护层
 ARM_BACKEND=guardian python serve.py --allow-real-motion      # 或 --backend guardian
 ```
