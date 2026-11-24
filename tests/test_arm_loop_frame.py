@@ -17,6 +17,7 @@ class Recorder(Commander):
     def __init__(self):
         self.prepared = 0
         self.frames = []
+        self.times = []
         self._lock = threading.Lock()
 
     def prepare(self):
@@ -25,6 +26,13 @@ class Recorder(Commander):
     def write(self, q, kp, kd, tau, *, mode_machine=None):
         with self._lock:
             self.frames.append((list(q), list(kp), list(kd), list(tau), mode_machine))
+            self.times.append(time.monotonic())
+
+    def max_gap_since(self, t0):
+        with self._lock:
+            ts = [t for t in self.times if t >= t0]
+        assert len(ts) >= 2, "这段时间几乎没有指令帧"
+        return max(b - a for a, b in zip(ts, ts[1:]))
 
     def last(self):
         with self._lock:
@@ -310,3 +318,167 @@ def test_status_reports_loop_rate(rig):
     time.sleep(0.5)
     hz = loop.status()["loop_hz"]
     assert hz is not None and 50 < hz < 130
+
+
+# ---------------------------------------------------------------- 急停锁存 / 占用撤销 / 每拍钩子
+
+LATCH = "急停已锁定：确认安全后复位"
+
+
+def test_latched_estop_keeps_frames_and_blocks_new_motion(rig):
+    """锁存急停：一直发帧、全刚度保持；新目标、动腰、拖拽、占用都拒绝；保持、释放、接管照常；清除后恢复。"""
+    profile, _, rec, loop = rig
+    loop.engage()
+    loop.set_max_speed(0.4)
+    tgt = _cmd(loop, "right").copy()
+    tgt[3] -= 0.3
+    loop.set_target(tgt, arm="right")
+    time.sleep(0.1)
+    t0 = time.monotonic()
+    loop.estop_hold(latch=LATCH)
+    held = loop.status()["arms"]["right"]["desired_rad"]
+    time.sleep(0.5)
+    assert rec.max_gap_since(t0) < 0.1, "锁存急停后不能停发"
+    q, kp, kd, _, _ = rec.last()
+    for name in profile.arms:
+        for i in profile.arm(name).motor_indices:
+            assert (kp[i], kd[i]) == (profile.kp[i], profile.kd[i])
+    assert loop.status()["arms"]["right"]["desired_rad"] == pytest.approx(held)
+    assert loop.status()["inhibited"] == LATCH
+
+    r = _cmd(loop, "right")
+    with pytest.raises(PermissionErrorMotion, match="急停已锁定"):
+        loop.set_target(r, arm="right")
+    with pytest.raises(PermissionErrorMotion, match="急停已锁定"):
+        loop.set_waist(yaw_rad=0.0)
+    with pytest.raises(PermissionErrorMotion, match="急停已锁定"):
+        loop.enable_teach("left")
+    with pytest.raises(PermissionErrorMotion, match="急停已锁定"):
+        loop.acquire_owner("right", "任务")
+    loop.hold_arm("right")
+    loop.hold_at_command("left")
+    loop.hold_waist()
+    loop.disable_teach()
+    # 重新接管不解除锁存（只有运控核心的复位能解除）
+    loop.release()
+    loop.engage()
+    assert loop.inhibited == LATCH
+    with pytest.raises(PermissionErrorMotion, match="急停已锁定"):
+        loop.set_target(r, arm="right")
+    loop.clear_inhibit()
+    loop.set_target(_cmd(loop, "right"), arm="right")
+    assert loop.status()["inhibited"] is None
+
+
+def test_latched_estop_clears_owners_in_the_same_step(rig):
+    _, _, _, loop = rig
+    loop.engage()
+    loop.acquire_owner("right", "棋盘触摸#1")
+    loop.estop_hold(latch=LATCH)
+    assert loop.owner("right") is None
+    # 不锁存的急停（老行为）不动占用
+    loop.clear_inhibit()
+    loop.acquire_owner("right", "棋盘触摸#2")
+    loop.estop_hold()
+    assert loop.owner("right") == "棋盘触摸#2"
+
+
+def test_owner_tagged_target_needs_the_current_claim(rig):
+    """带 owner 的目标：只有这只手正被同一 owner 占用时才接受；撤销后旧 owner 的下一步被拒。"""
+    _, _, _, loop = rig
+    loop.engage()
+    r = _cmd(loop, "right")
+    with pytest.raises(PermissionErrorMotion, match="已撤销"):
+        loop.set_target(r, arm="right", owner="没占用的任务")
+    loop.acquire_owner("right", "任务A")
+    loop.set_target(r, arm="right", owner="任务A")
+    assert loop.revoke_owners() == {"right": "任务A"}
+    with pytest.raises(PermissionErrorMotion, match="已撤销"):
+        loop.set_target(r, arm="right", owner="任务A")
+    loop.set_target(r, arm="right")  # 手动来源：手已空出
+    # 旧占用者归还时不能把新占用者的占用清掉
+    loop.acquire_owner("right", "任务B")
+    loop.release_owner("right", "任务A")
+    assert loop.owner("right") == "任务B"
+    loop.release_owner("right", "任务B")
+    assert loop.owner("right") is None
+
+
+def test_target_racing_a_latched_estop_never_lands_after_it(rig):
+    """任务线程不停下目标时按急停：急停返回后不会再有任务的目标生效。"""
+    _, _, _, loop = rig
+    loop.engage()
+    loop.acquire_owner("right", "任务")
+    base = _cmd(loop, "right").copy()
+    stop = threading.Event()
+    rejected = []
+
+    def hammer():
+        k = 0
+        while not stop.is_set():
+            tgt = base.copy()
+            tgt[3] -= 0.1 if k % 2 else 0.2
+            k += 1
+            try:
+                loop.set_target(tgt, arm="right", owner="任务")
+            except PermissionErrorMotion as exc:
+                rejected.append(str(exc))
+
+    th = threading.Thread(target=hammer, daemon=True)
+    th.start()
+    time.sleep(0.1)
+    loop.estop_hold(latch=LATCH)
+    held = loop.status()["arms"]["right"]["desired_rad"]
+    time.sleep(0.3)
+    stop.set()
+    th.join(timeout=2)
+    assert loop.status()["arms"]["right"]["desired_rad"] == pytest.approx(held)
+    assert rejected and all("急停已锁定" in m for m in rejected)
+
+
+def test_hold_at_command_stops_without_jumping_back(rig):
+    """停在指令角：指令角就此不再前进，也不回跳到实测角；绕行剩余点一并取消。"""
+    _, backend, _, loop = rig
+    loop.engage()
+    loop.set_max_speed(0.2)
+    q0 = _cmd(loop, "right").copy()
+    tgt = q0.copy()
+    tgt[3] -= 0.3
+    loop.set_target(tgt, arm="right")
+    time.sleep(0.2)
+    with backend.robot._lock:  # 实测角和指令角拉开，确认保持用的是指令角
+        for i in loop.layout("right").motor_indices:
+            backend.robot.q[i] += 0.05
+    loop.hold_at_command("right")
+    c1 = _cmd(loop, "right")
+    assert 0.0 < q0[3] - c1[3] < 0.3
+    assert loop.status()["arms"]["right"]["desired_rad"] == pytest.approx(c1.tolist())
+    time.sleep(0.2)
+    assert _cmd(loop, "right") == pytest.approx(c1)
+    a = loop._arms["right"]
+    with loop._lock:
+        a.set_path([c1 + 0.01, c1 + 0.02])
+    loop.hold_at_command("right")
+    assert loop.status()["arms"]["right"]["detour_left"] == 0
+
+
+def test_on_cycle_hook_runs_every_cycle_and_cannot_stop_frames(rig):
+    _, _, rec, loop = rig
+    seen = []
+    loop.on_cycle = lambda engaged, ready: seen.append((engaged, ready))
+    time.sleep(0.1)
+    assert seen and seen[-1] == (False, False)  # 没接管时也每拍调用
+    loop.engage()
+    time.sleep(0.1)
+    assert seen[-1] == (True, True)
+
+    def boom(engaged, ready):
+        raise RuntimeError("钩子坏了")
+
+    loop.on_cycle = boom
+    t0 = time.monotonic()
+    time.sleep(0.3)
+    assert rec.max_gap_since(t0) < 0.1
+    errs = [loop.status()["last_error"] or "" for _ in range(20)]
+    assert any("on_cycle" in e and "钩子坏了" in e for e in errs), errs
+    loop.on_cycle = None

@@ -11,7 +11,7 @@ import threading
 import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Sequence
+from typing import Callable, Dict, Iterator, List, Optional, Sequence
 
 import numpy as np
 
@@ -119,6 +119,12 @@ class ArmLoop:
             limits = self.kin.arms[layout.name].model.joint_limits()
             self._arms[layout.name] = _ArmState(layout, limits, ArmGravity(layout.name, urdf, base_link), q0)
         self._engaged = False
+        # 运动禁止（急停锁存）：非空时拒绝新目标、动腰、拖拽、占用；保持、接管、释放照常。
+        # 由运控核心（control/motion_core.py）置位 / 清除；检查都在 _lock 里，和设目标不会交错
+        self._inhibit: Optional[str] = None
+        # 每拍结束后调用一次 on_cycle(engaged, ready)（运控核心记状态历史、查设定有效期）。
+        # 它出错只记 last_error，不影响发帧
+        self.on_cycle: Optional[Callable[[bool, bool], None]] = None
         # 自碰撞闸门（collision/guard.py）：由 app 装上；None 时不查
         self.collision_guard = None
         self._stop = threading.Event()
@@ -154,22 +160,54 @@ class ArmLoop:
         with self._lock:
             return self._arm(arm).owner
 
-    @contextmanager
-    def claim(self, arm: str, owner: str) -> Iterator[None]:
-        """任务独占一只手：期间别的来源给这只手设目标会被拒绝；退出时自动归还。"""
+    def acquire_owner(self, arm: str, owner: str) -> None:
+        """占用一只手：之后只有带同一个 owner 的目标能下到这只手。"""
         a = self._arm(arm)
         with self._lock:
+            if self._inhibit:
+                raise PermissionErrorMotion(self._inhibit)
             if a.owner is not None and a.owner != owner:
                 raise PermissionErrorMotion(f"{side_label(arm)}臂正被「{a.owner}」使用，等它结束或先急停")
             if a.float:
                 raise PermissionErrorMotion(f"{side_label(arm)}臂在拖拽，先退出拖拽")
             a.owner = owner
+
+    def release_owner(self, arm: str, owner: str) -> None:
+        """归还占用（已经被撤销或换了占用者时什么都不做）。"""
+        a = self._arm(arm)
+        with self._lock:
+            if a.owner == owner:
+                a.owner = None
+
+    def revoke_owners(self) -> Dict[str, str]:
+        """撤销所有占用；返回 {手: 原占用者}。之后旧占用者再下目标会被拒绝。"""
+        with self._lock:
+            out = {name: a.owner for name, a in self._arms.items() if a.owner is not None}
+            for a in self._arms.values():
+                a.owner = None
+        return out
+
+    @contextmanager
+    def claim(self, arm: str, owner: str) -> Iterator[None]:
+        """任务独占一只手：期间别的来源给这只手设目标会被拒绝；退出时自动归还。"""
+        self.acquire_owner(arm, owner)
         try:
             yield
         finally:
-            with self._lock:
-                if a.owner == owner:
-                    a.owner = None
+            self.release_owner(arm, owner)
+
+    # ------------------------------------------------------------ 运动禁止（急停锁存）
+    @property
+    def inhibited(self) -> Optional[str]:
+        return self._inhibit
+
+    def clear_inhibit(self) -> None:
+        with self._lock:
+            self._inhibit = None
+
+    @property
+    def engaged(self) -> bool:
+        return self._engaged
 
     # ------------------------------------------------------------ 腰
     def _read_waist(self) -> dict:
@@ -234,11 +272,18 @@ class ArmLoop:
         if not self._commander.ready():
             raise PermissionErrorMotion(f"接管过渡中（{self._commander.phase()}），等完成再{what}")
 
-    def estop_hold(self) -> None:
-        """两只手都退出拖拽、锁在当前实测角；腰也锁住。"""
+    def estop_hold(self, *, latch: Optional[str] = None) -> None:
+        """两只手都退出拖拽、锁在当前实测角；腰也锁住。
+
+        latch 非空（急停锁存）：同一把锁里撤销所有占用、禁止新运动（原因 = latch），
+        这样任何和急停交错的 set_target 要么被这里的保持覆盖，要么被拒绝。"""
         qs = {name: a.clamp(self._measured(a)) for name, a in self._arms.items()}
         waist_now = self._read_waist()
         with self._lock:
+            if latch:
+                self._inhibit = str(latch)
+                for a in self._arms.values():
+                    a.owner = None
             for name, a in self._arms.items():
                 a.float = False
                 a.cmd_q = qs[name].copy()
@@ -257,6 +302,21 @@ class ArmLoop:
             a.cmd_q = q.copy()
             a.desired_q = q.copy()
 
+    def hold_at_command(self, arm: str) -> None:
+        """只停这一只手、停在当前指令角（不回跳到实测角）：取消没走完的目标和绕行点。
+
+        设定过期、租约撤销时用：指令角就此不再前进，刚度照旧。"""
+        a = self._arm(arm)
+        with self._lock:
+            if a.float:
+                return
+            a.desired_q = a.cmd_q.copy()
+
+    def command_snapshot(self) -> Dict[str, np.ndarray]:
+        """各手当前指令角（拷贝）。"""
+        with self._lock:
+            return {name: a.cmd_q.copy() for name, a in self._arms.items()}
+
     def set_waist(self, yaw_rad: Optional[float] = None, pitch_rad: Optional[float] = None) -> None:
         if self._waist is None:
             raise PermissionErrorMotion(f"{self.profile.name} 没有可控的腰")
@@ -264,6 +324,8 @@ class ArmLoop:
             raise PermissionErrorMotion(f"{self.profile.name} 的腰只保持不转（站立时转腰会影响平衡）")
         self._require_ready("动腰")
         with self._lock:
+            if self._inhibit:
+                raise PermissionErrorMotion(self._inhibit)
             if not self._engaged or self._waist_target is None:
                 raise PermissionErrorMotion("先接管再动腰")
             if any(a.float for a in self._arms.values()):
@@ -294,6 +356,8 @@ class ArmLoop:
         self._require_ready("拖拽")
         picked = self._pick(arm)
         with self._lock:
+            if self._inhibit:
+                raise PermissionErrorMotion(self._inhibit)
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再拖拽")
             for a in picked:
@@ -366,6 +430,9 @@ class ArmLoop:
                    detour: bool = False) -> Optional[dict]:
         """给一只手设目标，另一只手不受影响。owner 是占用这只手的任务名（手动来源为 None）。
 
+        带 owner 的目标只有在这只手当前正被同一个 owner 占用时才接受：占用被撤销
+        （急停、重新接管、释放）之后，旧任务的下一步会被拒绝，而不是在手空着时照样下发。
+
         detour=True（「到位」类单次目标）：直线会碰时规划一条绕行折线，按中间点依次走；
         返回规划摘要（没绕行返回 None）。连续发的小步目标（点动、跟踪）不要开，规划要零点几秒到几秒。"""
         a = self._arm(arm)
@@ -376,12 +443,17 @@ class ArmLoop:
             self._require_ready("走点")
 
         def _gate() -> None:
+            if self._inhibit:
+                raise PermissionErrorMotion(self._inhibit)
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再设目标")
             if a.float:
                 raise PermissionErrorMotion(f"{side_label(arm)}臂在拖拽，先退出拖拽再走点")
             if a.owner is not None and a.owner != owner:
                 raise PermissionErrorMotion(f"{side_label(arm)}臂正被「{a.owner}」使用，等它结束或先急停")
+            if owner is not None and a.owner != owner:
+                raise PermissionErrorMotion(
+                    f"「{owner}」对{side_label(arm)}臂的占用已撤销（急停、重新接管或释放），这一步不执行")
 
         target = a.clamp(arr)
         guard = self.collision_guard
@@ -464,6 +536,8 @@ class ArmLoop:
             "max_speed_rad_s": self.max_speed,
             "loop_hz": round(1.0 / self._loop_period, 1) if self._loop_period > 0 else None,
             "last_error": self._last_err,
+            # 急停锁存等运动禁止的原因（None = 没禁止）
+            "inhibited": self._inhibit,
             # 接管 / 释放过渡（arm_sdk 后端有，其它为空）
             "ready": engaged and self._commander.ready(),
             "transition": self._commander.phase(),
@@ -538,12 +612,14 @@ class ArmLoop:
                 self.gravity.update(dt)
             except Exception as e:  # noqa: BLE001  IMU 出错只影响重力方向（保持上一次的），不能停掉控制循环
                 self._last_err = f"重力方向：{type(e).__name__}: {e}"
+            engaged = ready = False
             try:
                 engaged = self._engaged
+                # 指令出口没就绪（过渡中、守护层急停 / 失联）时不往前走：重新接管会从实测角开始
+                ready = engaged and self._commander.ready()
                 # 释放过渡中（arm_sdk）仍要发帧，按最后的指令角保持
                 if engaged or self._commander.busy():
-                    # 指令出口没就绪（过渡中、守护层急停 / 失联）时不往前走：重新接管会从实测角开始
-                    if engaged and self._commander.ready():
+                    if ready:
                         with self._lock:
                             for a in self._arms.values():
                                 if not a.float:
@@ -556,6 +632,12 @@ class ArmLoop:
                     self._clear_waist()
             except Exception as e:
                 self._last_err = f"{type(e).__name__}: {e}"
+            hook = self.on_cycle
+            if hook is not None:
+                try:
+                    hook(engaged, ready)
+                except Exception as e:  # noqa: BLE001  钩子出错不能停掉控制循环
+                    self._last_err = f"on_cycle: {type(e).__name__}: {e}"
             next_t += self._dt
             sleep = next_t - time.perf_counter()
             if sleep > 0:
