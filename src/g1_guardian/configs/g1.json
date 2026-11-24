@@ -1,7 +1,7 @@
 {
   "robot": "g1",
   "status": "draft",
-  "note": "G1, rt/arm_sdk (locomotion stays on). DRAFT: weight ramp only, no native-gain blending like ArmSdkSchedule; never run on hardware. The service refuses draft configs unless --allow-draft-config.",
+  "note": "G1, rt/arm_sdk (locomotion stays on). Waist motors 12-14 at the waist lock gains (200 / 5) as ArmLoop holds them. DRAFT: weight ramp only, no native-gain blending like ArmSdkSchedule; never run on hardware. The service refuses draft configs unless --allow-draft-config.",
   "channel": "arm_sdk",
   "num_motors": 29,
   "release_motion_mode": false,
@@ -177,7 +177,8 @@
     "max_velocity_rad_s": 1.0,
     "max_acceleration_rad_s2": 10.0,
     "tau_ff_limit_nm": 8.0,
-    "max_target_jump_rad": 0.5
+    "max_target_jump_rad": 0.5,
+    "compliant_kd": 2.0
   },
   "timing": {
     "rate_hz": 200,
@@ -188,7 +189,8 @@
     "max_valid_for_ms": 1000,
     "blackbox_seconds": 10,
     "engage_ramp_s": 2.0,
-    "release_ramp_s": 2.0
+    "release_ramp_s": 2.0,
+    "stiffness_ramp_s": 0.25
   },
   "arm_sdk_weight_motor": 29
 }

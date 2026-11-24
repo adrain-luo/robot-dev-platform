@@ -59,6 +59,11 @@ class GuardianConfig:
     arm_sdk_weight_motor: Optional[int] = None
     status_hz: float = 50.0
     blackbox_seconds: float = 10.0
+    # Time for a group's stiffness scale to go all the way between 0 and 1.
+    stiffness_ramp_s: float = 0.25
+    # Damping used while a group is fully compliant (kp scale 0, e.g. teach
+    # mode); None keeps the body kd. Interpolated with the stiffness scale.
+    compliant_kd: Optional[float] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -174,6 +179,8 @@ def config_from_dict(d: Dict[str, Any]) -> GuardianConfig:
         arm_sdk_weight_motor=None if weight_motor is None else int(weight_motor),
         status_hz=float(timing.get("status_hz", 50.0)),
         blackbox_seconds=float(timing.get("blackbox_seconds", 10.0)),
+        stiffness_ramp_s=float(timing.get("stiffness_ramp_s", 0.25)),
+        compliant_kd=None if limits.get("compliant_kd") is None else float(limits["compliant_kd"]),
         extra={k: v for k, v in d.items() if k.startswith("_") or k in ("note", "joints")},
     )
     if cfg.rate_hz <= 0 or cfg.status_hz <= 0:
@@ -182,8 +189,10 @@ def config_from_dict(d: Dict[str, Any]) -> GuardianConfig:
         raise ConfigError("need 0 < min_valid_for_ms <= max_valid_for_ms")
     if cfg.link_timeout_s <= 0 or cfg.lowstate_stale_s <= 0:
         raise ConfigError("timeouts must be > 0")
-    if cfg.release_ramp_s < 0 or cfg.engage_ramp_s < 0:
+    if cfg.release_ramp_s < 0 or cfg.engage_ramp_s < 0 or cfg.stiffness_ramp_s < 0:
         raise ConfigError("ramps must be >= 0")
+    if cfg.compliant_kd is not None and not (math.isfinite(cfg.compliant_kd) and cfg.compliant_kd >= 0):
+        raise ConfigError("limits.compliant_kd must be a finite number >= 0")
     return cfg
 
 

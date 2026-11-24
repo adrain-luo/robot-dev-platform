@@ -15,7 +15,21 @@ releasing  explicit release: stiffness (lowcmd) or weight (arm_sdk) ramps to
            0, then frames stop -- the only way frames ever stop
 
 Holding always means: keep writing frames at the last commanded position,
-reached by decelerating within the acceleration limit, never by stopping.
+reached by decelerating within the acceleration limit, never by stopping,
+and with full stiffness.
+
+Stiffness
+---------
+A setpoint may ask for less stiffness per group (``kp_scale`` in [0, 1]).
+The scale only applies while that setpoint is valid; the moment the
+guardian holds for any reason (setpoint expired, link lost, E-STOP, release)
+every group goes back to full stiffness. Changes are ramped over
+``stiffness_ramp_s``, never stepped.
+
+``kp_scale`` 0 makes the group compliant (teach / drag mode): the commanded
+position follows the measured one, so that when stiffness comes back the
+arm is held where the hand left it instead of springing back to a stale
+target.
 """
 
 from __future__ import annotations
@@ -101,7 +115,8 @@ class GuardianCore:
         self.q_cmd: Dict[str, List[float]] = {}
         self.v_cmd: Dict[str, List[float]] = {}
         self.tau_ff: Dict[str, List[float]] = {}
-        self.kp_scale: Dict[str, float] = {}
+        self.kp_scale: Dict[str, float] = {}  # requested by the current setpoint (goal)
+        self.kp_now: Dict[str, float] = {}  # applied, ramped towards kp_scale
         self.hold_q: Dict[int, float] = {}
         self.target: Optional[Dict[str, List[float]]] = None
         self.target_expire = -math.inf
@@ -143,9 +158,25 @@ class GuardianCore:
         assert self.last_meas is not None
         return [float(self.last_meas[m]) for m in g.motors]
 
+    def _compliant(self, name: str) -> bool:
+        return self.state == "tracking" and self.kp_scale.get(name, 1.0) == 0.0
+
+    def _restore_stiffness(self) -> None:
+        """Leaving a setpoint: every group goes back to full stiffness (ramped).
+
+        A compliant group's commanded position already equals the measured
+        one; zero its velocity so it is held exactly there."""
+        for g in self.cfg.groups:
+            if g.name not in self.q_cmd:
+                continue
+            if self.kp_scale.get(g.name, 1.0) == 0.0:
+                self.v_cmd[g.name] = [0.0] * g.size
+            self.kp_scale[g.name] = 1.0
+
     def _latch(self, now: float, reason: str) -> None:
         if reason not in self.latched:
             self.latched.append(reason)
+        self._restore_stiffness()
         self.state = "estop" if "estop" in self.latched else "fault"
         self.target = None
         self.epoch += 1
@@ -230,6 +261,7 @@ class GuardianCore:
                 self.v_cmd[g.name] = [0.0] * g.size
                 self.tau_ff[g.name] = [0.0] * g.size
                 self.kp_scale[g.name] = 1.0
+                self.kp_now[g.name] = 1.0
             self.hold_q = {m: float(self.last_meas[m]) for m in self.cfg.hold_at_engage}
             if self.cfg.channel == "arm_sdk" and self.cfg.engage_ramp_s > 0:
                 self.scale, self.scale_goal, self.scale_rate = 0.0, 1.0, 1.0 / self.cfg.engage_ramp_s
@@ -237,6 +269,7 @@ class GuardianCore:
                 self.scale, self.scale_goal, self.scale_rate = 1.0, 1.0, 0.0
         # Taking over from a lost owner (link_lost / stale_lowstate) keeps the
         # current hold; only the latch is cleared and a new epoch issued.
+        self._restore_stiffness()
         self.latched = [r for r in self.latched if r == "estop"]
         self.owner = client
         self.owner_last_msg = now
@@ -345,6 +378,7 @@ class GuardianCore:
     def _on_release(self, now: float, msg: Dict[str, Any]) -> Optional[str]:
         if self.state in ("idle", "releasing"):
             return None
+        self._restore_stiffness()
         self.state = "releasing"
         self.target = None
         self.scale_goal = 0.0
@@ -373,18 +407,33 @@ class GuardianCore:
         if self.state in ENGAGED and now - self.foreign_writer_at <= 0.2 and "foreign_writer" not in self.latched:
             self._latch(now, "foreign_writer")
         if self.state == "tracking" and now > self.target_expire:
+            self._restore_stiffness()
             self.state = "holding"
             self.target = None
             self._event(now, "setpoint_expired")
 
+        ramp = math.inf if self.cfg.stiffness_ramp_s <= 0 else dt / self.cfg.stiffness_ramp_s
         for g in self.cfg.groups:
-            tgt = self.target.get(g.name) if (self.state == "tracking" and self.target) else None
             qs, vs = self.q_cmd[g.name], self.v_cmd[g.name]
-            for i in range(g.size):
-                qs[i], vs[i] = track_joint(
-                    qs[i], vs[i], None if tgt is None else tgt[i],
-                    g.max_velocity[i], g.max_acceleration[i], g.lower[i], g.upper[i], dt,
-                )
+            if self._compliant(g.name):
+                # Teach mode: follow the hand (state is tracking, so lowstate is fresh).
+                meas = self._measured(g)
+                for i in range(g.size):
+                    qs[i], vs[i] = min(g.upper[i], max(g.lower[i], meas[i])), 0.0
+            else:
+                tgt = self.target.get(g.name) if (self.state == "tracking" and self.target) else None
+                for i in range(g.size):
+                    qs[i], vs[i] = track_joint(
+                        qs[i], vs[i], None if tgt is None else tgt[i],
+                        g.max_velocity[i], g.max_acceleration[i], g.lower[i], g.upper[i], dt,
+                    )
+            goal = self.kp_scale.get(g.name, 1.0)
+            cur = self.kp_now.get(g.name, goal)
+            if cur < goal:
+                cur = min(goal, cur + ramp)
+            elif cur > goal:
+                cur = max(goal, cur - ramp)
+            self.kp_now[g.name] = cur
 
         if self.scale != self.scale_goal:
             if math.isinf(self.scale_rate):
@@ -400,7 +449,7 @@ class GuardianCore:
             self.state = "idle"
             self.owner = None
             self.target = None
-            self.q_cmd, self.v_cmd, self.tau_ff, self.kp_scale = {}, {}, {}, {}
+            self.q_cmd, self.v_cmd, self.tau_ff, self.kp_scale, self.kp_now = {}, {}, {}, {}, {}
             self._event(now, "released")
         self.frames += 1
         return frame
@@ -415,11 +464,14 @@ class GuardianCore:
         tau = [0.0] * n
         for m, v in self.hold_q.items():
             q[m] = v
+        ckd = cfg.compliant_kd
         for g in cfg.groups:
-            ks = self.kp_scale.get(g.name, 1.0)
+            ks = self.kp_now.get(g.name, 1.0)
             for i, m in enumerate(g.motors):
                 q[m] = self.q_cmd[g.name][i]
                 kp[m] = cfg.kp[m] * ks
+                if ckd is not None:
+                    kd[m] = cfg.kd[m] + (ckd - cfg.kd[m]) * (1.0 - ks)
                 tau[m] = self.tau_ff[g.name][i]
         weight = None
         if cfg.channel == "lowcmd":
@@ -434,14 +486,17 @@ class GuardianCore:
     def status(self, now: float) -> Dict[str, Any]:
         groups = {}
         for g in self.cfg.groups:
-            entry: Dict[str, Any] = {}
+            entry: Dict[str, Any] = {"motors": list(g.motors)}
             if g.name in self.q_cmd:
                 entry["q_cmd"] = [round(x, 6) for x in self.q_cmd[g.name]]
+                entry["kp_scale"] = round(self.kp_now.get(g.name, 1.0), 4)
+                entry["compliant"] = self._compliant(g.name)
             if self.last_meas is not None:
                 entry["q_meas"] = [round(float(self.last_meas[m]), 6) for m in g.motors]
             groups[g.name] = entry
         age = None if self.lowstate is None else round((now - self.lowstate.stamp) * 1000.0, 1)
         sp_age = None if self.target_received == -math.inf else round((now - self.target_received) * 1000.0, 1)
+        fw_age = None if self.foreign_writer_at == -math.inf else round((now - self.foreign_writer_at) * 1000.0, 1)
         return {
             "v": PROTOCOL_VERSION,
             "type": "status",
@@ -455,6 +510,7 @@ class GuardianCore:
             "scale": round(self.scale, 4),
             "lowstate_age_ms": age,
             "setpoint_age_ms": sp_age,
+            "foreign_writer_age_ms": fw_age,
             "frames": self.frames,
             "clamped": self.clamped,
             "rejects": dict(self.rejects),

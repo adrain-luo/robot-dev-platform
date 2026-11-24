@@ -1,7 +1,7 @@
 {
   "robot": "g1d",
   "status": "candidate",
-  "note": "G1D, rt/lowcmd. Gains = robots/g1d/robot.json; limits = g1_d.urdf (arms) and robot.json waist (torso_Joint, motor 12). Motor 13 has no documented joint on G1D, so it is held at its engage angle and never tracked. Speed 1.0 rad/s matches ArmLoop's hard cap. Not yet validated on hardware.",
+  "note": "G1D, rt/lowcmd. Gains = robots/g1d/robot.json, except waist motors 12/13 at the waist lock gains (lock_kp 200 / lock_kd 4) as ArmLoop holds them; compliant_kd = ArmLoop TEACH_KD; limits = g1_d.urdf (arms) and robot.json waist (torso_Joint, motor 12). Motor 13 has no documented joint on G1D, so it is held at its engage angle and never tracked. Speed 1.0 rad/s matches ArmLoop's hard cap. Not yet validated on hardware.",
   "channel": "lowcmd",
   "num_motors": 29,
   "release_motion_mode": true,
@@ -19,8 +19,8 @@
       100,
       40,
       40,
-      60,
-      40,
+      200,
+      200,
       40,
       40,
       40,
@@ -50,8 +50,8 @@
       2,
       1,
       1,
-      1,
-      1,
+      4,
+      4,
       1,
       1,
       1,
@@ -171,7 +171,8 @@
     "max_velocity_rad_s": 1.0,
     "max_acceleration_rad_s2": 10.0,
     "tau_ff_limit_nm": 8.0,
-    "max_target_jump_rad": 0.5
+    "max_target_jump_rad": 0.5,
+    "compliant_kd": 2.0
   },
   "timing": {
     "rate_hz": 200,
@@ -182,6 +183,7 @@
     "max_valid_for_ms": 1000,
     "blackbox_seconds": 10,
     "engage_ramp_s": 0.0,
-    "release_ramp_s": 3.0
+    "release_ramp_s": 3.0,
+    "stiffness_ramp_s": 0.25
   }
 }

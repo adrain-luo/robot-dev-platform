@@ -297,3 +297,96 @@ def test_arm_sdk_weight_ramps_and_gains_stay():
     r.tick(int(cfg.release_ramp_s / DT) + 2)
     weights = [f.weight for f in r.frames if f is not None]
     assert weights[-1] == 0.0 and r.core.state == "idle"
+
+
+# ------------------------------------------------------------- teach / stiffness
+def _kp(frame, m=RIGHT.motors[0]):
+    return frame.kp[m] / G1D.kp[m]
+
+
+def _drag(r, joint, total, seconds, tau=None):
+    """Move one right-arm joint by hand while the Box streams q = measured, kp 0."""
+    n = int(round(seconds / DT))
+    m = RIGHT.motors[joint]
+    for _ in range(n):
+        r.q[m] += total / n
+        body = {"kp_scale": 0.0}
+        if tau is not None:
+            body["tau_ff"] = tau
+        assert r.setpoint([r.q[x] for x in RIGHT.motors], **body) is None
+        r.tick()
+
+
+def test_teach_follows_the_hand_and_ramps_stiffness_down():
+    r = Rig()
+    r.engage()
+    r.tick(5)
+    assert r.setpoint(r.right(r.frames[-1]), kp_scale=0.0) is None
+    r.tick()
+    _drag(r, 0, 0.8, 0.5)  # 1.6 rad/s: faster than the tracking limit, must not lag
+    last = r.frames[-1]
+    assert r.right(last)[0] == pytest.approx(r.q[RIGHT.motors[0]], abs=1e-9)
+    assert r.core.q_cmd["right_arm"][0] == pytest.approx(0.2 + 0.8, abs=1e-9)
+    assert _kp(last) == 0.0
+    assert last.kd[RIGHT.motors[0]] == pytest.approx(G1D.compliant_kd)
+    # Ramped, not stepped: stiffness falls by at most dt / stiffness_ramp_s per frame.
+    kps = [_kp(f) for f in r.frames if f is not None]
+    steps = [a - b for a, b in zip(kps, kps[1:])]
+    assert max(steps) <= DT / G1D.stiffness_ramp_s + 1e-9
+    st = r.core.status(r.t)["groups"]["right_arm"]
+    assert st["compliant"] is True and st["kp_scale"] == 0.0 and st["motors"] == list(RIGHT.motors)
+    # The left arm was not in the setpoint: it stays stiff.
+    assert last.kp[G1D.group("left_arm").motors[0]] == G1D.kp[G1D.group("left_arm").motors[0]]
+
+
+def test_leaving_teach_holds_where_the_hand_left_it():
+    r = Rig()
+    r.engage()
+    r.tick(5)
+    _drag(r, 3, -0.4, 0.3)
+    left_at = [r.q[m] for m in RIGHT.motors]
+    for _ in range(int(0.5 / DT)):
+        assert r.setpoint(left_at, kp_scale=1.0) is None
+        r.tick()
+    after = r.frames[-1]
+    assert _kp(after) == pytest.approx(1.0)
+    assert after.kd[RIGHT.motors[3]] == pytest.approx(G1D.kd[RIGHT.motors[3]])
+    # No spring-back towards the pre-teach pose.
+    assert r.right(after) == pytest.approx(left_at, abs=1e-9)
+
+
+@pytest.mark.parametrize("how", ["expire", "link_lost", "estop"])
+def test_any_hold_restores_full_stiffness_at_the_measured_pose(how):
+    r = Rig()
+    r.engage()
+    r.tick(5)
+    _drag(r, 1, 0.3, 0.2)
+    where = [r.q[m] for m in RIGHT.motors]
+    if how == "estop":
+        assert r.send("estop", "panel") is None
+    alive = None if how == "link_lost" else "box"
+    r.tick(int(1.2 / DT), client_alive=alive)
+    last = r.frames[-1]
+    assert _kp(last) == pytest.approx(1.0)
+    assert r.right(last) == pytest.approx(where, abs=1e-9)
+    assert r.core.status(r.t)["groups"]["right_arm"]["compliant"] is False
+    expected = {"expire": "holding", "link_lost": "fault", "estop": "estop"}[how]
+    assert r.core.state == expected
+
+
+def test_waist_is_held_with_the_platform_lock_gains():
+    r = Rig()
+    r.engage()
+    f = r.tick(2)
+    assert (f.kp[12], f.kd[12]) == (200.0, 4.0)
+    assert (f.kp[13], f.kd[13]) == (200.0, 4.0)
+    assert f.q[13] == pytest.approx(0.07)
+
+
+def test_status_reports_foreign_writer_age():
+    r = Rig()
+    r.tick()
+    assert r.core.status(r.t)["foreign_writer_age_ms"] is None
+    r.core.note_foreign_writer(r.t)
+    r.tick(10, client_alive=None)
+    assert r.core.status(r.t)["foreign_writer_age_ms"] == pytest.approx(10 * DT * 1000.0, abs=0.2)
