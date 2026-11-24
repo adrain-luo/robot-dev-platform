@@ -34,7 +34,12 @@ class StateMixin:
             base["cmd_bus"] = mon.report()
         if self.loop is None:
             return base
-        base.update(self.loop.status())
+        loop_st = self.loop.status()
+        base.update(loop_st)
+        core = getattr(self, "motion_core", None)
+        if core is not None:
+            # 租约、epoch、急停锁存、安全状态
+            base["motion"] = core.status(loop_st)
         for a in (base.get("arms") or {}).values():
             th = a.get("payload_theta")
             if th:

@@ -12,6 +12,7 @@ from robot_platform.calib.payload.api import PayloadAPI
 from robot_platform.calib.tcp import TcpSession
 from robot_platform.control.arm_loop import ArmLoop, PermissionErrorMotion
 from robot_platform.control.fk_scene import RobotKinematics
+from robot_platform.control.motion_core import MotionCore
 from robot_platform.core.runtime_config import RuntimeConfig
 from robot_platform.hw.backends.base import Backend, LiftDriver, LiftReader, StateSource
 from robot_platform.hw.lift_control import LiftController
@@ -47,6 +48,8 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         self._lift_ctrl: Optional[LiftController] = None
         self._chassis_ctrl = None  # 底盘遥控（web/api/chassis.py），第一次遥控时才建
         self.loop: Optional[ArmLoop] = None
+        # 运控核心：任务只经它的租约动手臂；接管 / 释放 / 急停也走它（control/motion_core.py）
+        self.motion_core: Optional[MotionCore] = None
         self.cmd_monitor = None
         self._lock = threading.Lock()
         self.payload = PayloadAPI(self)
@@ -94,6 +97,7 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
                         base_link=self.settings.base_link,
                         torso_imu=torso_imu,
                     )
+                    self.motion_core = MotionCore(self.loop)
                     self.payload.restore(self.loop)
                     self.attach_collision_guard(self.loop)
             return self._reader
@@ -107,3 +111,9 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         if self.loop is None:
             raise PermissionErrorMotion("未开 --allow-real-motion，不能发令")
         return self.loop
+
+    def motion(self) -> MotionCore:
+        """任务拿运控客户端（进程内就是运控核心本身）；只读模式下抛 PermissionErrorMotion。"""
+        self.require_loop()
+        assert self.motion_core is not None
+        return self.motion_core

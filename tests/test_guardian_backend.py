@@ -498,10 +498,13 @@ def test_guardian_reset_route_resets_then_engages():
     from robot_platform.web import routes
 
     calls = []
-    app = SimpleNamespace(backend=SimpleNamespace(reset_guardian=lambda: calls.append("reset")))
-    loop = SimpleNamespace(engage=lambda: calls.append("engage"))
+    # 重新接管经运控核心（它会先撤销全部租约），不直接调 ArmLoop
+    core = SimpleNamespace(engage=lambda: calls.append("core.engage"))
+    app = SimpleNamespace(backend=SimpleNamespace(reset_guardian=lambda: calls.append("reset")),
+                          motion=lambda: core)
+    loop = SimpleNamespace(engage=lambda: calls.append("loop.engage"))
     routes._guardian_reset(app, loop, {})
-    assert calls == ["reset", "engage"]
+    assert calls == ["reset", "core.engage"]
     with pytest.raises(PermissionErrorMotion):
         routes._guardian_reset(SimpleNamespace(backend=object()), loop, {})
 

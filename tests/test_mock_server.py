@@ -51,6 +51,7 @@ def test_engage_target_hold_release(mock_server):
     a = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"][3]
     b = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"][3]
     assert a == b and abs(a - tgt2[3]) > 0.05
+    assert c.post("/api/estop/reset")[0] == 200
 
     code, d = c.post("/api/release")
     assert code == 200 and not d["ctrl"]["engaged"]
@@ -244,4 +245,32 @@ def test_hold_stops_multi_pose_tasks(mock_server):
     d2 = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"]
     assert d1 == d2, "急停后手臂又被发了新目标"
     c.post("/api/posesets/delete", {"name": name})
+    assert c.post("/api/estop/reset")[0] == 200
+    c.post("/api/release")
+
+
+def test_estop_latches_until_reset(mock_server):
+    """页面急停锁存：手动走点 / 拖拽 / 动腰都被拒（403），接管释放照常且不解除锁存；复位后恢复。"""
+    c = mock_server
+    assert c.post("/api/engage")[0] == 200
+    q0 = [j["q_rad"] for j in c.get("/api/scene")["arms"]["right"]["joints"]]
+    code, d = c.post("/api/hold")
+    assert code == 200
+    m = d["ctrl"]["motion"]
+    assert m["latched"] is True and m["safety"] == "estop_latched" and "急停已锁定" in m["latch_reason"]
+    assert d["ctrl"]["inhibited"] == m["latch_reason"]
+    for path, body in (("/api/target", {"q": q0, "arm": "right"}),
+                       ("/api/teach", {"arm": "left", "enabled": True}),
+                       ("/api/waist", {"yaw_deg": 0.0})):
+        code, d = c.post(path, body)
+        assert code == 403 and "急停已锁定" in d["error"], (path, d)
+    epoch = c.get("/api/scene")["ctrl"]["motion"]["epoch"]
+    assert c.post("/api/release")[0] == 200
+    code, d = c.post("/api/engage")
+    assert code == 200 and d["ctrl"]["motion"]["latched"] is True
+    assert d["ctrl"]["motion"]["epoch"] == epoch + 2  # 释放、接管各撤销一次
+    assert c.post("/api/target", {"q": q0, "arm": "right"})[0] == 403
+    code, d = c.post("/api/estop/reset")
+    assert code == 200 and d["ctrl"]["motion"]["latched"] is False and d["ctrl"]["inhibited"] is None
+    assert c.post("/api/target", {"q": q0, "arm": "right"})[0] == 200
     c.post("/api/release")

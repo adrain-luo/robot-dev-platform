@@ -252,14 +252,17 @@ def _waist_step(app, loop, body: Dict[str, Any]) -> None:
 
 
 def _hold(app, loop, body: Dict[str, Any]) -> None:
-    """急停：先叫停所有会连续发目标的任务，再把手臂 / 腰锁在当前实测角。
+    """急停（锁存）：底盘停、运控核心急停、立柱停。
 
-    任务只是被通知停止，线程要等下一次检查才退出；所以先置停止标志、最后才锁目标，
-    避免任务在锁目标之后又发出下一个点。各项互不影响：某项出错也继续往下停。
+    运控核心急停在一步里撤销全部租约（任务的下一步一律被拒）、两手锁在实测角、
+    禁止一切新运动，直到「复位急停」。各项互不影响：某项出错也继续往下停，最后再报错。
+    还没改用租约的任务先按老办法通知停止（逐个改完后这里只剩底盘、核心、立柱）。
     """
     app.motion_stop.set()  # 空间点碰点、工作姿态调用、单姿态到位
+    failed: List[BaseException] = []
     stoppers = (
         lambda: app.chassis_stop("急停"),  # 底盘最先停（它不受手臂接管影响）
+        lambda: app.motion().estop("页面急停"),
         app.board.request_stop,          # 棋盘触摸
         app.payload.stop_tasks,          # 负载测量、到位对比
         app.handeye.stop_capture,        # 手眼采集
@@ -268,20 +271,29 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
     for stop in stoppers:
         try:
             stop()
-        except Exception:
+        except Exception as exc:
             traceback.print_exc()
-    loop.estop_hold()
+            failed.append(exc)
+    if failed:
+        raise failed[0]
+
+
+def _estop_reset(app, loop, body: Dict[str, Any]) -> None:
+    """解除运控核心的急停锁存（现场确认安全后；页面在调用前要让人确认）。手臂仍保持当前姿态。
+
+    不碰守护层：守护层自己的急停 / 故障锁存走 /api/guardian/reset。"""
+    app.motion().reset_estop()
 
 
 def _guardian_reset(app, loop, body: Dict[str, Any]) -> None:
     """守护层急停 / 故障锁存后：复位守护层，再从实测角重新接管。只有 guardian 后端有。
 
-    复位是现场确认安全之后的操作：页面在调用前要让人确认。"""
+    复位是现场确认安全之后的操作：页面在调用前要让人确认。不解除运控核心的急停锁存。"""
     reset = getattr(app.backend, "reset_guardian", None)
     if reset is None:
         raise PermissionErrorMotion("当前后端不经守护层，没有守护层可复位")
     reset()
-    loop.engage()
+    app.motion().engage()
 
 
 def _teach(app, loop, body: Dict[str, Any]) -> None:
@@ -322,10 +334,12 @@ def _waist(app, loop, body: Dict[str, Any]) -> None:
 
 
 ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], Optional[Dict[str, Any]]]] = {
-    "/api/engage": lambda app, loop, body: loop.engage(),
-    "/api/release": lambda app, loop, body: loop.release(),
+    # 接管 / 释放经运控核心：会先撤销全部租约
+    "/api/engage": lambda app, loop, body: app.motion().engage(),
+    "/api/release": lambda app, loop, body: app.motion().release(),
     "/api/guardian/reset": _guardian_reset,
     "/api/hold": _hold,
+    "/api/estop/reset": _estop_reset,
     "/api/teach": _teach,
     "/api/gravity": lambda app, loop, body: loop.set_gravity_ff(bool(body.get("enabled", True))),
     "/api/gravity-imu": lambda app, loop, body: loop.set_gravity_imu(bool(body.get("enabled", True))),

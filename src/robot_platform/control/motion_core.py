@@ -455,10 +455,11 @@ class MotionCore:
                 self._hist.popleft()
 
     # ------------------------------------------------------------ 状态
-    def safety(self) -> SafetyState:
+    def safety(self, loop_status: Optional[dict] = None) -> SafetyState:
+        """loop_status：调用方刚取过的 ArmLoop.status()（省一次）。"""
         if self._latched:
             return SafetyState.ESTOP_LATCHED
-        st = self._loop.status()
+        st = loop_status if loop_status is not None else self._loop.status()
         if not st["engaged"]:
             return SafetyState.RELEASED
         info = st.get("commander") or {}
@@ -516,8 +517,8 @@ class MotionCore:
             raise rejection(_reject(0, Reason.UNSUPPORTED, f"运控核心 v1 不管 {Resource(resource).value}"))
         return arm
 
-    def status(self) -> Dict[str, Any]:
-        """给页面看的运控核心状态。"""
+    def status(self, loop_status: Optional[dict] = None) -> Dict[str, Any]:
+        """给页面看的运控核心状态。loop_status 同 safety()。"""
         with self._lock:
             leases = [
                 {"lease_id": r.lease.lease_id, "owner": r.lease.owner, "token": r.token,
@@ -533,7 +534,7 @@ class MotionCore:
             "epoch": epoch,
             "latched": latched is not None,
             "latch_reason": latched,
-            "safety": self.safety().value,
+            "safety": self.safety(loop_status).value,
             "leases": leases,
             "last_revoke": last,
         }
