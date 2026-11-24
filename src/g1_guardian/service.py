@@ -152,10 +152,18 @@ class GuardianService:
             kind = msg.get("type")
             reason = None
             if kind == "engage" and not self.output.prepared:
-                try:
-                    self.output.prepare()
-                except Exception as exc:  # noqa: BLE001
-                    reason = self.core._reject(now, msg, f"prepare_failed:{exc}"[:120])
+                # Feed the newest lowstate first: the precheck must see the robot as it is now.
+                ls = self.lowstate.latest()
+                if ls is not None:
+                    self.core.observe(now, ls)
+                pre = self.core.precheck_engage(now) if self.core.state == "idle" else None
+                if pre:
+                    reason = self.core._reject(now, msg, pre)
+                else:
+                    try:
+                        self.output.prepare()
+                    except Exception as exc:  # noqa: BLE001
+                        reason = self.core._reject(now, msg, f"prepare_failed:{exc}"[:120])
             if reason is None:
                 reason = self.core.handle(msg, now)
             if kind != "setpoint" or (reason is not None and now - self._last_reject_ack >= REJECT_ACK_MIN_INTERVAL_S):

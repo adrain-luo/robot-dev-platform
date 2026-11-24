@@ -49,6 +49,8 @@ ENGAGE_LIMIT_TOLERANCE_RAD = 0.05
 # Stiffness comes back this fast when E-STOP interrupts a release.
 ESTOP_RESTORE_S = 0.3
 FOREIGN_WRITER_WINDOW_S = 1.0
+# An idle (absent) motor reads exactly 0; anything above this is a real joint.
+IDLE_MOTOR_TOLERANCE_RAD = 1e-4
 
 
 @dataclass
@@ -228,6 +230,18 @@ class GuardianCore:
             self.state = "idle"
         return None
 
+    def precheck_engage(self, now: float) -> Optional[str]:
+        """Checks that must pass before the output may release the motion mode.
+
+        The service calls this before ``Output.prepare()`` on the first engage;
+        ``handle`` repeats it for every takeover from idle."""
+        if not self._fresh(now) or self.last_meas is None:
+            return "no_lowstate"
+        busy = [m for m in self.cfg.idle_motors if abs(float(self.last_meas[m])) > IDLE_MOTOR_TOLERANCE_RAD]
+        if busy:
+            return "motors_not_idle:" + ",".join(str(m) for m in busy)
+        return None
+
     def _check_engage_limits(self) -> Optional[str]:
         for g in self.cfg.groups:
             for i, (q, lo, hi) in enumerate(zip(self._measured(g), g.lower, g.upper)):
@@ -245,6 +259,10 @@ class GuardianCore:
                 return None  # idempotent: the owner asks for the current epoch
             if now - self.owner_last_msg <= self.cfg.link_timeout_s:
                 return self._reject(now, msg, "owned_by_other")
+        if self.state == "idle":
+            pre = self.precheck_engage(now)
+            if pre:
+                return self._reject(now, msg, pre)
         if not self._fresh(now) or self.last_meas is None:
             return self._reject(now, msg, "no_lowstate")
         if now - self.foreign_writer_at <= FOREIGN_WRITER_WINDOW_S:
@@ -388,14 +406,19 @@ class GuardianCore:
         return None
 
     # --------------------------------------------------------------------- step
-    def step(self, now: float, lowstate: Optional[LowStateView]) -> Optional[Frame]:
-        dt = 0.0 if self.last_step is None else min(max(now - self.last_step, 0.0), 3.0 * self.cfg.period_s)
-        self.last_step = now
-        if lowstate is not None and (self.lowstate is None or lowstate.stamp >= self.lowstate.stamp):
+    def observe(self, now: float, lowstate: LowStateView) -> None:
+        """Take in a lowstate message (newer than the last one)."""
+        if self.lowstate is None or lowstate.stamp >= self.lowstate.stamp:
             self.lowstate = lowstate
             if now - lowstate.stamp <= self.cfg.lowstate_stale_s:
                 self.last_meas = list(lowstate.q)
                 self.mode_machine = int(lowstate.mode_machine)
+
+    def step(self, now: float, lowstate: Optional[LowStateView]) -> Optional[Frame]:
+        dt = 0.0 if self.last_step is None else min(max(now - self.last_step, 0.0), 3.0 * self.cfg.period_s)
+        self.last_step = now
+        if lowstate is not None:
+            self.observe(now, lowstate)
         if self.state == "idle":
             return None
 

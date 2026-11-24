@@ -12,6 +12,7 @@
 | Box 失联（`link_timeout_ms` 内没有任何消息） | 减速保持，锁存 `link_lost`；Box 重新 `engage` 后继续 |
 | lowstate 过期 | 保持最后指令，锁存 `stale_lowstate` |
 | 话题上出现别人的帧 | 拒绝接管；已接管时锁存 `foreign_writer` |
+| 接管时 `idle_motors`（G1D：0–11 号腿部电机）有读数 | 拒绝接管（`motors_not_idle`），**在退出运控之前**就拒绝：连着的可能是站着的双足 G1，退出运控它会摔 |
 | E-STOP（任何客户端） | 减速保持并锁存；设定一律拒绝，直到 `reset`；`reset` 后旧 epoch 的设定仍被拒绝，任务必须重新 `engage` |
 | 设定越限 | 位置钳到限位内；与当前指令相差超过 `max_target_jump_rad` 直接拒绝；前馈钳到 `tau_ff_limit_nm` |
 | 写帧异常 | 计数、下一拍重试，循环不退出 |

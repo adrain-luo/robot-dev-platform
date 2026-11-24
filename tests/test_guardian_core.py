@@ -390,3 +390,14 @@ def test_status_reports_foreign_writer_age():
     r.core.note_foreign_writer(r.t)
     r.tick(10, client_alive=None)
     assert r.core.status(r.t)["foreign_writer_age_ms"] == pytest.approx(10 * DT * 1000.0, abs=0.2)
+
+
+def test_engage_refused_when_leg_motors_are_not_idle():
+    r = Rig()
+    r.q[3] = 0.63  # a bent knee: this is a standing biped, not a G1D
+    r.tick(1, client_alive=None)
+    assert r.send("engage") == "motors_not_idle:3"
+    assert r.core.state == "idle"
+    r.q[3] = 0.0
+    r.tick(1, client_alive=None)
+    assert r.send("engage") is None

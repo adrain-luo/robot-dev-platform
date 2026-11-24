@@ -220,3 +220,14 @@ def test_graceful_shutdown_releases_before_exiting(tmp_path):
     finally:
         c.close()
         svc.close()
+
+
+def test_idle_motor_precheck_runs_before_the_motion_mode_is_released(rig):
+    svc, robot, client, _ = rig
+    with robot.lock:
+        robot.q[0] = -0.37  # hip pitch of a standing biped
+    c = client()
+    with pytest.raises(GuardianRejected) as exc:
+        c.engage(timeout=2.0)
+    assert exc.value.reason == "motors_not_idle:0"
+    assert robot.prepare_calls == 0, "ReleaseMode must not run on a robot that is not idle"

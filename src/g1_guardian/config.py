@@ -46,6 +46,10 @@ class GuardianConfig:
     kd: Tuple[float, ...]
     groups: Tuple[GroupConfig, ...]
     hold_at_engage: Tuple[int, ...] = ()
+    # Motors that must read exactly idle before the guardian takes over (G1D
+    # has no legs: a leg motor with an angle means this is a standing biped,
+    # and releasing its motion mode would drop it).
+    idle_motors: Tuple[int, ...] = ()
     status: str = "candidate"
     rate_hz: float = 200.0
     lowstate_stale_s: float = 0.1
@@ -150,6 +154,12 @@ def config_from_dict(d: Dict[str, Any]) -> GuardianConfig:
             raise ConfigError(f"hold_at_engage: motor {m} out of range")
         if m in seen:
             raise ConfigError(f"hold_at_engage: motor {m} is also in a group")
+    idle_motors = tuple(int(m) for m in d.get("idle_motors", []))
+    for m in idle_motors:
+        if not 0 <= m < n:
+            raise ConfigError(f"idle_motors: motor {m} out of range")
+        if m in seen or m in hold_at_engage:
+            raise ConfigError(f"idle_motors: motor {m} is also driven")
     status = str(d.get("status", "candidate"))
     if status not in ("candidate", "draft", "validated"):
         raise ConfigError("status must be candidate, draft or validated")
@@ -166,6 +176,7 @@ def config_from_dict(d: Dict[str, Any]) -> GuardianConfig:
         kd=kd,
         groups=tuple(groups),
         hold_at_engage=hold_at_engage,
+        idle_motors=idle_motors,
         status=status,
         rate_hz=float(timing.get("rate_hz", 200.0)),
         lowstate_stale_s=float(timing.get("lowstate_stale_ms", 100)) / 1000.0,
