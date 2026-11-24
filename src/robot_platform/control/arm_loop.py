@@ -695,6 +695,9 @@ class ArmView:
     def set_target(self, q: Sequence[float], detour: bool = False) -> Optional[dict]:
         return self.loop.set_target(q, arm=self.arm, owner=self.owner, detour=detour)
 
+    # 过渡用：和租约句柄（control/motion_core.CoreLease）同名，让还没改用租约的调用方能用同一套到位等待
+    move_to = set_target
+
     def arm_sample(self, wait: bool = False) -> dict:
         return self.loop.arm_sample(self.arm, wait=wait)
 

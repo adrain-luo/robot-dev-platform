@@ -1,6 +1,6 @@
 """手眼 / 相机接口 HandEyeAPI：由采集、求解、相机点云、调试口几个 mixin 组成，这里只有状态与路由。
 
-走点发令调用 control.arm_loop 的控制循环，关节从已有的 LowStateReader 读。
+走点发令经运控核心的租约（control/motion_core.py），关节从已有的 LowStateReader 读。
 """
 
 from __future__ import annotations

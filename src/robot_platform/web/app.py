@@ -98,7 +98,7 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
                         torso_imu=torso_imu,
                     )
                     self.motion_core = MotionCore(self.loop)
-                    self.payload.restore(self.loop)
+                    self.payload.restore(self.motion_core)
                     self.attach_collision_guard(self.loop)
             return self._reader
 

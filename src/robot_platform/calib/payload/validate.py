@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -116,35 +115,35 @@ def correction_thresholds(db: Dict, band_deg=None, n: int = 7) -> np.ndarray:
     return np.full(n, float(db["err_max_deg"]))
 
 
-def snapshot_payload(loop) -> Optional[Dict]:
-    th = loop.payload_theta()
-    st = loop.status()
+def snapshot_payload(lease) -> Optional[Dict]:
+    th = lease.payload_theta()
+    st = lease.status()
     if not th:
         return None
     m, c = iden.theta_to_payload(th)
     return {"theta": th, "mass_kg": m, "com_m": c, "name": st.get("payload_name")}
 
 
-def apply_payload(loop, p: Optional[Dict]) -> None:
+def apply_payload(lease, p: Optional[Dict]) -> None:
     if not p or not p.get("theta"):
-        loop.set_payload_theta(None)
+        lease.set_payload_theta(None)
         return
-    loop.set_payload_theta(p["theta"], p.get("name"))
+    lease.set_payload_theta(p["theta"], p.get("name"))
 
 
-def goto_with_correction(loop, grav, target, still, iters, stop, deadband, band_deg, on_phase=None, on_log=None) -> Dict:
+def goto_with_correction(lease, grav, target, still, iters, stop, deadband, band_deg, on_phase=None, on_log=None) -> Dict:
     db = {**CORRECTION_DEADBAND, **(deadband or {})}
     target = np.asarray(target, float)
     n = target.size
     thr = correction_thresholds(db, band_deg, n)
     t0 = time.monotonic()
-    r0 = iden.wait_settle(loop, target, stop, still)
-    samp = loop.arm_sample(wait=False)
+    r0 = iden.wait_settle(lease, target, stop, still)
+    samp = lease.arm_sample(wait=False)
     q_final = np.asarray(samp["q_meas"], float)
     m = _metrics(grav, q_final, target)
     steps = [{"iter": 0, **m, "t_s": r0["settle_s"], "timed_out": r0["timed_out"]}]
-    lo, hi = loop.limits[:, 0], loop.limits[:, 1]
-    cmd = np.asarray(loop.status()["cmd_rad"], float)
+    lo, hi = lease.limits[:, 0], lease.limits[:, 1]
+    cmd = np.asarray(lease.status()["cmd_rad"], float)
     best = {"iter": 0, "cmd": cmd.copy(), **m}
     applied, skipped_at, stop_reason, last_step = 0, None, None, False
     still_short = {**still, "still_window_s": min(0.3, float(still.get("still_window_s", 0.5)))}
@@ -168,14 +167,14 @@ def goto_with_correction(loop, grav, target, still, iters, stop, deadband, band_
         full = ratio >= float(db.get("soft_ratio", 2.0))
         g = np.where(full, 1.0, np.where(ratio > 1.0, float(db.get("soft_gain", 0.5)), 0.0))
         step_deg = np.clip(g * e_deg, -float(db["step_max_deg"]), float(db["step_max_deg"]))
-        cmd = np.asarray(loop.status()["cmd_rad"], float)
+        cmd = np.asarray(lease.status()["cmd_rad"], float)
         new_cmd = np.clip(cmd - step_deg * math.pi / 180, lo, hi)
-        loop.set_target(new_cmd.tolist())
+        lease.move_to(new_cmd.tolist())
         last_step = not np.any(full)
         time.sleep(0.1)
-        iden.wait_cmd_caught(loop, stop)
-        still_r = iden.wait_still(loop, stop, still_short)
-        samp = loop.arm_sample(wait=False)
+        iden.wait_cmd_caught(lease, stop)
+        still_r = iden.wait_still(lease, stop, still_short)
+        samp = lease.arm_sample(wait=False)
         q_final = np.asarray(samp["q_meas"], float)
         m = _metrics(grav, q_final, target)
         applied += 1
@@ -193,11 +192,11 @@ def goto_with_correction(loop, grav, target, still, iters, stop, deadband, band_
             and m["err_max_deg"] > best["err_max_deg"] + float(db.get("revert_margin_deg", 0.05))):
         if on_log:
             on_log(f"回退到第 {best['iter']} 步指令重测")
-        loop.set_target(best["cmd"].tolist())
+        lease.move_to(best["cmd"].tolist())
         time.sleep(0.1)
-        iden.wait_cmd_caught(loop, stop)
-        still_r = iden.wait_still(loop, stop, still_short)
-        samp = loop.arm_sample(wait=False)
+        iden.wait_cmd_caught(lease, stop)
+        still_r = iden.wait_still(lease, stop, still_short)
+        samp = lease.arm_sample(wait=False)
         q_final = np.asarray(samp["q_meas"], float)
         m = _metrics(grav, q_final, target)
         reverted = {"to_iter": best["iter"], **m}
@@ -246,12 +245,14 @@ def summarize(rows: List[Dict], order: Optional[List[str]] = None) -> Dict:
 
 
 class CompareTask:
-    def __init__(self, loop, poses_cfg: Dict, urdf_path: Path, base_link: str,
+    """到位对比。lease 是这只手的租约：任务结束时归还；急停撤销租约时任务停下。"""
+
+    def __init__(self, lease, poses_cfg: Dict, urdf_path: Path, base_link: str,
                  log: Callable[[str], None], on_done: Callable[[Dict], None],
                  still: Optional[Dict] = None, modes: Optional[List[str]] = None,
                  payload: Optional[Dict] = None, correction_iters: int = 2,
                  on_row: Optional[Callable[[Dict, Dict], None]] = None):
-        self.loop = loop
+        self.lease = lease
         self.poses_cfg = poses_cfg
         self.urdf_path = urdf_path
         self.base_link = base_link
@@ -262,7 +263,8 @@ class CompareTask:
         self.modes = modes or ["baseline", "payload"]
         self.payload = payload
         self.correction_iters = int(correction_iters)
-        self.stop = threading.Event()
+        # 租约被撤销（急停、重新接管、释放）或任务自己叫停时置位
+        self.stop = lease.cancelled
         self.phase = "待命"
         self.progress = [0, 0]
         self.rows: List[Dict] = []
@@ -270,29 +272,24 @@ class CompareTask:
         self.band_info: Dict = {}
         self.session = f"{time.strftime('%Y%m%d_%H%M%S')}_{poses_cfg['arm']}"
 
+    def request_stop(self) -> None:
+        self.lease.cancel()
+
     def run(self) -> None:
-        # 占用姿态集那只手：期间别的来源给它发目标会被拒绝；另一只手照常可用
-        try:
-            claim = self.loop.claim()
-            claim.__enter__()
-        except Exception as e:
-            self.phase = "失败"
-            self.on_done({"ok": False, "error": f"{type(e).__name__}: {e}", "session": self.session,
-                          "rows": self.rows, "summary": self.summary})
-            return
+        # 租约占着姿态集那只手：期间别的来源给它发目标会被拒绝；另一只手照常可用
         try:
             self._run()
         finally:
-            claim.__exit__(None, None, None)
+            self.lease.release()
 
     def _run(self) -> None:
-        original = snapshot_payload(self.loop)
+        original = snapshot_payload(self.lease)
         try:
             poses = self.poses_cfg.get("poses") or []
             if len(poses) < 1:
                 raise ValueError("姿态集是空的")
             arm = self.poses_cfg["arm"]
-            st = self.loop.status()
+            st = self.lease.status()
             if not st.get("engaged") or st.get("float"):
                 raise RuntimeError("先接管并退出拖拽再对比")
             grav = ArmGravity(arm, self.urdf_path, self.base_link)
@@ -322,21 +319,21 @@ class CompareTask:
             labels = [v["label"] for v in variants]
             total = len(variants) * len(poses)
             self.progress = [0, total]
-            self.log(f"对比 {len(poses)} 点 × {len(variants)} 方案，会话 {self.session}，限速 {self.loop.max_speed:.3f}")
+            self.log(f"对比 {len(poses)} 点 × {len(variants)} 方案，会话 {self.session}，限速 {self.lease.max_speed:.3f}")
 
             for v in variants:
-                apply_payload(self.loop, v["payload"])
+                apply_payload(self.lease, v["payload"])
                 self.log(f"方案「{v['label']}」")
                 home = self.poses_cfg.get("home_q")
                 if home:
                     self.phase = f"{v['label']} 回 home"
-                    iden.wait_settle(self.loop, home, self.stop, self.still)
+                    iden.wait_settle(self.lease, home, self.stop, self.still)
                 for i, pose in enumerate(poses):
                     if self.stop.is_set():
                         raise RuntimeError("已停止")
                     self.phase = f"{v['label']} {pose.get('name')}"
                     r = goto_with_correction(
-                        self.loop, grav, pose["q"], self.still, v["iters"], self.stop,
+                        self.lease, grav, pose["q"], self.still, v["iters"], self.stop,
                         CORRECTION_DEADBAND, band.for_pose(pose.get("name")),
                         on_phase=lambda s, lab=v["label"], pn=pose.get("name"): setattr(self, "phase", f"{lab} {pn} {s}"),
                         on_log=lambda s, lab=v["label"], pn=pose.get("name"): self.log(f"{lab} {pn}: {s}"),
@@ -356,7 +353,7 @@ class CompareTask:
                         self.on_row(row, self.summary)
                     self.log(f"{v['label']} {pose.get('name')}: {fmt_max_joint(r)}  末端 {r['ee']['pos_mm']:.1f} mm")
                 if home:
-                    iden.wait_settle(self.loop, home, self.stop, self.still)
+                    iden.wait_settle(self.lease, home, self.stop, self.still)
 
             result = {
                 "ok": True, "session": self.session, "arm": arm,
@@ -375,6 +372,6 @@ class CompareTask:
                           "rows": self.rows, "summary": self.summary})
         finally:
             try:
-                apply_payload(self.loop, original)
+                apply_payload(self.lease, original)
             except Exception:
                 pass

@@ -143,6 +143,11 @@ class MotionCore:
         """应用负载补偿（配置，不是运动目标；任务内改用租约上的同名方法）。"""
         self._loop.set_payload_theta(theta, name, arm=arm)
 
+    def manual_target(self, q: Sequence[float], *, arm: str, detour: bool = False) -> Optional[dict]:
+        """手动来源（页面走点、姿态集「到这一点」）：不占用这只手。这只手被租约占着、
+        在拖拽、急停锁存时 ArmLoop 拒绝（PermissionErrorMotion）。返回绕行规划摘要（没绕行为 None）。"""
+        return self._loop.set_target(q, arm=arm, detour=detour)
+
     def arm_view_status(self, arm: str) -> dict:
         """整机状态加这只手的字段（和旧 ArmView.status 一样的形状）。"""
         st = self._loop.status()

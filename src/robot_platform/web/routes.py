@@ -264,8 +264,6 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
         lambda: app.chassis_stop("急停"),  # 底盘最先停（它不受手臂接管影响）
         lambda: app.motion().estop("页面急停"),
         app.board.request_stop,          # 棋盘触摸
-        app.payload.stop_tasks,          # 负载测量、到位对比
-        app.handeye.stop_capture,        # 手眼采集
         lambda: app.lift_post("/api/lift/stop", {}),
     )
     for stop in stoppers:

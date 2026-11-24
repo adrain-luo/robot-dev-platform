@@ -1,4 +1,4 @@
-"""末端负载、姿态集、到位对比的接口。发令仍调用 control.arm_loop 的控制循环。"""
+"""末端负载、姿态集、到位对比的接口。走点任务经运控核心的租约发令（control/motion_core.py）。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from robot_platform.calib.payload import friction
 from robot_platform.calib.payload import identify as iden
 from robot_platform.calib.payload import poses as posesets
 from robot_platform.calib.payload import validate as vali
-from robot_platform.control.arm_loop import ArmLoop, PermissionErrorMotion
 
 
 class PayloadAPI:
@@ -27,19 +26,23 @@ class PayloadAPI:
         }
         self.still = dict(iden.DEFAULT_STILL)
 
-    def restore(self, loop: ArmLoop) -> None:
-        """两只手各自带上最后应用的负载补偿。"""
-        for arm in loop.arm_names:
+    def _core(self):
+        """运控核心；只读模式（没开 --allow-real-motion）为 None。"""
+        return getattr(self.app, "motion_core", None)
+
+    def restore(self, motion) -> None:
+        """两只手各自带上最后应用的负载补偿（motion：运控核心）。"""
+        for arm in motion.arm_names:
             d = iden.load_payload(arm)
             if d and d.get("theta"):
-                loop.set_payload_theta(d["theta"], d.get("name"), arm=arm)
+                motion.set_payload_theta(d["theta"], d.get("name"), arm=arm)
 
     def apply_payload_dict(self, d: Dict[str, Any], *, name: Optional[str] = None,
                            arm: Optional[str] = None) -> Dict[str, Any]:
         """写入该臂的「最后应用」快照，并立刻进这只手的前馈（两只手都在控制循环里）。"""
-        loop = self.app.require_loop()
+        motion = self.app.motion()
         arm = str(d.get("arm") or arm or "")
-        if arm not in loop.arm_names:
+        if arm not in motion.arm_names:
             raise ValueError("这套补偿没有记是哪只手的")
         theta = d.get("theta")
         if not theta:
@@ -55,16 +58,17 @@ class PayloadAPI:
         if saved["mass_kg"] is None:
             saved["mass_kg"], saved["com_m"] = iden.theta_to_payload(theta)
         iden.save_payload(arm, saved)
-        loop.set_payload_theta(theta, name, arm=arm)
+        motion.set_payload_theta(theta, name, arm=arm)
         saved["live"] = True
         return saved
 
     def stop_tasks(self) -> None:
-        """急停用：叫停正在跑的负载测量 / 到位对比（它们会在下一次检查时抛「已停止」，不再发新目标）。"""
+        """「停止」按钮：叫停正在跑的负载测量 / 到位对比（下一次检查时抛「已停止」，不再发新目标）。
+        急停不用它：急停撤销租约，任务自己就停了。"""
         with self._id_lock:
             task = self._id_task
         if task is not None:
-            task.stop.set()
+            task.request_stop()
 
     def identify_status(self) -> Dict[str, Any]:
         with self._id_lock:
@@ -97,9 +101,10 @@ class PayloadAPI:
         st["applied_left"] = iden.applied_name_for_arm("left")
         st["applied_right"] = iden.applied_name_for_arm("right")
         # 两只手各有一套补偿：页面按姿态集的手取 applied_left / applied_right
-        if self.app.loop is not None:
-            for arm_name in self.app.loop.arm_names:
-                live = self.app.loop.arm_status(arm_name).get("payload_name")
+        core = self._core()
+        if core is not None:
+            for arm_name in core.arm_names:
+                live = core.arm_status(arm_name).get("payload_name")
                 if live:
                     st[f"applied_{arm_name}"] = live
         st["kind"] = self._id.get("kind")
@@ -135,8 +140,9 @@ class PayloadAPI:
             arm = (q.get("arm") or ["right"])[0]
             ps = (q.get("poseset") or [None])[0]
             kp = None
-            if self.app.loop is not None and arm in self.app.loop.arm_names:
-                kp = self.app.loop.arm_status(arm).get("kp_vec")
+            core = self._core()
+            if core is not None and arm in core.arm_names:
+                kp = core.arm_status(arm).get("kp_vec")
             band = friction.table_for(arm, ps, kp)
             return {"ok": True, "band": band.to_dict()}
         if path == "/api/validate/list":
@@ -181,12 +187,12 @@ class PayloadAPI:
             )
             return {"ok": True, "set": d, "list": posesets.list_sets()}
         if path == "/api/posesets/goto":
-            loop = self.app.require_loop()
+            motion = self.app.motion()
             d = posesets.load_set(str(body["name"]))
             i = int(body["index"])
             if not (0 <= i < len(d["poses"])):
                 raise IndexError("姿态下标越界")
-            plan = loop.set_target(d["poses"][i]["q"], arm=d["arm"], detour=True)
+            plan = motion.manual_target(d["poses"][i]["q"], arm=d["arm"], detour=True)
             out = {"ok": True, "ctrl": self.app.ctrl_status()}
             if plan:
                 out["detour"] = plan
@@ -203,13 +209,10 @@ class PayloadAPI:
                     self.still[k] = float(body[k])
             return {"ok": True, "identify": self.identify_status()}
         if path == "/api/identify/stop":
-            with self._id_lock:
-                task = self._id_task
-            if task:
-                task.stop.set()
+            self.stop_tasks()
             return {"ok": True, "identify": self.identify_status()}
         if path == "/api/identify/measure":
-            loop = self.app.require_loop()
+            motion = self.app.motion()
             with self._id_lock:
                 if self._id["running"]:
                     raise RuntimeError("已有任务在跑")
@@ -228,7 +231,13 @@ class PayloadAPI:
                         + ("测量完成 " + str(r.get("session")) if r.get("ok") else str(r.get("error")))
                     )
 
-            task = iden.MeasureTask(loop.view(d["arm"], "负载测量"), d, urdf, base, self._log, done, still=self.still)
+            # 租约：占住姿态集那只手直到任务结束（没接管、在拖拽、被占用、急停锁定时这里就拒绝）
+            lease = motion.lease_arm(d["arm"], "负载测量")
+            try:
+                task = iden.MeasureTask(lease, d, urdf, base, self._log, done, still=self.still)
+            except BaseException:
+                lease.release()
+                raise
             with self._id_lock:
                 self._id.update(running=True, error=None, solution=None, session=task.session_dir.name,
                                 kind="measure", rows=[], summary={})
@@ -261,11 +270,11 @@ class PayloadAPI:
             iden.save_profile(name, saved)
             return {"ok": True, "payload": saved, "identify": self.identify_status(), "ctrl": self.app.ctrl_status()}
         if path == "/api/identify/clear":
-            loop = self.app.require_loop()
+            motion = self.app.motion()
             arm = str(body.get("arm") or "")
-            if arm not in loop.arm_names:
+            if arm not in motion.arm_names:
                 raise ValueError("说明去掉哪只手的负载项（先选姿态集）")
-            loop.set_payload_theta(None, arm=arm)
+            motion.set_payload_theta(None, arm=arm)
             iden.clear_payload(arm)
             return {"ok": True, "identify": self.identify_status(), "ctrl": self.app.ctrl_status()}
         if path == "/api/identify/payload/apply":
@@ -293,17 +302,17 @@ class PayloadAPI:
             return {"ok": True, "payload": saved, "identify": self.identify_status()}
         if path == "/api/identify/payload/delete":
             name = str(body["name"])
-            loop = self.app.loop
+            core = self._core()
             for arm in ("left", "right"):
                 if iden.applied_name_for_arm(arm) == name:
                     iden.clear_payload(arm)
-                    if loop is not None and arm in loop.arm_names:
-                        loop.set_payload_theta(None, arm=arm)
+                    if core is not None and arm in core.arm_names:
+                        core.set_payload_theta(None, arm=arm)
             iden.delete_profile(name)
             return {
                 "ok": True,
                 "identify": self.identify_status(),
-                "ctrl": self.app.ctrl_status() if loop is not None else None,
+                "ctrl": self.app.ctrl_status() if core is not None else None,
                 "message": f"已删除「{name}」",
             }
         raise FileNotFoundError(path)
@@ -311,7 +320,7 @@ class PayloadAPI:
     def _validate_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         urdf, base = self.app._urdf()
         if path == "/api/validate/start":
-            loop = self.app.require_loop()
+            motion = self.app.motion()
             with self._id_lock:
                 if self._id["running"]:
                     raise RuntimeError("已有任务在跑")
@@ -321,11 +330,7 @@ class PayloadAPI:
                 raise RuntimeError("手眼采集正在走点")
             modes = list(body.get("modes") or ["baseline", "payload"])
             pname = body.get("payload")
-            payload = None
-            if pname:
-                payload = iden.load_profile(str(pname))
-            elif any(m != "baseline" for m in modes):
-                payload = vali.snapshot_payload(loop.view(d["arm"]))
+            payload = iden.load_profile(str(pname)) if pname else None
 
             def done(r: Dict[str, Any]) -> None:
                 with self._id_lock:
@@ -340,11 +345,19 @@ class PayloadAPI:
                         + ("对比完成 " + str(r.get("session")) if r.get("ok") else str(r.get("error")))
                     )
 
-            task = vali.CompareTask(
-                loop.view(d["arm"], "到位对比"), d, urdf, base, self._log, done, still=self.still,
-                modes=modes, payload=payload,
-                correction_iters=int(body.get("correction_iters") or 2),
-            )
+            # 租约：占住姿态集那只手直到任务结束（没接管、在拖拽、被占用、急停锁定时这里就拒绝）
+            lease = motion.lease_arm(d["arm"], "到位对比")
+            try:
+                if payload is None and any(m != "baseline" for m in modes):
+                    payload = vali.snapshot_payload(lease)
+                task = vali.CompareTask(
+                    lease, d, urdf, base, self._log, done, still=self.still,
+                    modes=modes, payload=payload,
+                    correction_iters=int(body.get("correction_iters") or 2),
+                )
+            except BaseException:
+                lease.release()
+                raise
             with self._id_lock:
                 self._id.update(running=True, error=None, session=task.session, kind="validate",
                                 rows=[], summary={}, band={})

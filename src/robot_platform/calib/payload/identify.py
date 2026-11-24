@@ -187,14 +187,14 @@ def tau_from_pd(s: Dict) -> Optional[List[float]]:
     return [float(v) for v in tau]
 
 
-def average_samples(loop, n: int, stop: threading.Event) -> Dict:
+def average_samples(lease, n: int, stop: threading.Event) -> Dict:
     acc: Optional[Dict[str, np.ndarray]] = None
     keys = ("q_meas", "dq", "q_cmd", "tau_ff_sent", "tau_est")
     got = 0
     for _ in range(max(n, 1) * 4):
         if stop.is_set():
             raise RuntimeError("已停止")
-        s = loop.arm_sample()
+        s = lease.arm_sample()
         if any(v is None for v in s["tau_est"]):
             time.sleep(0.02)
             continue
@@ -226,13 +226,13 @@ DEFAULT_STILL = {
 }
 
 
-def wait_cmd_caught(loop, stop: threading.Event, q_eps: float = 0.02, timeout_s: float = 90.0) -> None:
-    """限速层 cmd 追上 desired。不看实测是否到目标。"""
+def wait_cmd_caught(lease, stop: threading.Event, q_eps: float = 0.02, timeout_s: float = 90.0) -> None:
+    """限速层 cmd 追上 desired。不看实测是否到目标。lease：租约（或任何有 status() 的单臂句柄）。"""
     t0 = time.monotonic()
     while True:
         if stop.is_set():
             raise RuntimeError("已停止")
-        st = loop.status()
+        st = lease.status()
         cmd = np.asarray(st["cmd_rad"], float)
         des = np.asarray(st["desired_rad"], float)
         if float(np.max(np.abs(des - cmd))) < q_eps:
@@ -242,7 +242,7 @@ def wait_cmd_caught(loop, stop: threading.Event, q_eps: float = 0.02, timeout_s:
         time.sleep(0.05)
 
 
-def wait_still(loop, stop: threading.Event, params: Optional[Dict] = None) -> Dict:
+def wait_still(lease, stop: threading.Event, params: Optional[Dict] = None) -> Dict:
     """窗口内 max|dq| < 速度阈 且 各关节位置峰峰值 < 漂移阈。超时仍按当前角采样。"""
     p = {**DEFAULT_STILL, **(params or {})}
     dq_th = float(p["still_dq_rad_s"])
@@ -257,7 +257,7 @@ def wait_still(loop, stop: threading.Event, params: Optional[Dict] = None) -> Di
             raise RuntimeError("已停止")
         now = time.monotonic()
         try:
-            samp = loop.arm_sample(wait=False)
+            samp = lease.arm_sample(wait=False)
             q = np.asarray(samp["q_meas"], float)
             dq = np.asarray(samp["dq"], float)
             hist.append((now, q, dq))
@@ -279,11 +279,12 @@ def wait_still(loop, stop: threading.Event, params: Optional[Dict] = None) -> Di
         time.sleep(0.02)
 
 
-def wait_settle(loop, q, stop: threading.Event, still: Optional[Dict] = None) -> Dict:
-    loop.set_target(q)
+def wait_settle(lease, q, stop: threading.Event, still: Optional[Dict] = None) -> Dict:
+    """经租约下目标（被拒抛 MotionRejected），等限速层追上、再等关节停稳。stop 一般就是 lease.cancelled。"""
+    lease.move_to(q)
     t0 = time.monotonic()
-    wait_cmd_caught(loop, stop)
-    r = wait_still(loop, stop, still)
+    wait_cmd_caught(lease, stop)
+    r = wait_still(lease, stop, still)
     r["settle_s"] = time.monotonic() - t0
     return r
 
@@ -358,11 +359,13 @@ def solve_payload(samples: List[Dict], arm: str, urdf_path: Path, base_link: str
 
 
 class MeasureTask:
-    def __init__(self, loop, poses_cfg: Dict, urdf_path: Path, base_link: str,
+    """按姿态集逐点走、停稳后采样。lease 是这只手的租约：任务结束时归还；急停撤销租约时任务停下。"""
+
+    def __init__(self, lease, poses_cfg: Dict, urdf_path: Path, base_link: str,
                  log: Callable[[str], None], on_done: Callable[[Dict], None],
                  still: Optional[Dict] = None, bidirectional: bool = True,
                  approach_delta: float = 0.06, dwell_s: float = 0.5, avg_frames: int = 20):
-        self.loop = loop
+        self.lease = lease
         self.poses_cfg = poses_cfg
         self.urdf_path = urdf_path
         self.base_link = base_link
@@ -373,7 +376,8 @@ class MeasureTask:
         self.approach_delta = approach_delta
         self.dwell_s = dwell_s
         self.avg_frames = avg_frames
-        self.stop = threading.Event()
+        # 租约被撤销（急停、重新接管、释放）或任务自己叫停时置位
+        self.stop = lease.cancelled
         self.samples: List[Dict] = []
         self.session_dir = measure_dir() / f"{time.strftime('%Y%m%d_%H%M%S')}_{poses_cfg['arm']}"
         self.phase = "待命"
@@ -397,9 +401,9 @@ class MeasureTask:
 
     def _one(self, pose: Dict, approach: str) -> Dict:
         q_t = np.asarray(pose["q"], float)
-        r = wait_settle(self.loop, q_t, self.stop, self.still)
+        r = wait_settle(self.lease, q_t, self.stop, self.still)
         time.sleep(self.dwell_s)
-        avg = average_samples(self.loop, self.avg_frames, self.stop)
+        avg = average_samples(self.lease, self.avg_frames, self.stop)
         s = {
             "name": pose.get("name"),
             "approach": approach,
@@ -413,28 +417,32 @@ class MeasureTask:
         s["tau_pd"] = tau_from_pd(s)
         return s
 
+    def request_stop(self) -> None:
+        self.lease.cancel()
+
     def run(self) -> None:
         try:
             poses = self.poses_cfg.get("poses") or []
             if len(poses) < 2:
                 raise ValueError("姿态集至少 2 个点")
-            with self.loop.claim():
-                self._run(poses)
+            self._run(poses)
         except Exception as e:
             self.phase = "失败"
             self.on_done({"ok": False, "error": f"{type(e).__name__}: {e}", "session": self.session_dir.name,
                           "n_samples": len(self.samples)})
+        finally:
+            self.lease.release()
 
     def _run(self, poses) -> None:
-        st = self.loop.status()
+        st = self.lease.status()
         if not st.get("engaged") or st.get("float"):
             raise RuntimeError("先接管并退出拖拽再测量")
-        lo, hi = self.loop.limits[:, 0], self.loop.limits[:, 1]
+        lo, hi = self.lease.limits[:, 0], self.lease.limits[:, 1]
         n_app = 2 if self.bidirectional else 1
         total = len(poses) * n_app
         self.progress = [0, total]
         self.log(
-            f"测量 {len(poses)} 点 × {n_app}，会话 {self.session_dir.name}，限速 {self.loop.max_speed:.3f} rad/s，"
+            f"测量 {len(poses)} 点 × {n_app}，会话 {self.session_dir.name}，限速 {self.lease.max_speed:.3f} rad/s，"
             f"静止 |dq|<{self.still['still_dq_rad_s']} 漂移<{self.still['still_drift_rad']} "
             f"窗 {self.still['still_window_s']}s 超时 {self.still['settle_timeout_s']}s"
         )
@@ -448,7 +456,7 @@ class MeasureTask:
                 if sgn != 0.0:
                     pre = np.clip(q_t + sgn * self.approach_delta, lo, hi)
                     self.log(f"{self.phase} 预位")
-                    wait_settle(self.loop, pre, self.stop, {**self.still, "still_window_s": min(0.2, self.still["still_window_s"])})
+                    wait_settle(self.lease, pre, self.stop, {**self.still, "still_window_s": min(0.2, self.still["still_window_s"])})
                 self.log(f"{self.phase} 到位采样")
                 s = self._one(pose, tag)
                 self.samples.append(s)
@@ -461,6 +469,6 @@ class MeasureTask:
         home = self.poses_cfg.get("home_q")
         if home:
             self.phase = "回 home"
-            wait_settle(self.loop, home, self.stop, self.still)
+            wait_settle(self.lease, home, self.stop, self.still)
         self.phase = "完成"
         self.on_done({"ok": True, "session": self.session_dir.name, "n_samples": len(self.samples)})
