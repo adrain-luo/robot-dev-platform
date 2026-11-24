@@ -92,8 +92,11 @@ class GuardianClient:
             if st.get("type") != "status":
                 continue
             with self._cond:
-                self._status = st
-                self._status_rx = time.monotonic()
+                # Keep the newest status as "latest" even if datagrams arrive out of order.
+                cur = self._status
+                if cur is None or not isinstance(st.get("t"), (int, float)) or st["t"] >= cur.get("t", -1e300):
+                    self._status = st
+                    self._status_rx = time.monotonic()
                 ack = st.get("ack")
                 if isinstance(ack, dict) and isinstance(ack.get("seq"), int):
                     self._acks[ack["seq"]] = st
@@ -161,6 +164,29 @@ class GuardianClient:
         self._heartbeat.clear()
         self.epoch = None
         return st
+
+    def poke(self) -> None:
+        """Ask for status updates without waiting for an answer (a plain heartbeat).
+
+        The guardian streams status to addresses heard from in the last few
+        seconds; a read-only viewer pokes now and then to keep receiving it."""
+        try:
+            self._send("heartbeat")
+        except OSError:
+            pass
+
+    def stop_heartbeat(self) -> None:
+        """Stop the keep-alive: if we still own the guardian it latches link_lost and holds."""
+        self._heartbeat.clear()
+        self.epoch = None
+
+    def status_age(self) -> float:
+        with self._cond:
+            return float("inf") if self._status is None else time.monotonic() - self._status_rx
+
+    def latest_status(self) -> Optional[Dict[str, Any]]:
+        with self._cond:
+            return self._status
 
     def ping(self, timeout: float = 1.0) -> Dict[str, Any]:
         """Ask for a status without changing anything (a heartbeat with an ack)."""
