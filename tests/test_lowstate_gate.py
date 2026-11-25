@@ -243,6 +243,68 @@ def test_limit_must_be_positive(bad):
         backend.close()
 
 
+def test_direct_backends_take_the_limit_from_the_profile():
+    from robot_platform.core.robot_profile import load_profile
+    from robot_platform.hw.backends.unitree_arm_sdk import UnitreeArmSdkBackend
+    from robot_platform.hw.backends.unitree_lowcmd import UnitreeLowCmdBackend
+
+    # 只建后端对象（不起 DDS）
+    assert UnitreeLowCmdBackend(load_profile("g1d"), network_interface="lo").lowstate_max_age_s() == 0.1
+    assert UnitreeArmSdkBackend(load_profile("g1"), network_interface="lo").lowstate_max_age_s() == 0.1
+
+
+def test_guardian_and_mock_backends_do_not_gate():
+    from robot_platform.core.robot_profile import load_profile
+    from robot_platform.hw.backends.guardian import GuardianBackend, GuardianSettings
+    from robot_platform.hw.backends.unitree_lowcmd import UnitreeLowCmdBackend
+
+    profile = load_profile("g1d")
+    read = UnitreeLowCmdBackend(profile, network_interface="lo")
+    settings = GuardianSettings(host="127.0.0.1", port=1, client_id="t", release_s=1.0)
+    # 守护层后端不沿用读状态后端的上限：本体上的守护层自己查
+    assert GuardianBackend(profile, read, settings).lowstate_max_age_s() is None
+    mock = MockBackend(active())
+    try:
+        assert mock.lowstate_max_age_s() is None
+    finally:
+        mock.close()
+
+
+@pytest.mark.parametrize("raw", [None, 0, -5, "x", True, float("nan")])
+def test_direct_backend_needs_a_valid_profile_limit(raw):
+    import dataclasses
+
+    from robot_platform.core.robot_profile import load_profile
+    from robot_platform.hw.backends.base import profile_lowstate_max_age_s
+
+    profile = load_profile("g1d")
+    opts = {k: v for k, v in profile.control.options.items() if k != "lowstate_max_age_ms"}
+    if raw is not None:
+        opts["lowstate_max_age_ms"] = raw
+    bad = dataclasses.replace(profile, control=dataclasses.replace(profile.control, options=opts))
+    with pytest.raises(ValueError, match="lowstate_max_age_ms"):
+        profile_lowstate_max_age_s(bad)
+
+
+def test_app_passes_the_backend_limit_to_the_loop():
+    from robot_platform.core.config_loader import load_settings
+    from robot_platform.web.app import App
+
+    settings = load_settings(backend="mock")
+    profile = settings.profile
+    backend = MockBackend(profile)
+    backend.lowstate_max_age_s = lambda: 0.1  # 当它是直写后端
+    kin = RobotKinematics(settings.urdf, settings.base_link, list(profile.arms))
+    app = App(settings, kin, allow_real_motion=True, backend=backend)
+    try:
+        app.reader()
+        assert app.loop.status()["lowstate_max_age_ms"] == 100
+    finally:
+        if app.loop is not None:
+            app.loop.shutdown()
+        backend.close()
+
+
 def test_motion_core_revokes_leases_and_reports_stale_lowstate(rig):
     _, reader, _, loop = rig
     core = MotionCore(loop)

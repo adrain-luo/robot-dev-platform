@@ -531,3 +531,6 @@ def test_guardian_config_matches_the_platform_profile(robot):
     assert waist == lock, "守护层锁住的腰电机就是平台锁的那几个"
     assert cfg.compliant_kd == TEACH_KD
     assert set(cfg.idle_motors) == set(profile.control.idle_motors)
+    # 直写后端的 lowstate 过期上限和守护层的一致（负责人定的 100 ms）
+    from robot_platform.hw.backends.base import profile_lowstate_max_age_s
+    assert profile_lowstate_max_age_s(profile) == cfg.lowstate_stale_s == 0.1

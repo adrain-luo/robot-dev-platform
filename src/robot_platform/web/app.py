@@ -101,6 +101,8 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
                         urdf_path=self.settings.urdf,
                         base_link=self.settings.base_link,
                         torso_imu=torso_imu,
+                        # 直写后端：lowstate 过期就停在指令角保持；守护层后端 / mock 为 None
+                        lowstate_max_age_s=self.backend.lowstate_max_age_s(),
                     )
                     self.motion_core = MotionCore(self.loop)
                     self.payload.restore(self.motion_core)

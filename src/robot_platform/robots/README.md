@@ -17,6 +17,7 @@
 | `control.backend` | 默认硬件后端，见 [`hw/backends/README.md`](../hw/backends/README.md)；G1D 为 `unitree_lowcmd` |
 | `control.state_topic` / `command_topic` | 状态与指令话题 |
 | `control.release_motion_mode` | 接管前是否 `ReleaseMode` 退出高层运动 |
+| `control.lowstate_max_age_ms` | 直写后端（`unitree_lowcmd` / `unitree_arm_sdk`）必填：已接管时 lowstate 超过这么久没更新，两只手停在当前指令角保持（帧照发）、任务的租约撤销，恢复后要重新下目标。必须和守护层配置的 `timing.lowstate_stale_ms` 一致（测试检查）；守护层后端由本体上的守护层自己查 |
 | `gains.kp` / `gains.kd` | 每个电机的默认 PD，长度等于 `num_motors` |
 | `arms.<臂>` | `tip_link`、`joint_names`（URDF 关节名，按链顺序）、`motor_indices`、`home_q`（新建姿态集的初始角） |
 | `mirror_q_sign` | 左右镜像时每个关节角的符号；不配则不能镜像姿态集 / TCP |

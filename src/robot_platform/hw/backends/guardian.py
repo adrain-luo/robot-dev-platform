@@ -384,6 +384,11 @@ class GuardianBackend(Backend):
     def state(self) -> StateSource:
         return self._read.state()
 
+    def lowstate_max_age_s(self) -> None:
+        # 不沿用读状态后端的上限：lowstate 新鲜度由本体上的守护层自己查（lowstate_stale_ms），
+        # 平台这边守护层状态太久没更新时 commander 会报没就绪
+        return None
+
     def commander(self) -> Commander:
         reader = self.state()
         client = self.client()
