@@ -11,9 +11,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-from robot_platform.tasks.board_touch import PLANE_MAX_MM, _fit_plane, _sample_point
+from robot_platform.geometry import fit_plane, sample_point
 
 GRID_N = 10  # 10 行 10 列划分 → (N+1)×(N+1) 交叉点
+# 贴平面筛点：离拟合平面超过这个距离的点丢掉（原来借用棋盘触摸的同名阈值，数值不变）
+PLANE_MAX_MM = 20.0
 
 
 def _quad_grid_px(quad: Sequence[Sequence[float]], n: int = GRID_N) -> np.ndarray:
@@ -288,7 +290,7 @@ class DetectLocalize:
         raw = []
         missed = 0
         for xy in rect_xy:
-            p = _sample_point(points_m, float(xy[0]), float(xy[1]))
+            p = sample_point(points_m, float(xy[0]), float(xy[1]))
             if p is None:
                 missed += 1
                 raw.append(np.full(3, np.nan))
@@ -314,7 +316,7 @@ class DetectLocalize:
 
             # 左右目一起估平面（同为左相机系），再按残差剔点、重拟合
             seed = np.vstack([left[finite], right[finite]])
-            plane0 = _fit_plane(seed)
+            plane0 = fit_plane(seed)
 
             def _abs_dist_mm(pts: np.ndarray, plane: Dict[str, Any]) -> np.ndarray:
                 return np.abs((pts - plane["center"]) @ plane["normal"]) * 1000.0
@@ -326,7 +328,7 @@ class DetectLocalize:
                 raise RuntimeError(
                     f"贴平面后内点不足（丢掉 {dropped} 个，阈值 |d|≤{PLANE_MAX_MM:.0f} mm）"
                 )
-            plane = _fit_plane(np.vstack([left[keep], right[keep]]))
+            plane = fit_plane(np.vstack([left[keep], right[keep]]))
             d1 = np.maximum(_abs_dist_mm(left, plane), _abs_dist_mm(right, plane))
             keep2 = finite & (d1 <= PLANE_MAX_MM)
             dropped = int(finite.sum() - keep2.sum())
@@ -335,7 +337,7 @@ class DetectLocalize:
                     f"二次筛选后内点不足（丢掉 {dropped} 个，阈值 |d|≤{PLANE_MAX_MM:.0f} mm）"
                 )
             if int(keep2.sum()) < int(keep.sum()):
-                plane = _fit_plane(np.vstack([left[keep2], right[keep2]]))
+                plane = fit_plane(np.vstack([left[keep2], right[keep2]]))
                 keep = keep2
             else:
                 keep = keep2

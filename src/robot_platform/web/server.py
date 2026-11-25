@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import urlparse
 
+from g1_contracts.motion import MotionRejected
 from robot_platform.control.arm_loop import PermissionErrorMotion
 from robot_platform.control.fk_scene import RobotKinematics
 from robot_platform.core import instance as instances
@@ -56,7 +57,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(404)
                 return
             send_json(self, *reply)
-        except PermissionErrorMotion as e:
+        except (PermissionErrorMotion, MotionRejected) as e:
             send_json(self, 403, {"ok": False, "error": str(e)})
         except Exception as e:
             traceback.print_exc()

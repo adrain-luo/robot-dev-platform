@@ -12,13 +12,14 @@ from robot_platform.calib.payload.api import PayloadAPI
 from robot_platform.calib.tcp import TcpSession
 from robot_platform.control.arm_loop import ArmLoop, PermissionErrorMotion
 from robot_platform.control.fk_scene import RobotKinematics
+from robot_platform.control.motion_core import MotionCore
 from robot_platform.core.runtime_config import RuntimeConfig
 from robot_platform.hw.backends.base import Backend, LiftDriver, LiftReader, StateSource
 from robot_platform.hw.lift_control import LiftController
 from robot_platform.perception.detect_localize import DetectLocalize
 from robot_platform.perception.lidar_api import LidarAPI
 from robot_platform.tasks import ik_worker
-from robot_platform.tasks.board_touch import BoardTouch
+from robot_platform.tasks.board_touch import BoardTouch, BoardTouchEnv
 from robot_platform.tasks.spatial_points import SpatialPoints
 from robot_platform.tasks.work_pose import WorkPoseSession
 from robot_platform.web.api.state import StateMixin
@@ -47,19 +48,26 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         self._lift_ctrl: Optional[LiftController] = None
         self._chassis_ctrl = None  # 底盘遥控（web/api/chassis.py），第一次遥控时才建
         self.loop: Optional[ArmLoop] = None
+        # 运控核心：任务只经它的租约动手臂；接管 / 释放 / 急停也走它（control/motion_core.py）
+        self.motion_core: Optional[MotionCore] = None
         self.cmd_monitor = None
         self._lock = threading.Lock()
         self.payload = PayloadAPI(self)
         self.tcp = TcpSession()
         self.points = SpatialPoints()
         self.work_pose = WorkPoseSession()
-        self.board = BoardTouch(self)
+        # 任务不拿 App：注入运控客户端、只读运动学和它要的几样能力
+        self.board = BoardTouch(BoardTouchEnv(
+            motion=self.motion,
+            kin=kin,
+            stereo=self._board_stereo,
+            tcp_for_arm=self._tcp_for_arm,
+            work_pose_lock=self.work_pose_lock_for,
+            work_pose_free_axis=self.work_pose_free_axis,
+            work_pose_info=lambda: (self.work_pose.active_name or "", getattr(self.work_pose, "ik_mode", "robust")),
+        ))
         self.detect = DetectLocalize(self)
         self.runtime = RuntimeConfig(self)
-        # 工作姿态到位 / 已锁定下的碰点与棋盘：set_target 时不自动解锁
-        self._work_pose_motion = False
-        # 限速到位共用：急停 / 工作流「停止」置位，打断 wait_settle
-        self.motion_stop = threading.Event()
         try:
             self.tcp.restore_active()
             self.points.restore_active()
@@ -94,7 +102,8 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
                         base_link=self.settings.base_link,
                         torso_imu=torso_imu,
                     )
-                    self.payload.restore(self.loop)
+                    self.motion_core = MotionCore(self.loop)
+                    self.payload.restore(self.motion_core)
                     self.attach_collision_guard(self.loop)
             return self._reader
 
@@ -107,3 +116,23 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         if self.loop is None:
             raise PermissionErrorMotion("未开 --allow-real-motion，不能发令")
         return self.loop
+
+    def _board_stereo(self):
+        """棋盘触摸「看一眼」用：(左目→躯干变换, 双目相机, 匹配器工厂)。"""
+        from robot_platform.calib.handeye.config import load_config
+
+        cfg = load_config()
+        he = self.handeye
+        T = he._left_cam_to_torso(cfg)
+        if T is None:
+            raise ValueError("先调用一组手眼结果，角点才能变到躯干上")
+        cam = he._camera(cfg)
+        if getattr(cam, "kind", "stereo") != "stereo":
+            raise ValueError("棋盘触摸目前只支持双目相机（G1D）；RGB-D 相机的深度取点还没接入")
+        return T, cam, lambda: he._matcher_for(he._calib_yaml(cfg))
+
+    def motion(self) -> MotionCore:
+        """任务拿运控客户端（进程内就是运控核心本身）；只读模式下抛 PermissionErrorMotion。"""
+        self.require_loop()
+        assert self.motion_core is not None
+        return self.motion_core

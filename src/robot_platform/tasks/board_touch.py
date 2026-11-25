@@ -1,17 +1,24 @@
-"""看一眼棋盘，把角点变成躯干里的点，再让 TCP 逐个抬到上方、下去摸、再抬起。"""
+"""看一眼棋盘，把角点变成躯干里的点，再让 TCP 逐个抬到上方、下去摸、再抬起。
+
+任务不拿 App：运控客户端、只读运动学和其余几样外部能力都经 BoardTouchEnv 注入。
+走点期间租着这只手；急停撤销租约，任务在下一步停下。
+"""
 
 from __future__ import annotations
 
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
+from g1_contracts.motion import MotionRejected
 from robot_platform.core import instance as instances
+from robot_platform.geometry import fit_plane, sample_point
 
 
 def log_dir() -> Path:
@@ -21,36 +28,6 @@ PLANE_RMS_MM = 10.0
 PLANE_MAX_MM = 20.0
 # 理想网格把角点挪得太远，说明横竖方向和实测对不上。
 IDEAL_MAX_MM = 20.0
-
-
-def _sample_point(points: np.ndarray, x: float, y: float) -> Optional[np.ndarray]:
-    h, w = points.shape[:2]
-    xi = int(np.clip(round(x), 0, w - 1))
-    yi = int(np.clip(round(y), 0, h - 1))
-    p = points[yi, xi]
-    if np.isfinite(p).all() and 0.2 < float(p[2]) < 2.0:
-        return p.astype(float)
-    r = 4
-    patch = points[max(0, yi - r):yi + r + 1, max(0, xi - r):xi + r + 1].reshape(-1, 3)
-    ok = np.isfinite(patch).all(axis=1) & (patch[:, 2] > 0.2) & (patch[:, 2] < 2.0)
-    if int(ok.sum()) < 5:
-        return None
-    return np.median(patch[ok], axis=0)
-
-
-def _fit_plane(pts: np.ndarray) -> Dict[str, Any]:
-    center = pts.mean(axis=0)
-    _, _, vt = np.linalg.svd(pts - center, full_matrices=False)
-    normal = vt[-1]
-    dist_mm = (pts - center) @ normal * 1000.0
-    flat = pts - dist_mm[:, None] / 1000.0 * normal
-    return {
-        "center": center,
-        "normal": normal,
-        "rms_mm": float(np.sqrt(np.mean(dist_mm ** 2))),
-        "max_mm": float(np.max(np.abs(dist_mm))),
-        "flat": flat,
-    }
 
 
 def _ideal_grid(flat: np.ndarray, cols: int, rows: int, normal: np.ndarray):
@@ -90,10 +67,30 @@ def _ideal_grid(flat: np.ndarray, cols: int, rows: int, normal: np.ndarray):
     return ideal.reshape(-1, 3), spacing
 
 
+@dataclass(frozen=True)
+class BoardTouchEnv:
+    """棋盘触摸用到的外部能力（由 App 注入）。"""
+
+    motion: Callable[[], Any]
+    """运控客户端（进程内是 MotionCore）；只读模式下抛 PermissionErrorMotion。"""
+    kin: Any
+    """只读运动学（RobotKinematics）：kin.arms[arm].model 做 FK / IK。"""
+    stereo: Callable[[], Tuple[Any, Any, Callable[[], Any]]]
+    """看棋盘用：(左目→躯干 4x4 变换, 双目相机, 立体匹配器工厂)；没有手眼结果 / 不是双目时抛 ValueError。"""
+    tcp_for_arm: Callable[[str], Tuple[str, Any]]
+    """这只手当前生效的 TCP：(名字, 法兰系偏移 m)。"""
+    work_pose_lock: Callable[[str, str], Tuple[Optional[np.ndarray], Optional[Any]]]
+    """这只手、这个 TCP 下锁定的工作姿态 (R_lock, q_seed)；没锁为 (None, None)。"""
+    work_pose_free_axis: Callable[[], Optional[np.ndarray]]
+    """锁定姿态的不约束转轴；没有为 None。"""
+    work_pose_info: Callable[[], Tuple[str, str]]
+    """(当前工作姿态名, 位姿 IK 策略 single / robust / luo)。"""
+
+
 class BoardTouch:
-    def __init__(self, app) -> None:
-        self.app = app
-        self.stop = threading.Event()
+    def __init__(self, env: BoardTouchEnv) -> None:
+        self.env = env
+        self._lease = None     # 走点期间这只手的租约
         self._lock = threading.Lock()
         self.running = False
         self.phase = ""
@@ -123,9 +120,16 @@ class BoardTouch:
             }
 
     def request_stop(self) -> None:
-        self.stop.set()
+        """停止按钮：不再下新目标（手由调用方锁住）。急停不用它：急停撤销租约，任务自己就停。"""
+        lease = self._lease
+        if lease is not None:
+            lease.cancel()
         if self.running:
             self._log("收到停止")
+
+    def _stopped(self) -> bool:
+        lease = self._lease
+        return lease is None or lease.cancelled.is_set()
 
     def _log(self, msg: str) -> None:
         line = datetime.now().strftime("%H:%M:%S ") + msg
@@ -150,7 +154,6 @@ class BoardTouch:
         self._log(f"日志 {path}")
 
     def look(self, board: str, ideal: bool) -> Dict[str, Any]:
-        from robot_platform.calib.handeye.config import load_config
         from robot_platform.calib.handeye.detection import parse_board_size
 
         if self.running:
@@ -163,18 +166,11 @@ class BoardTouch:
             cols, rows = parse_board_size(board)
             if cols < 3 or rows < 3:
                 raise ValueError("棋盘至少 3x3 个内角点")
-            cfg = load_config()
-            he = self.app.handeye
-            T = he._left_cam_to_torso(cfg)
-            if T is None:
-                raise ValueError("先调用一组手眼结果，角点才能变到躯干上")
-            cam = he._camera(cfg)
-            if getattr(cam, "kind", "stereo") != "stereo":
-                raise ValueError("棋盘触摸目前只支持双目相机（G1D）；RGB-D 相机的深度取点还没接入")
+            T, cam, matcher_for = self.env.stereo()
             pair = cam.grab_pair(3.0)
             if pair is None:
                 raise RuntimeError(cam.last_error or "没有画面")
-            matcher = he._matcher_for(he._calib_yaml(cfg))
+            matcher = matcher_for()
             rect_l, _disp, points_m = matcher.match(pair[0], pair[1])
             gray = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
             found, corners = cv2.findChessboardCornersSB(gray, (cols, rows))
@@ -188,7 +184,7 @@ class BoardTouch:
             raw = []
             missed = 0
             for i, xy in enumerate(corners.reshape(-1, 2)):
-                p = _sample_point(points_m, float(xy[0]), float(xy[1]))
+                p = sample_point(points_m, float(xy[0]), float(xy[1]))
                 if p is None:
                     missed += 1
                     raw.append(np.full(3, np.nan))
@@ -198,7 +194,7 @@ class BoardTouch:
             self._log(f"有深度的角点 {pts.shape[0] - missed}/{pts.shape[0]}")
             if missed:
                 raise RuntimeError(f"{missed} 个角点没有深度，棋盘可能出了匹配范围")
-            plane = _fit_plane(pts)
+            plane = fit_plane(pts)
             self._log(f"平面残差 平均 {plane['rms_mm']:.1f} mm，最大 {plane['max_mm']:.1f} mm")
             if plane["rms_mm"] > PLANE_RMS_MM or plane["max_mm"] > PLANE_MAX_MM:
                 raise RuntimeError(
@@ -238,32 +234,35 @@ class BoardTouch:
             return {"ok": False, "error": "已经在触摸"}
         if self.points is None or self.points.shape[0] < 1:
             return {"ok": False, "error": "先看一眼棋盘"}
-        loop = self.app.loop
-        if loop is None:
+        try:
+            motion = self.env.motion()
+        except PermissionError:
             return {"ok": False, "error": "未开 --allow-real-motion，不能走点"}
-        if arm not in loop.arm_names:
+        if arm not in motion.arm_names:
             return {"ok": False, "error": "说明用哪只手摸（arm = left / right）"}
         try:
-            tcp_name, tcp_m = self.app._tcp_for_arm(arm)
+            tcp_name, tcp_m = self.env.tcp_for_arm(arm)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        st = loop.status()
-        if not st.get("engaged") or st["arms"][arm].get("float"):
+        st = motion.arm_view_status(arm)
+        if not st.get("engaged") or st.get("float"):
             return {"ok": False, "error": "先接管，并让这只手退出拖拽"}
-        owner = st["arms"][arm].get("owner")
-        if owner:
-            return {"ok": False, "error": f"这只手正被「{owner}」使用"}
         if above_m <= 0 or down_m <= 0 or up_m <= 0:
             return {"ok": False, "error": "上方、下降、抬升都要大于 0"}
         if down_m > above_m + 1e-6:
             return {"ok": False, "error": "下降超过了上方高度，爪尖会穿过棋盘"}
-        self.stop.clear()
         self.error = None
         self.arm = arm
         self._tcp_name = tcp_name
         self._tcp_m = np.asarray(tcp_m, dtype=float).reshape(3)
         if self._fh is None:
             self._open_log()
+        # 租约：占住这只手直到摸完（被占用、急停锁定时这里就拒绝）；线程起不来就马上还
+        try:
+            lease = motion.lease_arm(arm, "棋盘触摸")
+        except MotionRejected as exc:
+            return {"ok": False, "error": str(exc)}
+        self._lease = lease
         self.running = True
         self._thread = threading.Thread(
             target=self._run,
@@ -271,131 +270,127 @@ class BoardTouch:
             name="board-touch",
             daemon=True,
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except BaseException:
+            self.running = False
+            lease.release()
+            raise
         return self.status()
 
     def _run(self, above_m: float, down_m: float, up_m: float) -> None:
-        claim = None
+        lease = self._lease
         try:
-            loop = self.app.loop.view(self.arm, "棋盘触摸")
-            claim = loop.claim()
-            claim.__enter__()
             tcp = self._tcp_m
-            model = self.app.kin.arms[self.arm].model
+            model = self.env.kin.arms[self.arm].model
             pts = self.points
             total = int(pts.shape[0])
             up = np.array([0.0, 0.0, 1.0])
-            R_lock, _ = self.app.work_pose_lock_for(self.arm, self._tcp_name)
-            pose_note = f"，工作姿态锁定「{self.app.work_pose.active_name}」" if R_lock is not None else ""
+            R_lock, _ = self.env.work_pose_lock(self.arm, self._tcp_name)
+            pose_note = f"，工作姿态锁定「{self.env.work_pose_info()[0]}」" if R_lock is not None else ""
             side = "左" if self.arm == "left" else "右"
             self._log(
                 f"开始触摸 {total} 点：上方 {above_m * 1000:.0f} mm，下降 {down_m * 1000:.0f} mm，"
                 f"再抬 {up_m * 1000:.0f} mm。{side}臂 TCP {self._tcp_name}{pose_note}"
             )
-            q = np.asarray(loop.arm_sample(wait=False)["q_meas"], dtype=float)
+            q = np.asarray(lease.arm_sample(wait=False)["q_meas"], dtype=float)
             for i, p in enumerate(pts):
-                if self.stop.is_set():
+                if self._stopped():
                     raise RuntimeError("已停止")
                 high = p + up * above_m
                 low = high - up * down_m
                 back = low + up * up_m
                 self._log(f"第 {i + 1}/{total} 到上方 {above_m * 1000:.0f} mm")
-                q = self._line(loop, model, tcp, q, high, f"第 {i + 1} 点上方")
+                q = self._line(lease, model, tcp, q, high, f"第 {i + 1} 点上方")
                 self._log(f"第 {i + 1}/{total} 下降 {down_m * 1000:.0f} mm")
-                q = self._line(loop, model, tcp, q, low, f"第 {i + 1} 点下降")
+                q = self._line(lease, model, tcp, q, low, f"第 {i + 1} 点下降")
                 self._log(f"第 {i + 1}/{total} 抬升 {up_m * 1000:.0f} mm")
-                q = self._line(loop, model, tcp, q, back, f"第 {i + 1} 点抬升")
+                q = self._line(lease, model, tcp, q, back, f"第 {i + 1} 点抬升")
             self._log("全部角点走完")
         except Exception as exc:
             self.error = str(exc)
             self._log(f"中止：{exc}")
         finally:
-            if claim is not None:
-                claim.__exit__(None, None, None)
+            lease.release()
             with self._lock:
                 self.running = False
             if self._fh is not None:
                 self._fh.close()
                 self._fh = None
 
-    def _line(self, loop, model, tcp: np.ndarray, q: np.ndarray, dest: np.ndarray, label: str) -> np.ndarray:
+    def _line(self, lease, model, tcp: np.ndarray, q: np.ndarray, dest: np.ndarray, label: str) -> np.ndarray:
         """沿直线走，大约每 1 cm 一个点，避免关节空间把爪尖甩出竖线。"""
         from robot_platform.tasks.spatial_points import (
             solve_pose_ik_by_mode, solve_tcp_ik, solve_tcp_pose_ik, solve_tcp_pose_ik_robust,
         )
 
-        wp = getattr(self.app, "work_pose", None)
-        R_lock, q_seed = self.app.work_pose_lock_for(self.arm, self._tcp_name)
-        free_axis = self.app.work_pose_free_axis() if R_lock is not None else None
+        R_lock, q_seed = self.env.work_pose_lock(self.arm, self._tcp_name)
+        free_axis = self.env.work_pose_free_axis() if R_lock is not None else None
         extra = [] if q_seed is None else [q_seed]
         t, R = model.fk(q)
         start = t + R @ tcp
         dist = float(np.linalg.norm(dest - start))
         steps = max(1, int(np.ceil(dist / 0.01)))
-        self.app._work_pose_motion = True
-        try:
-            for s in range(1, steps + 1):
-                if self.stop.is_set():
-                    loop.estop_hold()
-                    raise RuntimeError("急停，停在当前姿态")
-                target = start + (dest - start) * (s / steps)
-                if R_lock is not None:
-                    mode = getattr(wp, "ik_mode", "robust") if wp is not None else "robust"
-                    if mode == "single":
-                        q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock, free_axis=free_axis)
-                    elif mode == "luo":
-                        # 每厘米一步：只从上一步出发（连续），不行再加种子
-                        q_next, miss, ori = solve_pose_ik_by_mode(
-                            "luo", model, q, tcp, target, R_lock, n_random=0, n_ok_stop=1, free_axis=free_axis,
-                        )
-                        if miss > 5.0 or ori > 8.0:
-                            q_next, miss, ori = solve_pose_ik_by_mode(
-                                "luo", model, q, tcp, target, R_lock,
-                                extra_seeds=extra, n_random=8, n_ok_stop=3, free_axis=free_axis,
-                            )
-                    else:
-                        q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock, free_axis=free_axis)
-                        if miss > 5.0 or ori > 8.0:
-                            q_next, miss, ori = solve_tcp_pose_ik_robust(
-                                model, q, tcp, target, R_lock,
-                                extra_seeds=extra, n_random=8, n_ok_stop=5, free_axis=free_axis,
-                            )
+        for s in range(1, steps + 1):
+            if self._stopped():
+                lease.hold()
+                raise RuntimeError("急停，停在当前姿态")
+            target = start + (dest - start) * (s / steps)
+            if R_lock is not None:
+                mode = self.env.work_pose_info()[1] or "robust"
+                if mode == "single":
+                    q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock, free_axis=free_axis)
+                elif mode == "luo":
+                    # 每厘米一步：只从上一步出发（连续），不行再加种子
+                    q_next, miss, ori = solve_pose_ik_by_mode(
+                        "luo", model, q, tcp, target, R_lock, n_random=0, n_ok_stop=1, free_axis=free_axis,
+                    )
                     if miss > 5.0 or ori > 8.0:
-                        raise RuntimeError(
-                            f"{label}到不了，还差 {miss:.1f} mm / {ori:.1f}°（工作姿态锁定）"
+                        q_next, miss, ori = solve_pose_ik_by_mode(
+                            "luo", model, q, tcp, target, R_lock,
+                            extra_seeds=extra, n_random=8, n_ok_stop=3, free_axis=free_axis,
                         )
                 else:
-                    q_next, miss = solve_tcp_ik(model, q, tcp, target)
-                    if miss > 5.0:
-                        raise RuntimeError(f"{label}到不了，还差 {miss:.1f} mm")
-                jump = np.abs(q_next - q)
-                ji = int(np.argmax(jump))
-                if float(jump[ji]) > 0.5:
-                    self._log(
-                        f"{label} 这一厘米要转 {loop.layout.joint_names[ji]} {np.degrees(float(jump[ji])):.0f}°"
+                    q_next, miss, ori = solve_tcp_pose_ik(model, q, tcp, target, R_lock, free_axis=free_axis)
+                    if miss > 5.0 or ori > 8.0:
+                        q_next, miss, ori = solve_tcp_pose_ik_robust(
+                            model, q, tcp, target, R_lock,
+                            extra_seeds=extra, n_random=8, n_ok_stop=5, free_axis=free_axis,
+                        )
+                if miss > 5.0 or ori > 8.0:
+                    raise RuntimeError(
+                        f"{label}到不了，还差 {miss:.1f} mm / {ori:.1f}°（工作姿态锁定）"
                     )
-                q = q_next
-                loop.set_target(q)
-                if not self._wait(loop, q):
-                    loop.estop_hold()
-                    if self.stop.is_set():
-                        raise RuntimeError("急停，停在当前姿态")
-                    raise RuntimeError(f"{label}到位超时")
-        finally:
-            self.app._work_pose_motion = False
+            else:
+                q_next, miss = solve_tcp_ik(model, q, tcp, target)
+                if miss > 5.0:
+                    raise RuntimeError(f"{label}到不了，还差 {miss:.1f} mm")
+            jump = np.abs(q_next - q)
+            ji = int(np.argmax(jump))
+            if float(jump[ji]) > 0.5:
+                self._log(
+                    f"{label} 这一厘米要转 {lease.layout.joint_names[ji]} {np.degrees(float(jump[ji])):.0f}°"
+                )
+            q = q_next
+            lease.move_to(q)
+            if not self._wait(lease, q):
+                lease.hold()
+                if self._stopped():
+                    raise RuntimeError("急停，停在当前姿态")
+                raise RuntimeError(f"{label}到位超时")
         return q
 
-    def _wait(self, loop, q: np.ndarray) -> bool:
+    def _wait(self, lease, q: np.ndarray) -> bool:
         """关节停住就算这一小段结束。差在约 8° 以内继续，更大就说明没走到规划姿态。"""
-        names = list(loop.layout.joint_names)
+        names = list(lease.layout.joint_names)
         still_since = None
         while True:
-            if self.stop.is_set():
+            if self._stopped():
                 return False
-            st = loop.status()
+            st = lease.status()
             if not st.get("engaged") or st.get("float"):
                 return False
-            samp = loop.arm_sample(wait=False)
+            samp = lease.arm_sample(wait=False)
             meas = np.asarray(samp["q_meas"], dtype=float)
             dq = np.asarray(samp["dq"], dtype=float)
             err = np.abs(meas - q)

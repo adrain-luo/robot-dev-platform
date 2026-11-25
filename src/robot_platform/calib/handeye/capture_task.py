@@ -1,8 +1,7 @@
-"""按已有姿态集走点，每点停稳后存一对图和该臂关节角。发令仍走 control.arm_loop 的控制循环。"""
+"""按已有姿态集走点，每点停稳后存一对图和该臂关节角。发令经运控核心的租约（control/motion_core.py）。"""
 
 from __future__ import annotations
 
-import threading
 from typing import Any, Callable, Dict, Optional
 
 import numpy as np
@@ -14,16 +13,19 @@ HAND_EYE_DRIFT_RAD = 0.003
 
 
 class CaptureTask:
-    def __init__(self, loop, camera, poses_cfg: Dict[str, Any], board_size: str,
+    """lease 是姿态集那只手的租约：任务结束时归还；急停撤销租约时任务停下。"""
+
+    def __init__(self, lease, camera, poses_cfg: Dict[str, Any], board_size: str,
                  still: Dict[str, float], on_done: Callable[[Dict[str, Any]], None]):
-        self.loop = loop
+        self.lease = lease
         self.camera = camera
         self.poses_cfg = poses_cfg
         self.board_size = board_size
         self.still = dict(still)
         self.still["still_drift_rad"] = HAND_EYE_DRIFT_RAD
         self.on_done = on_done
-        self.stop = threading.Event()
+        # 租约被撤销（急停、重新接管、释放）或任务自己叫停时置位
+        self.stop = lease.cancelled
         self.phase = "待命"
         self.progress = [0, 0]
         self.log_lines = []
@@ -36,20 +38,20 @@ class CaptureTask:
         self.log_lines.append(msg)
         self.log_lines = self.log_lines[-24:]
 
+    def request_stop(self) -> None:
+        self.lease.cancel()
+
     def run(self) -> None:
         from robot_platform.calib.payload import identify as iden
 
         path = None
-        claim = None
         try:
             poses = self.poses_cfg.get("poses") or []
             if len(poses) < 3:
                 raise ValueError("姿态集至少 3 个点，建议 8 个以上并且姿态拉开")
             arm = self.poses_cfg["arm"]
-            # 占用姿态集那只手：期间别的来源给它发目标会被拒绝，另一只手照常可用
-            claim = self.loop.claim()
-            claim.__enter__()
-            st = self.loop.status()
+            # 租约占着姿态集那只手：期间别的来源给它发目标会被拒绝，另一只手照常可用
+            st = self.lease.status()
             if not st.get("engaged") or st.get("float"):
                 raise RuntimeError("先接管，并退出拖拽")
             probe = self.camera.grab(3.0)
@@ -68,13 +70,13 @@ class CaptureTask:
                     raise RuntimeError("已停止")
                 name = pose.get("name") or f"p{i:02d}"
                 self._log(f"{name} 走点")
-                settled = iden.wait_settle(self.loop, pose["q"], self.stop, self.still)
+                settled = iden.wait_settle(self.lease, pose["q"], self.stop, self.still)
                 if self.stop.is_set():
                     raise RuntimeError("已停止")
                 frame = self.camera.grab(3.0)
                 if frame is None:
                     raise RuntimeError(self.camera.last_error or f"{name} 没有画面")
-                samp = self.loop.arm_sample(wait=False)
+                samp = self.lease.arm_sample(wait=False)
                 q = np.asarray(samp["q_meas"], float).reshape(-1)
                 if q.size != 7 or not np.all(np.isfinite(q)):
                     raise RuntimeError(f"{name} 关节角无效")
@@ -87,7 +89,7 @@ class CaptureTask:
             home = self.poses_cfg.get("home_q")
             if home and not self.stop.is_set():
                 self._log("回 home")
-                iden.wait_settle(self.loop, home, self.stop, self.still)
+                iden.wait_settle(self.lease, home, self.stop, self.still)
             self.phase = "完成"
             self.on_done({"ok": True, "session": self.session_name, "n": self.saved})
         except Exception as exc:
@@ -100,5 +102,4 @@ class CaptureTask:
                 "n": self.saved,
             })
         finally:
-            if claim is not None:
-                claim.__exit__(None, None, None)
+            self.lease.release()

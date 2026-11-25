@@ -166,8 +166,15 @@ function applyCtrl(ctrl) {
   lastCtrl = ctrl;
   window.lastCtrl = ctrl;
   const allow = !!ctrl.allow_real_motion;
-  // 接管过渡中（arm_sdk）：不能走点 / 拖拽 / 点动。须在下面第一次用到之前定义
-  const settling = !!(ctrl.engaged && ctrl.ready === false);
+  // 急停锁存（运控核心）：一切新运动都被拒绝，直到「复位急停」
+  const latched = !!(ctrl.motion && ctrl.motion.latched);
+  const resetBtn = $("btn-estop-reset");
+  if (resetBtn) {
+    resetBtn.hidden = !latched;
+    resetBtn.disabled = !allow;
+  }
+  // 接管过渡中（arm_sdk）或急停锁存：不能走点 / 拖拽 / 点动。须在下面第一次用到之前定义
+  const settling = !!(ctrl.engaged && ctrl.ready === false) || latched;
   $("mode-badge").textContent = allow ? "可运动" : "只读";
   $("mode-badge").className = "badge " + (allow ? "real" : "ro");
   ["btn-engage", "btn-release", "btn-hold", "btn-waist-fill", "btn-waist-go", "btn-waist-yaw-m", "btn-waist-yaw-p", "btn-waist-pitch-m", "btn-waist-pitch-p", "btn-lift-up", "btn-lift-down", "btn-lift-go", "lift-slider", "lift-target", "lift-step", "speed", "grav-on", "btn-id-measure", "btn-id-apply", "btn-id-clear", "btn-he-run"].forEach((id) => {
@@ -207,7 +214,8 @@ function applyCtrl(ctrl) {
   // 经守护层发令：守护层急停 / 失联 / 被别人接管时，显示原因（不是"过渡中"）
   const gproblem = ctrl.engaged && ctrl.commander && ctrl.commander.kind === "guardian" ? ctrl.commander.problem : null;
   $("engage-state").textContent = allow
-    ? gproblem ? `守护层 · ${gproblem}` : (ctrl.transition ? `过渡中 · ${ctrl.transition}` : ctrl.engaged
+    ? latched ? `急停已锁定 · 两手保持当前角；确认安全后点「复位急停」`
+    : gproblem ? `守护层 · ${gproblem}` : (ctrl.transition ? `过渡中 · ${ctrl.transition}` : ctrl.engaged
         ? `已接管 · ${["left", "right"].filter((n) => arms[n]).map(armText).join(" ")}${
             ctrl.waist_locked ? " · 腰保持" : ""}${gravText}${ctrl.loop_hz ? ` · ${Math.round(ctrl.loop_hz)} Hz` : ""}`
         : `未接管${gravText}`)
@@ -283,7 +291,13 @@ $("btn-hold").onclick = async () => {
   // 工作流在两步之间（例如正在识别、手臂没动）时，后端没有可停的运动：前端也要让它别再走下一步
   const wf = window.wfDetectGoto;
   if (wf && wf.busy) wf.abort = true;
-  try { await post("/api/hold", {}); flash("急停：退出拖拽，保持当前角", true); } catch (e) { flash(String(e), false); }
+  try { await post("/api/hold", {}); flash("急停已锁定：任务已停、两手保持当前角；确认现场安全后点「复位急停」", true); } catch (e) { flash(String(e), false); }
+};
+
+$("btn-estop-reset").onclick = async () => {
+  const ask = "确认现场安全、手臂周围没有人和障碍，解除急停锁定？\n\n解除后手臂仍保持当前姿态，不会自己动；被急停打断的任务不会继续，要重新开始。";
+  if (!confirm(ask)) return;
+  try { await post("/api/estop/reset", {}); flash("急停已解除：手臂保持当前姿态", true); } catch (e) { flash(String(e), false); }
 };
 
 // 拖拽按手分开：一只手卸力拖拽时，另一只手照常受控

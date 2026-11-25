@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 import numpy as np
 
+from g1_contracts.motion import MotionRejected
 from robot_platform.calib import tcp as tcp_calib
 from robot_platform.control.arm_loop import PermissionErrorMotion
 from robot_platform.core.layout import get_arm
@@ -74,7 +75,7 @@ class TcpMixin:
             out["error"] = str(exc)
             out["exists"] = True
             return out
-        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
+        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion, MotionRejected) as exc:
             out = self.tcp.status()
             out["ok"] = False
             out["error"] = str(exc)
@@ -86,8 +87,11 @@ class TcpMixin:
             return out
 
     def tcp_jog(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        """TCP 点动（body.arm 指定哪只手）：躯干系平移（保姿态）或绕 TCP 点旋转（轴沿躯干）。"""
+        """TCP 点动（body.arm 指定哪只手）：躯干系平移（保姿态）或绕 TCP 点旋转（轴沿躯干）。
+
+        手动来源：不租这只手；这只手被任务租着、急停锁存时目标被拒。"""
         loop = self.require_loop()
+        motion = self.motion()
         arm = self.body_arm(body)
         side = "左" if arm == "left" else "右"
         st = loop.status()
@@ -132,16 +136,12 @@ class TcpMixin:
                 R_tgt = R.copy()
             keep_lock = R_lock is not None
             free_axis = self.work_pose_free_axis() if keep_lock else None
-            self._work_pose_motion = True
-            try:
-                q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, c_tgt, R_tgt, free_axis=free_axis)
-                if miss_mm > 3.0 or ori_deg > 3.0:
-                    raise ValueError(
-                        f"平移不到：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"
-                    )
-                loop.set_target(q, arm=arm)
-            finally:
-                self._work_pose_motion = False
+            q, miss_mm, ori_deg = solve_tcp_pose_ik(model, q0, tcp, c_tgt, R_tgt, free_axis=free_axis)
+            if miss_mm > 3.0 or ori_deg > 3.0:
+                raise ValueError(
+                    f"平移不到：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"
+                )
+            motion.manual_target(q, arm=arm)
             label = {"x": ("前", "后"), "y": ("左", "右"), "z": ("上", "下")}[axis]
             dir_name = label[0] if sign > 0 else label[1]
             out = self.tcp.status()
@@ -179,7 +179,7 @@ class TcpMixin:
                 raise ValueError(
                     f"旋转不到：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"
                 )
-            loop.set_target(q, arm=arm)
+            motion.manual_target(q, arm=arm)
             out = self.tcp.status()
             out["ok"] = True
             out["mode"] = "rotate"

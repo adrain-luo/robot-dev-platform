@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 import numpy as np
 
+from g1_contracts.motion import MotionRejected
 from robot_platform.calib.payload import identify as iden
 from robot_platform.control.arm_loop import PermissionErrorMotion
 from robot_platform.core.layout import get_arm
@@ -100,7 +101,7 @@ class WorkPoseMixin:
             if path == "/api/work-pose/load":
                 return self.work_pose_load(tcp_name, name, str(body.get("arm") or ""))
             return {"ok": False, "error": "没有这个工作姿态接口"}
-        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
+        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion, MotionRejected) as exc:
             out = self.work_pose.status(str(body.get("tcp_name") or self._default_tcp_name(body)))
             out["ok"] = False
             out["error"] = str(exc)
@@ -122,19 +123,19 @@ class WorkPoseMixin:
         return self.tcp.active_name or ""
 
     def work_pose_load(self, tcp_name: str, name: str, arm: str = "") -> Dict[str, Any]:
-        """转到该工作姿态（保 TCP 位置）并锁定。姿态记着是哪只手的，只动那只手。"""
-        loop = self.require_loop()
+        """转到该工作姿态（保 TCP 位置）并锁定。姿态记着是哪只手的，只动那只手（期间租着它，急停撤销租约就停）。"""
+        motion = self.motion()
         if not tcp_name:
             raise ValueError("先调用一套 TCP")
         doc = self.work_pose.load_doc(tcp_name, name)
         arm = str(doc.get("arm") or arm or "")
-        if arm not in loop.arm_names:
+        if arm not in motion.arm_names:
             raise ValueError("这个工作姿态没记是哪只手的")
         side = "左" if arm == "left" else "右"
-        st = loop.status()
+        st = motion.arm_view_status(arm)
         if not st.get("engaged"):
             raise PermissionErrorMotion("先接管再调用工作姿态")
-        if st["arms"][arm].get("float"):
+        if st.get("float"):
             raise PermissionErrorMotion(f"{side}臂在拖拽，先退出拖拽再调用工作姿态")
         active_name, tcp = self._tcp_for_arm(arm)
         if tcp_name != active_name:
@@ -143,12 +144,10 @@ class WorkPoseMixin:
         R_target = np.asarray(doc["R"], dtype=float).reshape(3, 3)
         free_axis = self.free_axis_for(str(doc.get("free") or ""))
         model = self.kin.arms[arm].model
-        q0 = np.asarray(self.reader().read_arm(loop.layout(arm)).q, dtype=float)
-        view = loop.view(arm)
+        q0 = np.asarray(self.reader().read_arm(motion.layout(arm)).q, dtype=float)
         t, R0 = model.fk(q0)
         hold = np.asarray(t, dtype=float).reshape(3) + R0 @ tcp
-        self._work_pose_motion = True
-        try:
+        with motion.lease_arm(arm, "工作姿态调用") as lease:
             extra = []
             if doc.get("q_rad") is not None:
                 extra.append(doc["q_rad"])
@@ -160,11 +159,10 @@ class WorkPoseMixin:
                 raise ValueError(
                     f"到不了该工作姿态：位置还差 {miss_mm:.1f} mm，姿态还差 {ori_deg:.1f}°"
                 )
-            self.motion_stop.clear()
             settle = iden.wait_settle(
-                view,
+                lease,
                 q,
-                self.motion_stop,
+                lease.cancelled,
                 {
                     "still_dq_rad_s": 0.05,
                     "still_drift_rad": 0.015,
@@ -172,13 +170,13 @@ class WorkPoseMixin:
                     "settle_timeout_s": 12.0,
                 },
             )
-            if self.motion_stop.is_set():
+            if lease.cancelled.is_set():
                 raise RuntimeError("已停止")
-            st2 = view.status()
+            st2 = lease.status()
             if not st2.get("engaged") or st2.get("float"):
                 raise PermissionErrorMotion("到位前已释放或进入拖拽")
             # 用电机角复核
-            samp = view.arm_sample(wait=True)
+            samp = lease.arm_sample(wait=True)
             q_meas = np.asarray(samp["q_meas"], dtype=float)
             t2, R2 = model.fk(q_meas)
             tcp_now = t2 + R2 @ tcp
@@ -195,5 +193,3 @@ class WorkPoseMixin:
             out["arm"] = arm
             out["message"] = f"已锁定{side}臂工作姿态「{doc.get('name')}」"
             return out
-        finally:
-            self._work_pose_motion = False

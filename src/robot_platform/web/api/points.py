@@ -7,8 +7,10 @@ import threading
 
 import numpy as np
 
+from g1_contracts.motion import MotionRejected
 from robot_platform.calib.payload import identify as iden
-from robot_platform.control.arm_loop import ArmLoop, PermissionErrorMotion
+from robot_platform.control.arm_loop import PermissionErrorMotion
+from robot_platform.control.motion_core import MotionCore
 from robot_platform.core.layout import get_arm
 
 
@@ -64,33 +66,29 @@ class PointsMixin:
 
     def _goto_settle_measure(
         self,
-        loop: ArmLoop,
+        lease,
         model,
         q_cmd,
         tcp_m,
         point_arr: np.ndarray,
         stop: threading.Event,
     ) -> Dict[str, Any]:
-        """限速走到 q_cmd，停稳后用电机角算 TCP 与目标差。"""
-        self._work_pose_motion = True
-        try:
-            settle = iden.wait_settle(
-                loop,
-                q_cmd,
-                stop,
-                {
-                    "still_dq_rad_s": 0.05,
-                    "still_drift_rad": 0.015,
-                    "still_window_s": 0.5,
-                    "settle_timeout_s": 12.0,
-                },
-            )
-        finally:
-            self._work_pose_motion = False
-        st = loop.status()
+        """经租约限速走到 q_cmd，停稳后用电机角算 TCP 与目标差。"""
+        settle = iden.wait_settle(
+            lease,
+            q_cmd,
+            stop,
+            {
+                "still_dq_rad_s": 0.05,
+                "still_drift_rad": 0.015,
+                "still_window_s": 0.5,
+                "settle_timeout_s": 12.0,
+            },
+        )
+        st = lease.status()
         if not st.get("engaged") or st.get("float"):
             raise PermissionErrorMotion("到位前已释放或进入拖拽")
-        samp = loop.arm_sample(wait=True)
+        samp = lease.arm_sample(wait=True)
         q_meas = np.asarray(samp["q_meas"], dtype=float)
         if q_meas.size != model.n or not np.all(np.isfinite(q_meas)):
             raise ValueError(f"电机角无效：{q_meas.tolist()}")
@@ -127,7 +125,7 @@ class PointsMixin:
 
     def _tcp_goto_target(
         self,
-        loop: ArmLoop,
+        motion: MotionCore,
         arm: str,
         base_arr: np.ndarray,
         off_mm: np.ndarray,
@@ -139,18 +137,18 @@ class PointsMixin:
     ) -> Dict[str, Any]:
         """躯干系 base + 偏置 mm，可选误差补偿。不依赖已保存空间点。
 
-        走点期间占用这只手（同一只手的点动 / 滑条 / 另一次碰点会被拒绝），另一只手照常可用。
+        走点期间租着这只手（同一只手的点动 / 滑条 / 另一次碰点会被拒绝），另一只手照常可用；
+        急停撤销租约就停。
         """
-        view = loop.view(arm, "空间点碰点")
-        with view.claim():
+        with motion.lease_arm(arm, "空间点碰点") as lease:
             return self._tcp_goto_target_claimed(
-                view, arm, base_arr, off_mm, refine_on=refine_on, refine_thresh_mm=refine_thresh_mm,
+                lease, arm, base_arr, off_mm, refine_on=refine_on, refine_thresh_mm=refine_thresh_mm,
                 refine_passes=refine_passes, refine_gain=refine_gain,
             )
 
     def _tcp_goto_target_claimed(
         self,
-        loop,
+        lease,
         arm: str,
         base_arr: np.ndarray,
         off_mm: np.ndarray,
@@ -166,9 +164,8 @@ class PointsMixin:
         off_mm = np.asarray(off_mm, dtype=float).reshape(3)
         point_arr = base_arr + off_mm / 1000.0
         R_lock, _ = self.work_pose_lock_for(arm, tcp_name)
-        self.motion_stop.clear()
-        stop = self.motion_stop
-        q0 = np.asarray(self.reader().read_arm(loop.layout).q, dtype=float)
+        stop = lease.cancelled  # 急停 / 重新接管 / 释放撤销租约时置位
+        q0 = np.asarray(self.reader().read_arm(lease.layout).q, dtype=float)
         q, plan_miss_mm, plan_ori = self._solve_tcp_motion(model, q0, tcp, point_arr, R_lock)
         ori_lim = 3.0 if R_lock is not None else 999.0
         if plan_miss_mm > 3.0 or (plan_ori is not None and plan_ori > ori_lim):
@@ -183,7 +180,7 @@ class PointsMixin:
                 "plan_ori_deg": plan_ori,
             }
 
-        first = self._goto_settle_measure(loop, model, q, tcp, point_arr, stop)
+        first = self._goto_settle_measure(lease, model, q, tcp, point_arr, stop)
         measured_before_mm = float(first["measured_miss_mm"])
         refine_passes_n = 0
         max_refine = int(refine_passes) if refine_on else 0
@@ -201,7 +198,7 @@ class PointsMixin:
                 break
             if float(np.max(np.abs(q2 - cur["q_meas"]))) < 5e-4:
                 break
-            cur = self._goto_settle_measure(loop, model, q2, tcp, point_arr, stop)
+            cur = self._goto_settle_measure(lease, model, q2, tcp, point_arr, stop)
             refine_passes_n += 1
             if cur["measured_miss_mm"] > measured_before_mm * 1.15 + 1.0:
                 break
@@ -231,7 +228,7 @@ class PointsMixin:
             "base_mm": [float(v) * 1000.0 for v in base_arr.tolist()],
         }
 
-    def point_goto(self, body: Dict[str, Any], loop: ArmLoop) -> Dict[str, Any]:
+    def point_goto(self, body: Dict[str, Any], motion: MotionCore) -> Dict[str, Any]:
         try:
             name = str(body.get("name") or self.points.active_name or "")
             if not name:
@@ -246,7 +243,7 @@ class PointsMixin:
             refine_on = body.get("refine")
             refine_on = True if refine_on is None else bool(refine_on)
             out = self._tcp_goto_target(
-                loop,
+                motion,
                 self.body_arm(body),
                 np.asarray(point, dtype=float).reshape(3),
                 off_mm,
@@ -258,7 +255,7 @@ class PointsMixin:
             status = self.points.status()
             status.update(out)
             return status
-        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
+        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion, MotionRejected) as exc:
             out = self.points.status()
             out["ok"] = False
             out["error"] = str(exc)
@@ -269,7 +266,7 @@ class PointsMixin:
             out["error"] = str(exc)
             return out
 
-    def point_goto_xyz(self, body: Dict[str, Any], loop: ArmLoop) -> Dict[str, Any]:
+    def point_goto_xyz(self, body: Dict[str, Any], motion: MotionCore) -> Dict[str, Any]:
         """工作流等：直接给躯干系目标点（米）+ 偏置 mm，不落盘空间点。"""
         try:
             raw = body.get("point_m") or body.get("target_m")
@@ -284,7 +281,7 @@ class PointsMixin:
             refine_on = body.get("refine")
             refine_on = True if refine_on is None else bool(refine_on)
             return self._tcp_goto_target(
-                loop,
+                motion,
                 self.body_arm(body),
                 base,
                 off_mm,
@@ -293,7 +290,7 @@ class PointsMixin:
                 refine_passes=int(body.get("refine_passes") or 2),
                 refine_gain=float(body.get("refine_gain") or 1.0),
             )
-        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion) as exc:
+        except (ValueError, KeyError, FileNotFoundError, OSError, PermissionErrorMotion, MotionRejected) as exc:
             return {"ok": False, "error": str(exc)}
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc)}

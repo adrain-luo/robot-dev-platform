@@ -108,7 +108,7 @@ class CaptureMixin:
         if body:
             self._save_config({k: v for k, v in body.items() if k != "name"})
         cfg = load_config()
-        loop = self.app.require_loop()
+        motion = self.app.motion()
         with self.app.payload._id_lock:
             if self.app.payload._id.get("running"):
                 raise RuntimeError("负载测量或对比正在走点")
@@ -119,13 +119,11 @@ class CaptureMixin:
         if not name:
             raise ValueError("先在姿态集里选一套")
         poses = posesets.load_set(name)
-        view = loop.view(str(poses.get("arm") or he_session.ARM), "手眼采集")
-        st = view.status()
-        if not st.get("engaged") or st.get("float"):
-            raise RuntimeError("先接管，并退出拖拽")
         board = str(cfg.get("board_size") or "11x8")
         parse_board_size(board)
         still = dict(getattr(self.app.payload, "still", None) or iden.DEFAULT_STILL)
+        # 租约：占住姿态集那只手直到任务结束（没接管、在拖拽、被占用、急停锁定时这里就拒绝）
+        lease = motion.lease_arm(str(poses.get("arm") or he_session.ARM), "手眼采集")
 
         def done(result: Dict[str, Any]) -> None:
             if result.get("session"):
@@ -135,7 +133,11 @@ class CaptureMixin:
             with self._lock:
                 self._running = False
 
-        task = CaptureTask(view, self._camera(cfg), poses, board, still, done)
+        try:
+            task = CaptureTask(lease, self._camera(cfg), poses, board, still, done)
+        except BaseException:
+            lease.release()
+            raise
         with self._lock:
             self._task = task
             self._running = True
@@ -143,10 +145,10 @@ class CaptureMixin:
         return self.status()
 
     def stop_capture(self) -> None:
-        """急停用：叫停正在走点的手眼采集。"""
+        """「停止」按钮：叫停正在走点的手眼采集。急停不用它：急停撤销租约，任务自己就停了。"""
         task = self._task
         if task is not None:
-            task.stop.set()
+            task.request_stop()
 
     def _stop(self) -> Dict[str, Any]:
         self.stop_capture()

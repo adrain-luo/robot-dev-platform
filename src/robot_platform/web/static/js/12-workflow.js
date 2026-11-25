@@ -321,7 +321,7 @@ async function wfDgStop() {
   if (!(st.busy || st.next > 0 || st.finished)) return;
   if (st.busy) {
     st.abort = true;
-    wfDgSetNote("正在停止…");
+    wfDgSetNote("正在停止（急停会锁定，之后点「复位急停」再动手臂）…");
     try {
       await post("/api/hold", {});
     } catch (e) {
