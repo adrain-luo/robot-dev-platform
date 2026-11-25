@@ -1,0 +1,21 @@
+# Every systemd unit on THIS computer that writes rt/lowcmd (G1D) or
+# rt/arm_sdk (G1), one per line. Install as /etc/g1/actuator-writer-units.
+#
+# Each unit listed here should run the writer check as ExecStartPre with
+# --self set to its own name (see deploy/g1-guardian.service). A unit then
+# refuses to start while any other listed unit is running. Nothing is ever
+# stopped by the check.
+#
+# Check the real unit names on the robot first, e.g.
+#   systemctl list-unit-files --type=service | grep -Ei 'guardian|lowcmd|arm|fatigue|executor'
+# and keep this file in step with what is installed.
+
+# --- G1D body computer (where the guardian runs) ---
+g1-guardian.service
+# Unitree-side 250 Hz lowcmd publisher (workspace question Q16b: is it still enabled?)
+fatigue.service
+# Refactor stage-B executor services, if installed here: add their real names.
+
+# --- Box (a separate file on that computer) ---
+# The refactor task node writes rt/lowcmd with --arm-backend dds (its default).
+# vision-arm-control-refactor.service

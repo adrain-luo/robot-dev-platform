@@ -40,6 +40,8 @@ python3 -m g1_guardian.client --host 192.168.123.164 release
 
 systemd 单元见 `deploy/g1-guardian.service`。启动后守护层是 `idle`，**不发任何帧**，直到第一个客户端 `engage`；接管时才退出宇树运控（`ReleaseMode`），并把当前实测位姿作为保持目标。
 
+单元的 `ExecStartPre` 跑 `python3 -m g1_guardian.writer_check`：本机 `/etc/g1/actuator-writer-units`（从 `deploy/actuator-writer-units.example` 复制后按现场改）里列出的其他写入者单元有在运行的，守护层就不启动；文件不存在也不启动。它只读单元状态，**从不停掉别的单元**（G1D 上停掉正在保持手臂的写入者就是掉臂），所以没有用 systemd 的 `Conflicts=`。它只管本机的 systemd 单元；别的主机上的写入者、手动起的程序，由“接管前听到第三方帧就拒绝接管”兜住。
+
 `configs/g1.json`（G1，arm_sdk）是草稿：只有权重渐变，没有平台 `ArmSdkSchedule` 那样的增益过渡，从未上机。服务默认拒绝草稿配置，要加 `--allow-draft-config`。
 
 ## 协议（v1，UDP，每个数据报一个 JSON 对象）
