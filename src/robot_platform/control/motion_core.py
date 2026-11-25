@@ -182,7 +182,8 @@ class MotionCore:
             if not st["engaged"]:
                 raise rejection(_reject(0, Reason.NOT_ENGAGED, "先接管"))
             if not st["ready"]:
-                raise rejection(_reject(0, Reason.NOT_READY, f"指令出口没就绪：{st.get('transition') or '过渡中'}"))
+                why = st.get("state_stale") or f"指令出口没就绪：{st.get('transition') or '过渡中'}"
+                raise rejection(_reject(0, Reason.NOT_READY, why))
             n = next(self._ids)
             lease = Lease(lease_id=f"L{n}", epoch=self._epoch, resources=tuple(req.resources), owner=req.owner)
             rec = _LeaseRec(lease=lease, token=f"{req.owner}#{n}", arms=tuple(arms))
@@ -425,7 +426,9 @@ class MotionCore:
         recs: List[_LeaseRec] = []
         with self._lock:
             if engaged and not ready and self._leases:
-                recs = self._revoke_locked(f"指令出口没就绪：{self._loop.status().get('transition') or '未知原因'}")
+                st = self._loop.status()
+                why = st.get("state_stale") or f"指令出口没就绪：{st.get('transition') or '未知原因'}"
+                recs = self._revoke_locked(why)
                 self._loop.revoke_owners()
                 hold = [arm for rec in recs for arm in rec.arms]
             for arm, (t_end, _kind, _lid) in list(self._deadlines.items()):
@@ -471,7 +474,7 @@ class MotionCore:
         latched = list(info.get("latched") or [])
         if "link_lost" in latched:
             return SafetyState.LINK_LOST
-        if "stale_lowstate" in latched:
+        if "stale_lowstate" in latched or st.get("state_stale"):
             return SafetyState.STALE_LOWSTATE
         if info.get("state") == "estop":
             return SafetyState.ESTOP_LATCHED
