@@ -10,7 +10,9 @@ import time
 from pathlib import Path
 from typing import Optional, Sequence
 
-from robot_platform.hw.backends.base import Backend, Commander, LiftDriver, LiftReader, StateSource, check_idle_motors
+from robot_platform.hw.backends.base import (
+    Backend, Commander, LiftDriver, LiftReader, StateSource, check_idle_motors, profile_lowstate_max_age_s,
+)
 from robot_platform.hw.cmd_monitor import CmdMonitor, hints_for
 from robot_platform.hw.dds.sdk import init_channel
 from robot_platform.core.robot_profile import RobotProfile
@@ -116,6 +118,10 @@ class UnitreeLowCmdBackend(Backend):
                     sdk_path=self._sdk,
                 )
             return self._state
+
+    def lowstate_max_age_s(self) -> float:
+        # 本程序直接写 rt/lowcmd：lowstate 过期就由 ArmLoop 停在指令角保持
+        return profile_lowstate_max_age_s(self.profile)
 
     def cmd_monitor(self) -> CmdMonitor:
         self.state()

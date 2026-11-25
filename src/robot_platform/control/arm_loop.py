@@ -38,6 +38,12 @@ def side_label(arm: str) -> str:
     return "左" if arm == "left" else "右"
 
 
+def _stale_age_text(age_s: float, limit_s: float) -> str:
+    if not np.isfinite(age_s):
+        return "没有收到 lowstate"
+    return f"lowstate 已 {age_s * 1000:.0f} ms 没更新（上限 {limit_s * 1000:.0f} ms）"
+
+
 class _ArmState:
     """一只手的控制状态（读写都在 ArmLoop._lock 里）。"""
 
@@ -92,7 +98,10 @@ class ArmLoop:
         urdf_path: Optional[Path] = None,
         base_link: str = "torso_link",
         torso_imu=None,
+        lowstate_max_age_s: Optional[float] = None,
     ) -> None:
+        if lowstate_max_age_s is not None and not (np.isfinite(lowstate_max_age_s) and lowstate_max_age_s > 0):
+            raise ValueError("lowstate_max_age_s 必须是正数（或 None = 不检查）")
         self.reader = reader
         self._commander = commander
         self.kin = kin
@@ -122,6 +131,12 @@ class ArmLoop:
         # 运动禁止（急停锁存）：非空时拒绝新目标、动腰、拖拽、占用；保持、接管、释放照常。
         # 由运控核心（control/motion_core.py）置位 / 清除；检查都在 _lock 里，和设目标不会交错
         self._inhibit: Optional[str] = None
+        # lowstate 过期门控（直写后端用；守护层后端由本体上的守护层自己查，传 None）：
+        # 已接管时 lowstate 超过这么久没更新，就不再跟目标，两只手停在当前指令角
+        # （拖拽中的手退出拖拽、恢复全刚度），占用全部撤销、新运动一律拒绝，帧照发不停。
+        # lowstate 恢复后照旧保持，不会自己接着走，要重新下目标。
+        self._state_max_age = None if lowstate_max_age_s is None else float(lowstate_max_age_s)
+        self._stale: Optional[str] = None  # 过期原因（None = 没过期）；读写在 _lock 里
         # 每拍结束后调用一次 on_cycle(engaged, ready)（运控核心记状态历史、查设定有效期）。
         # 它出错只记 last_error，不影响发帧
         self.on_cycle: Optional[Callable[[bool, bool], None]] = None
@@ -164,8 +179,7 @@ class ArmLoop:
         """占用一只手：之后只有带同一个 owner 的目标能下到这只手。"""
         a = self._arm(arm)
         with self._lock:
-            if self._inhibit:
-                raise PermissionErrorMotion(self._inhibit)
+            self._refuse_if_blocked_locked()
             if a.owner is not None and a.owner != owner:
                 raise PermissionErrorMotion(f"{side_label(arm)}臂正被「{a.owner}」使用，等它结束或先急停")
             if a.float:
@@ -206,6 +220,25 @@ class ArmLoop:
             self._inhibit = None
 
     @property
+    def state_stale(self) -> Optional[str]:
+        """lowstate 过期的原因（None = 没过期或不检查）。"""
+        return self._stale
+
+    def _refuse_if_blocked_locked(self) -> None:
+        """急停锁存或 lowstate 过期时拒绝新运动（调用方持有 _lock）。"""
+        if self._inhibit:
+            raise PermissionErrorMotion(self._inhibit)
+        if self._stale:
+            raise PermissionErrorMotion(self._stale)
+
+    def _state_age_s(self) -> float:
+        try:
+            age = float(self.reader.age_s())
+        except Exception:  # noqa: BLE001  读不到年龄按过期处理
+            return float("inf")
+        return age if np.isfinite(age) and age >= 0 else float("inf")
+
+    @property
     def engaged(self) -> bool:
         return self._engaged
 
@@ -232,6 +265,10 @@ class ArmLoop:
         """两只手一起接管：都锁在当前实测角（叠重力前馈），腰锁在当前角。"""
         if self._commander.busy() and not self._engaged:
             raise PermissionErrorMotion("上次释放还在过渡，稍等再接管")
+        if self._state_max_age is not None:
+            age = self._state_age_s()
+            if age > self._state_max_age:
+                raise PermissionErrorMotion(f"{_stale_age_text(age, self._state_max_age)}，不能接管")
         self._commander.prepare()
         with self._publish_lock:
             qs = {name: a.clamp(self._measured(a)) for name, a in self._arms.items()}
@@ -244,6 +281,7 @@ class ArmLoop:
                     a.owner = None
                 self._waist_cmd = waist_now
                 self._waist_target = dict(waist_now)
+                self._stale = None
                 self._engaged = True
             self._commander.activate()
 
@@ -324,8 +362,7 @@ class ArmLoop:
             raise PermissionErrorMotion(f"{self.profile.name} 的腰只保持不转（站立时转腰会影响平衡）")
         self._require_ready("动腰")
         with self._lock:
-            if self._inhibit:
-                raise PermissionErrorMotion(self._inhibit)
+            self._refuse_if_blocked_locked()
             if not self._engaged or self._waist_target is None:
                 raise PermissionErrorMotion("先接管再动腰")
             if any(a.float for a in self._arms.values()):
@@ -356,8 +393,7 @@ class ArmLoop:
         self._require_ready("拖拽")
         picked = self._pick(arm)
         with self._lock:
-            if self._inhibit:
-                raise PermissionErrorMotion(self._inhibit)
+            self._refuse_if_blocked_locked()
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再拖拽")
             for a in picked:
@@ -443,8 +479,7 @@ class ArmLoop:
             self._require_ready("走点")
 
         def _gate() -> None:
-            if self._inhibit:
-                raise PermissionErrorMotion(self._inhibit)
+            self._refuse_if_blocked_locked()
             if not self._engaged:
                 raise PermissionErrorMotion("先接管再设目标")
             if a.float:
@@ -519,6 +554,7 @@ class ArmLoop:
             waist_cmd = dict(self._waist_cmd) if self._waist_cmd else None
             waist_target = {str(i): float(v) for i, v in self._waist_target.items()} if self._waist_target else None
             arms = {name: self._arm_status_locked(a) for name, a in self._arms.items()}
+            stale = self._stale
         return {
             "engaged": engaged,
             "float": any(v["float"] for v in arms.values()),
@@ -533,14 +569,61 @@ class ArmLoop:
             "last_error": self._last_err,
             # 急停锁存等运动禁止的原因（None = 没禁止）
             "inhibited": self._inhibit,
+            # lowstate 过期的原因（None = 没过期或不检查）；过期时 ready 为 False
+            "state_stale": stale,
+            "lowstate_max_age_ms": None if self._state_max_age is None else round(self._state_max_age * 1000),
             # 接管 / 释放过渡（arm_sdk 后端有，其它为空）
-            "ready": engaged and self._commander.ready(),
+            "ready": engaged and stale is None and self._commander.ready(),
             "transition": self._commander.phase(),
             # 指令出口详情（守护层后端有：守护层状态、锁存、循环抖动），其它为 None
             "commander": self._commander.info(),
         }
 
     # ------------------------------------------------------------ 循环
+    def _check_state_age(self, engaged: bool) -> bool:
+        """每拍查一次 lowstate 年龄；返回 True = 新鲜（或不检查）。不抛异常：它出错不能让本拍少发一帧。
+
+        刚过期的那一拍，在同一把锁里：两只手停在当前指令角（拖拽中的手退出拖拽、锁在最后读到的
+        角度、恢复全刚度）、腰停在当前指令角、撤销所有占用。过期期间新运动一律拒绝；恢复后照旧
+        保持，不自动接着走。"""
+        limit = self._state_max_age
+        if limit is None or not engaged:
+            if self._stale is not None:
+                with self._lock:
+                    self._stale = None
+            return True
+        age = self._state_age_s()
+        if age <= limit:
+            if self._stale is not None:
+                with self._lock:
+                    self._stale = None
+            return True
+        text = f"{_stale_age_text(age, limit)}：两只手停在当前指令角保持（帧照发），恢复后要重新下目标"
+        try:
+            try:
+                snap_q = self.reader.snapshot().q
+            except Exception:  # noqa: BLE001  读不到实测时拖拽中的手维持原样（没有角度可锁，不能跳回旧指令角）
+                snap_q = None
+            with self._lock:
+                entering = self._stale is None
+                self._stale = text
+                if entering:
+                    for a in self._arms.values():
+                        if a.float and snap_q is not None:
+                            # 拖拽时指令角不跟实测：先对齐到最后读到的角度，再恢复全刚度
+                            a.cmd_q = a.clamp(np.asarray([snap_q[i] for i in a.layout.motor_indices], dtype=float))
+                            a.float = False
+                        if not a.float:
+                            a.desired_q = a.cmd_q.copy()
+                        a.owner = None
+                    if self._waist_cmd is not None:
+                        self._waist_target = dict(self._waist_cmd)
+        except Exception as e:  # noqa: BLE001  保持没设成功也要照发本拍
+            self._last_err = f"lowstate 过期处理：{type(e).__name__}: {e}"
+            if self._stale is None:
+                self._stale = text
+        return False
+
     def _slew(self, a: _ArmState, dt: Optional[float] = None) -> None:
         # 每只手各按限速走、互不等待；每拍走的量按实际经过的时间算
         step = self.max_speed * (self._dt if dt is None else dt)
@@ -610,8 +693,10 @@ class ArmLoop:
             engaged = ready = False
             try:
                 engaged = self._engaged
+                # lowstate 过期：本拍不往前走，按指令角照发（见 _check_state_age）
+                fresh = self._check_state_age(engaged)
                 # 指令出口没就绪（过渡中、守护层急停 / 失联）时不往前走：重新接管会从实测角开始
-                ready = engaged and self._commander.ready()
+                ready = engaged and fresh and self._commander.ready()
                 # 释放过渡中（arm_sdk）仍要发帧，按最后的指令角保持
                 if engaged or self._commander.busy():
                     if ready:

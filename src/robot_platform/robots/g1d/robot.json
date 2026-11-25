@@ -38,7 +38,8 @@
     "command_topic": "rt/lowcmd",
     "guardian": {"host": "192.168.123.164", "port": 18090, "client_id": "robot-platform", "release_s": 3.0},
     "release_motion_mode": true,
-    "idle_motors": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    "idle_motors": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    "lowstate_max_age_ms": 100
   },
   "gains": {
     "kp": [

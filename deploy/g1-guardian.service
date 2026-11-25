@@ -1,11 +1,15 @@
 # G1/G1D body-side execution guardian: the only writer of rt/lowcmd (G1D).
 # Install on the robot's own computer (G1D body, e.g. 192.168.123.164):
 #   sudo mkdir -p /opt/g1-guardian && sudo cp -r src/g1_guardian /opt/g1-guardian/
+#   sudo mkdir -p /etc/g1 && sudo cp deploy/actuator-writer-units.example /etc/g1/actuator-writer-units
+#   (edit it: list every unit on this computer that writes rt/lowcmd)
 #   sudo cp deploy/g1-guardian.service /etc/systemd/system/ && sudo systemctl daemon-reload
 #   sudo systemctl enable --now g1-guardian
 # Before enabling: stop every other program that writes rt/lowcmd
 # (refactor stage-B executor services, fatigue.service's lowcmd publisher, ...).
-# The guardian refuses to engage while it sees foreign frames on its topic.
+# ExecStartPre refuses to start the guardian while another listed writer unit
+# is running (it never stops that unit). The guardian also refuses to engage
+# while it sees foreign frames on its topic.
 
 [Unit]
 Description=G1/G1D execution guardian (sole rt/lowcmd writer, holds on link loss)
@@ -17,6 +21,10 @@ Type=simple
 User=unitree
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/g1-guardian
+# One writer per computer: exit 1 (and do not start) if another unit listed in
+# /etc/g1/actuator-writer-units is running; exit 2 if the file is missing.
+ExecStartPre=/usr/bin/python3 -m g1_guardian.writer_check \
+    --self g1-guardian.service --units-file /etc/g1/actuator-writer-units
 ExecStart=/usr/bin/python3 -m g1_guardian.service \
     --config g1d \
     --bind 192.168.123.164 --port 18090 \

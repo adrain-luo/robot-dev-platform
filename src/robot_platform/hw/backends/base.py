@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -16,6 +17,19 @@ from robot_platform.core.robot_profile import ArmLayout
 
 class PermissionErrorMotion(PermissionError):
     """拒绝发令（只读模式、未接管、安全检查不过等），接口返回 403。"""
+
+
+def profile_lowstate_max_age_s(profile) -> float:
+    """机型 robot.json 的 control.lowstate_max_age_ms（直写后端必须有）→ 秒。"""
+    raw = profile.control.options.get("lowstate_max_age_ms")
+    try:
+        ms = float(raw)
+    except (TypeError, ValueError):
+        ms = float("nan")
+    if isinstance(raw, bool) or not math.isfinite(ms) or ms <= 0:
+        raise ValueError(f"{profile.name} 的 robot.json 缺少有效的 control.lowstate_max_age_ms（正数，毫秒），"
+                         f"直写后端必须设 lowstate 过期上限")
+    return ms / 1000.0
 
 
 def check_idle_motors(state: "StateSource", motors: Sequence[int]) -> None:
@@ -191,6 +205,13 @@ class Backend(ABC):
 
     def cmd_monitor(self):
         """指令话题占用检测（hw/cmd_monitor.CmdMonitor）；不支持的后端返回 None。"""
+        return None
+
+    def lowstate_max_age_s(self) -> Optional[float]:
+        """ArmLoop 的 lowstate 过期上限（秒）；None = 平台不查。
+
+        本程序直接写指令话题的后端必须查（取机型 robot.json 的 control.lowstate_max_age_ms）；
+        守护层后端由本体上的守护层查，mock 没有真的 lowstate，都返回 None。"""
         return None
 
     def lift_reader(self) -> LiftReader:
