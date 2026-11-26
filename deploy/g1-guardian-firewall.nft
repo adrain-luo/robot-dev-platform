@@ -1,0 +1,26 @@
+#!/usr/sbin/nft -f
+# Layer 1 of the guardian's access control, on the robot's own computer (G1D
+# body, 192.168.123.164): UDP 18090 is reachable only from this computer and
+# from the Box (192.168.123.5) on the wired robot network. The Wi-Fi side and
+# every other host on the robot network are dropped here.
+#
+# Layer 2 is the "access" section of src/g1_guardian/configs/<robot>.json.
+# The addresses below must be exactly its control + monitor lists, and the
+# interface the guardian unit's --net (tests/test_guardian_access.py checks
+# both).
+#
+# Own table: no other rule on this computer is touched, and only UDP 18090 is
+# filtered. Loading the file again replaces the table. Numeric priority so
+# that older nft versions (before 0.9.1) load it too.
+
+table inet g1_guardian
+delete table inet g1_guardian
+
+table inet g1_guardian {
+    chain input {
+        type filter hook input priority 0; policy accept;
+        iif "lo" udp dport 18090 accept
+        iifname "eth0" ip saddr { 192.168.123.5 } udp dport 18090 accept
+        udp dport 18090 counter drop
+    }
+}
