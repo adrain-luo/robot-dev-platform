@@ -14,6 +14,15 @@ fault      latched: hold; reasons link_lost / stale_lowstate / foreign_writer
 releasing  explicit release: stiffness (lowcmd) or weight (arm_sdk) ramps to
            0, then frames stop -- the only way frames ever stop
 
+Access
+------
+Every message from the network carries its source address. The config's
+``access`` gives each allowed address a role, and ``ROLE_COMMANDS`` says what
+each role may send; any other address is dropped. The owner is the client id
+*and* the address it engaged from: a message that only copies the owner's id
+from somewhere else neither commands the arm nor keeps the owner's link alive.
+``release`` is accepted from the owner, or from this computer (local).
+
 Holding always means: keep writing frames at the last commanded position,
 reached by decelerating within the acceleration limit, never by stopping,
 and with full stiffness.
@@ -51,6 +60,18 @@ ESTOP_RESTORE_S = 0.3
 FOREIGN_WRITER_WINDOW_S = 1.0
 # An idle (absent) motor reads exactly 0; anything above this is a real joint.
 IDLE_MOTOR_TOLERANCE_RAD = 1e-4
+# What each source role (config ``access``) may send.
+ALL_COMMANDS = frozenset(("engage", "setpoint", "heartbeat", "estop", "reset", "release"))
+ROLE_COMMANDS = {
+    "local": ALL_COMMANDS,
+    "control": ALL_COMMANDS,  # release only as the owner, see _on_release
+    "monitor": frozenset(("heartbeat", "estop")),
+}
+# An address outside the access lists is logged at most this often, and at
+# most this many such addresses are counted one by one (a flood must not
+# fill the log or the memory).
+REFUSED_EVENT_INTERVAL_S = 1.0
+MAX_REFUSED_SOURCES = 64
 
 
 @dataclass
@@ -108,11 +129,14 @@ def track_joint(q: float, v: float, target: Optional[float], vmax: float, amax: 
 
 class GuardianCore:
     def __init__(self, cfg: GuardianConfig) -> None:
+        if cfg.access is None:
+            raise ValueError("guardian config has no access section")
         self.cfg = cfg
         self.state = "idle"
         self.latched: List[str] = []
         self.epoch = 0
         self.owner: Optional[str] = None
+        self.owner_source: Optional[str] = None  # address the owner engaged from
         self.owner_last_msg = -math.inf
         self.q_cmd: Dict[str, List[float]] = {}
         self.v_cmd: Dict[str, List[float]] = {}
@@ -134,6 +158,8 @@ class GuardianCore:
         self.foreign_writer_at = -math.inf
         self.frames = 0
         self.rejects: Dict[str, int] = {}
+        self.refused_sources: Dict[str, int] = {}
+        self._refused_logged: Dict[str, float] = {}
         self.clamped = 0
         self.last_reject: Optional[Dict[str, Any]] = None
         self.events: List[Tuple[float, str]] = []  # drained by the service
@@ -184,13 +210,48 @@ class GuardianCore:
         self.epoch += 1
         self._event(now, f"latched:{reason}")
 
+    def _is_owner(self, client: Any, source: Optional[str]) -> bool:
+        """Same client id and same address as at engage. ``source`` None is an in-process caller."""
+        if self.owner is None or client != self.owner:
+            return False
+        return source is None or self.owner_source is None or source == self.owner_source
+
+    def permitted(self, source: Optional[str], kind: Any) -> Optional[str]:
+        """None if ``source`` may send ``kind``, otherwise the reject reason.
+
+        ``source`` None is an in-process caller (the service's shutdown
+        release, tests) and may send anything."""
+        if source is None:
+            return None
+        role = self.cfg.access.role(source)
+        if role is None:
+            return "source_not_allowed"
+        if kind not in ROLE_COMMANDS[role]:
+            return f"not_allowed:{role}"
+        return None
+
+    def refuse_source(self, now: float, source: str) -> None:
+        """A datagram from an address outside the access lists: count it, log it at most once a second."""
+        self.rejects["source_not_allowed"] = self.rejects.get("source_not_allowed", 0) + 1
+        key = source if (source in self.refused_sources or len(self.refused_sources) < MAX_REFUSED_SOURCES) else "other"
+        n = self.refused_sources.get(key, 0) + 1
+        self.refused_sources[key] = n
+        if now - self._refused_logged.get(key, -math.inf) >= REFUSED_EVENT_INTERVAL_S:
+            self._refused_logged[key] = now
+            self._event(now, f"refused_source:{key} count={n}")
+
     def note_foreign_writer(self, now: float) -> None:
         """Called by the output when frames that are not ours appear on the topic."""
         self.foreign_writer_at = now
 
     # ----------------------------------------------------------------- messages
-    def handle(self, msg: Any, now: float) -> Optional[str]:
-        """Apply one decoded message. Returns a reject reason, or None if accepted."""
+    def handle(self, msg: Any, now: float, source: Optional[str] = None) -> Optional[str]:
+        """Apply one decoded message. Returns a reject reason, or None if accepted.
+
+        ``source`` is the sender's IP address; None means an in-process caller."""
+        if source is not None and self.cfg.access.role(source) is None:
+            self.refuse_source(now, source)
+            return "source_not_allowed"
         if not isinstance(msg, dict):
             return self._reject(now, {}, "not_an_object")
         if msg.get("v") != PROTOCOL_VERSION:
@@ -199,21 +260,24 @@ class GuardianCore:
         client = msg.get("client")
         if not isinstance(client, str) or not client:
             return self._reject(now, msg, "no_client")
-        if self.owner is not None and client == self.owner:
+        if self._is_owner(client, source):
             self.owner_last_msg = now
+        if kind not in ALL_COMMANDS:
+            return self._reject(now, msg, "unknown_type")
+        refused = self.permitted(source, kind)
+        if refused:
+            return self._reject(now, msg, refused)
         if kind == "heartbeat":
             return None
         if kind == "estop":
             return self._on_estop(now, msg)
         if kind == "engage":
-            return self._on_engage(now, msg, client)
+            return self._on_engage(now, msg, client, source)
         if kind == "setpoint":
-            return self._on_setpoint(now, msg, client)
+            return self._on_setpoint(now, msg, client, source)
         if kind == "reset":
             return self._on_reset(now, msg)
-        if kind == "release":
-            return self._on_release(now, msg)
-        return self._reject(now, msg, "unknown_type")
+        return self._on_release(now, msg, client, source)
 
     def _on_estop(self, now: float, msg: Dict[str, Any]) -> Optional[str]:
         if self.state == "releasing":
@@ -249,13 +313,13 @@ class GuardianCore:
                     return f"out_of_limits:{g.name}[{i}]={q:.3f}"
         return None
 
-    def _on_engage(self, now: float, msg: Dict[str, Any], client: str) -> Optional[str]:
+    def _on_engage(self, now: float, msg: Dict[str, Any], client: str, source: Optional[str]) -> Optional[str]:
         if self.state == "releasing":
             return self._reject(now, msg, "releasing")
         if "estop" in self.latched:
             return self._reject(now, msg, "estop_latched")
         if self.state in LIVE:
-            if self.owner == client:
+            if self._is_owner(client, source):
                 return None  # idempotent: the owner asks for the current epoch
             if now - self.owner_last_msg <= self.cfg.link_timeout_s:
                 return self._reject(now, msg, "owned_by_other")
@@ -290,6 +354,7 @@ class GuardianCore:
         self._restore_stiffness()
         self.latched = [r for r in self.latched if r == "estop"]
         self.owner = client
+        self.owner_source = source
         self.owner_last_msg = now
         self.target = None
         self.state = "holding"
@@ -298,8 +363,8 @@ class GuardianCore:
         self._event(now, f"engaged:{client}")
         return None
 
-    def _on_setpoint(self, now: float, msg: Dict[str, Any], client: str) -> Optional[str]:
-        if client != self.owner:
+    def _on_setpoint(self, now: float, msg: Dict[str, Any], client: str, source: Optional[str]) -> Optional[str]:
+        if not self._is_owner(client, source):
             return self._reject(now, msg, "not_owner")
         if self.state not in LIVE:
             return self._reject(now, msg, f"state_{self.state}")
@@ -393,9 +458,14 @@ class GuardianCore:
         self._event(now, "reset")
         return None
 
-    def _on_release(self, now: float, msg: Dict[str, Any]) -> Optional[str]:
+    def _on_release(self, now: float, msg: Dict[str, Any], client: str, source: Optional[str]) -> Optional[str]:
         if self.state in ("idle", "releasing"):
             return None
+        # Accepted in every engaged state, E-STOP latched included (owner's decision, 2026-11-26),
+        # but only from the owner or from this computer: another program on the Box must not
+        # lower the arm the motion core is holding.
+        if source is not None and self.cfg.access.role(source) != "local" and not self._is_owner(client, source):
+            return self._reject(now, msg, "not_owner")
         self._restore_stiffness()
         self.state = "releasing"
         self.target = None
@@ -471,6 +541,7 @@ class GuardianCore:
             frame.final = True
             self.state = "idle"
             self.owner = None
+            self.owner_source = None
             self.target = None
             self.q_cmd, self.v_cmd, self.tau_ff, self.kp_scale, self.kp_now = {}, {}, {}, {}, {}
             self._event(now, "released")

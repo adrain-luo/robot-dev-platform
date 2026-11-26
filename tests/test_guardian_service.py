@@ -1,12 +1,13 @@
 """GuardianService over real UDP: the loop never stops writing while engaged."""
 
+import dataclasses
 import threading
 import time
 
 import pytest
 
-from g1_guardian.client import GuardianClient, GuardianRejected
-from g1_guardian.config import builtin_config_path, load_config
+from g1_guardian.client import GuardianClient, GuardianRejected, GuardianUnavailable
+from g1_guardian.config import AccessConfig, builtin_config_path, load_config
 from g1_guardian.core import LowStateView
 from g1_guardian.service import GuardianService
 
@@ -231,3 +232,85 @@ def test_idle_motor_precheck_runs_before_the_motion_mode_is_released(rig):
         c.engage(timeout=2.0)
     assert exc.value.reason == "motors_not_idle:0"
     assert robot.prepare_calls == 0, "ReleaseMode must not run on a robot that is not idle"
+
+
+# ---------------------------------------------------------------------- access
+# Linux answers on all of 127/8, so each role gets its own loopback address.
+OWNER_SRC, CONTROL2_SRC, MONITOR_SRC, STRANGER_SRC = "127.0.0.1", "127.0.0.4", "127.0.0.3", "127.0.0.2"
+
+
+@pytest.fixture
+def access_rig(tmp_path):
+    acc = AccessConfig(local=(OWNER_SRC,), control=(CONTROL2_SRC,), monitor=(MONITOR_SRC,))
+    cfg = dataclasses.replace(CFG, access=acc)
+    robot = FakeRobot()
+    svc = GuardianService(cfg, robot, robot, bind=("127.0.0.1", 0), blackbox_dir=tmp_path / "bb", log=lambda s: None)
+    t = threading.Thread(target=svc.run, name="guardian_loop", daemon=True)
+    t.start()
+    clients = []
+
+    def client(cid="box", src=OWNER_SRC):
+        c = GuardianClient("127.0.0.1", svc.address[1], client_id=cid, bind_host=src)
+        clients.append(c)
+        return c
+
+    yield svc, robot, client
+    for c in clients:
+        c.close()
+    svc.stop()
+    t.join(2)
+    svc.close()
+
+
+def test_a_stranger_gets_no_answer_and_never_reaches_the_motion_mode(access_rig):
+    svc, robot, client = access_rig
+    stranger = client("box", STRANGER_SRC)
+    with pytest.raises(GuardianUnavailable):
+        stranger.engage(timeout=0.3)
+    assert robot.prepare_calls == 0 and svc.core.state == "idle"
+    assert stranger.latest_status() is None, "not even a status"
+    assert not [a for a in svc.subscribers if a[0] == STRANGER_SRC]
+    assert svc.core.refused_sources[STRANGER_SRC] >= 1
+    box = client("box")
+    box.engage()
+    with pytest.raises(GuardianUnavailable):
+        stranger.estop(timeout=0.3)
+    with pytest.raises(GuardianUnavailable):
+        stranger.release(timeout=0.3)
+    st = box.ping()
+    assert st["state"] == "holding" and st["latched"] == []
+
+
+def test_a_monitor_cannot_engage_or_release_but_can_estop(access_rig):
+    svc, robot, client = access_rig
+    mon = client("watch", MONITOR_SRC)
+    with pytest.raises(GuardianRejected) as exc:
+        mon.engage(timeout=2.0)
+    assert exc.value.reason == "not_allowed:monitor"
+    assert robot.prepare_calls == 0, "ReleaseMode must not run for a monitor's engage"
+    box = client("box")
+    box.engage()
+    with pytest.raises(GuardianRejected, match="not_allowed:monitor"):
+        mon.release()
+    mon.estop()
+    assert box.ping()["state"] == "estop"
+
+
+def test_an_impostor_with_the_owner_id_can_neither_move_nor_lower_the_arm(access_rig):
+    svc, robot, client = access_rig
+    box = client("box")
+    box.engage()
+    impostor = client("box", CONTROL2_SRC)  # an allowed address, same client id
+    impostor.epoch = box.epoch
+    t0 = time.monotonic()
+    stream(impostor, [0.6] + REST[1:], 0.3)
+    with pytest.raises(GuardianRejected) as exc:
+        impostor.release()
+    assert exc.value.reason == "not_owner"
+    time.sleep(0.1)
+    writes = robot.snapshot()
+    assert max(abs(w[1][0] - REST[0]) for w in writes if w[0] > t0) < 1e-9, "the arm did not move"
+    assert max_gap(writes, t0) < MAX_GAP_S, "frames continue"
+    assert writes[-1][2] == CFG.kp[RIGHT.motors[0]], "full stiffness"
+    st = box.ping()
+    assert st["state"] == "holding" and st["owner"] == "box"

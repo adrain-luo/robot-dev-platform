@@ -180,6 +180,12 @@
     10,
     11
   ],
+  "access": {
+    "_doc": "Source addresses allowed to talk to the guardian (UDP 18090). local = this computer: 127.0.0.1 and the --bind address in deploy/g1-guardian.service; every command, and release without being the owner (the operator's CLI). control = the Box running the motion core (192.168.123.5 on the robot network): every command, release only from the current owner. monitor = status and E-STOP only. Anything else is dropped unanswered. deploy/g1-guardian-firewall.nft must let in exactly control + monitor (tests/test_guardian_access.py checks this).",
+    "local": ["127.0.0.1", "192.168.123.164"],
+    "control": ["192.168.123.5"],
+    "monitor": []
+  },
   "limits": {
     "position_margin_rad": 0.02,
     "max_velocity_rad_s": 1.0,
