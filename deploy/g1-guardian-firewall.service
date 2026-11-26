@@ -1,0 +1,24 @@
+# Layer 1 of the guardian's access control: loads g1-guardian-firewall.nft,
+# which lets only this computer and the Box reach UDP 18090.
+# Install on the robot's own computer (G1D body), as root:
+#   sudo mkdir -p /etc/g1 && sudo cp deploy/g1-guardian-firewall.nft /etc/g1/
+#   sudo cp deploy/g1-guardian-firewall.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now g1-guardian-firewall
+# It filters UDP 18090 only and never starts, stops or restarts the guardian.
+# Stopping this unit removes the filter (the guardian keeps running; layer 2,
+# the config's access lists, still applies).
+
+[Unit]
+Description=Firewall for the G1/G1D guardian port (UDP 18090: only this computer and the Box)
+DefaultDependencies=no
+Wants=network-pre.target
+Before=network-pre.target g1-guardian.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/g1/g1-guardian-firewall.nft
+ExecStop=/usr/sbin/nft delete table inet g1_guardian
+
+[Install]
+WantedBy=multi-user.target

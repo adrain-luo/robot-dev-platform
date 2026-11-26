@@ -4,9 +4,12 @@ Box -> guardian (every message carries "v", "type", "client", "seq"):
   engage     take control (or re-read the epoch); refused while E-STOP latched
   setpoint   {"epoch", "valid_for_ms", "groups": {name: {"q", "tau_ff"?, "kp_scale"?}}}
   heartbeat  keeps the link alive between setpoints
-  estop      latch E-STOP: hold, reject setpoints until reset (any client)
-  reset      clear E-STOP / faults (any client); owners must engage again
-  release    ramp stiffness / weight to 0, then stop sending frames
+  estop      latch E-STOP: hold, reject setpoints until reset (any allowed source)
+  reset      clear E-STOP / faults (local or control); owners must engage again
+  release    ramp stiffness / weight to 0, then stop sending frames (the owner, or local)
+
+Who may send what depends on the source address (config "access", see
+core.ROLE_COMMANDS); a datagram from any other address gets no answer.
 
 Guardian -> Box: "status" objects, streamed to every address that sent a
 message in the last few seconds, plus an immediate status carrying an

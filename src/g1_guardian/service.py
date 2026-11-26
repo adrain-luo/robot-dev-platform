@@ -28,7 +28,7 @@ from typing import Any, Callable, Deque, Dict, Optional, Protocol, Tuple
 from g1_guardian import __version__
 from g1_guardian.blackbox import Blackbox
 from g1_guardian.config import GuardianConfig, builtin_config_path, load_config
-from g1_guardian.core import Frame, GuardianCore, LowStateView
+from g1_guardian.core import ALL_COMMANDS, Frame, GuardianCore, LowStateView
 from g1_guardian.protocol import DEFAULT_PORT, MAX_DATAGRAM, ProtocolError, decode, encode
 
 SUBSCRIBER_TTL_S = 5.0
@@ -143,6 +143,11 @@ class GuardianService:
                 return
             except OSError:
                 return
+            source = addr[0]
+            if self.cfg.access.role(source) is None:
+                # Not in the config's access lists: no answer, no status, not even decoded.
+                self.core.refuse_source(now, source)
+                continue
             self.subscribers[addr] = now + SUBSCRIBER_TTL_S
             try:
                 msg = decode(data)
@@ -150,8 +155,11 @@ class GuardianService:
                 self.core._reject(now, {}, f"bad_message:{exc}"[:80])
                 continue
             kind = msg.get("type")
-            reason = None
-            if kind == "engage" and not self.output.prepared:
+            reason = self.core.permitted(source, kind) if kind in ALL_COMMANDS else None
+            if reason is not None:
+                # Checked before the engage precheck: Output.prepare() leaves Unitree's motion mode.
+                reason = self.core._reject(now, msg, reason)
+            elif kind == "engage" and not self.output.prepared:
                 # Feed the newest lowstate first: the precheck must see the robot as it is now.
                 ls = self.lowstate.latest()
                 if ls is not None:
@@ -165,7 +173,7 @@ class GuardianService:
                     except Exception as exc:  # noqa: BLE001
                         reason = self.core._reject(now, msg, f"prepare_failed:{exc}"[:120])
             if reason is None:
-                reason = self.core.handle(msg, now)
+                reason = self.core.handle(msg, now, source=source)
             if kind != "setpoint" or (reason is not None and now - self._last_reject_ack >= REJECT_ACK_MIN_INTERVAL_S):
                 if kind == "setpoint":
                     self._last_reject_ack = now
@@ -322,6 +330,12 @@ def main(argv: Optional[list] = None) -> int:
     svc = GuardianService(cfg, output, lowstate, bind=(args.bind, args.port), blackbox_dir=Path(args.blackbox_dir))
     log(f"[g1_guardian] {__version__} robot={cfg.robot} channel={cfg.channel} status={cfg.status} "
         f"listening udp://{svc.address[0]}:{svc.address[1]} rate={cfg.rate_hz}Hz")
+    acc = cfg.access
+    log(f"[g1_guardian] access: local={list(acc.local)} control={list(acc.control)} monitor={list(acc.monitor)}; "
+        "other addresses are dropped")
+    if args.bind not in acc.local:
+        log(f"[g1_guardian][WARN] --bind {args.bind} is not in access.local: CLI commands on this computer "
+            "will be refused")
     log("[g1_guardian] idle: no frames are sent until a client engages")
     setup_realtime(args.rt_priority, args.cpu, log)
     signal.signal(signal.SIGTERM, lambda *_: svc.request_shutdown())

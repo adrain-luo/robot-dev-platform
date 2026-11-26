@@ -13,7 +13,7 @@
 | lowstate 过期 | 保持最后指令，锁存 `stale_lowstate` |
 | 话题上出现别人的帧 | 拒绝接管；已接管时锁存 `foreign_writer` |
 | 接管时 `idle_motors`（G1D：0–11 号腿部电机）有读数 | 拒绝接管（`motors_not_idle`），**在退出运控之前**就拒绝：连着的可能是站着的双足 G1，退出运控它会摔 |
-| E-STOP（任何客户端） | 减速保持并锁存；设定一律拒绝，直到 `reset`；`reset` 后旧 epoch 的设定仍被拒绝，任务必须重新 `engage` |
+| E-STOP（本机、Box 或监视地址发来，见“访问控制”） | 减速保持并锁存；设定一律拒绝，直到 `reset`；`reset` 后旧 epoch 的设定仍被拒绝，任务必须重新 `engage` |
 | 设定越限 | 位置钳到限位内；与当前指令相差超过 `max_target_jump_rad` 直接拒绝；前馈钳到 `tau_ff_limit_nm` |
 | 写帧异常 | 计数、下一拍重试，循环不退出 |
 | `release` 或 `systemctl stop` | G1D：3 s 内把刚度和前馈降到 0（阻尼不变）再停发；G1：权重降到 0 再停发 |
@@ -31,7 +31,7 @@
 python3 -m g1_guardian.service --config g1d --bind 192.168.123.164 --net eth0 \
     --sdk-path /home/unitree/unitree_sdk2_python --blackbox-dir /var/lib/g1-guardian/blackbox
 
-# 任何一台机器上看状态 / 操作
+# 本机或 Box 上看状态 / 操作（其他地址发的命令守护层不回应，见“访问控制”）
 python3 -m g1_guardian.client --host 192.168.123.164 watch
 python3 -m g1_guardian.client --host 192.168.123.164 estop
 python3 -m g1_guardian.client --host 192.168.123.164 reset
@@ -60,11 +60,44 @@ systemd 单元见 `deploy/g1-guardian.service`。启动后守护层是 `idle`，
 
 组（group）：`right_arm`（电机 22–28）、`left_arm`（15–21）、`waist`（12）。G1D 的 13 号电机没有文档说明的关节，接管时锁在当时的角度，不跟踪设定。
 
+## 访问控制（谁能发什么）
+
+两层，都只管 UDP 18090，报文格式不变（协议仍是 v1）：
+
+1. **防火墙**：`deploy/g1-guardian-firewall.nft`，由 `deploy/g1-guardian-firewall.service` 开机加载。只放行本机（`lo`）和 Box（`eth0` 上的 192.168.123.5），其余丢弃。Wi-Fi 那一侧、机器人网段上的其他设备都到不了守护层。
+2. **配置里的 `access`**：守护层自己按来源地址分角色判断，不依赖防火墙。配置里没有 `access` 段就不加载。
+
+| 角色 | 地址（`configs/g1d.json`） | 能发 |
+| --- | --- | --- |
+| `local`（本机） | 127.0.0.1、192.168.123.164（`--bind`） | 全部；`release` 不必是拥有者（本体上的命令行） |
+| `control`（Box） | 192.168.123.5 | 全部；`release` 只收当前拥有者 |
+| `monitor` | 默认没有 | 收状态、`estop` |
+| 其他地址 | — | 不回应，也不推状态；日志每秒最多一行 `refused_source:<地址>` |
+
+- **拥有者 = `engage` 时的 client 名加上发 `engage` 的地址。** 别的地址抄同一个 client 名发设定、心跳或 `release` 都无效：心跳也不算拥有者还活着，真正的拥有者失联照样锁存 `link_lost`。
+- 急停锁存时仍然收 `release`（负责人 2026-11-26 定），同样只收拥有者或本机。
+- `monitor` 发的 `engage` 在退出宇树运控（`ReleaseMode`）之前就被拒绝。
+- 改地址时三处一起改：`configs/<机型>.json` 的 `access`、`deploy/g1-guardian-firewall.nft`、`deploy/g1-guardian.service` 的 `--bind`。`tests/test_guardian_access.py` 检查它们一致。
+- 挡不住的：同一网段里伪造源地址（要第 3 层报文签名，没做）；Box 上的任何程序都算 Box。
+
+### 操作卡：装防火墙（由负责人执行）
+
+前提：守护层是 `idle`（没接管）。装防火墙不碰发帧；但地址写错、把 Box 挡在外面时，正接管着的守护层会因失联锁存 `link_lost` 并原地保持（不掉），所以在 `idle` 时装。
+
+1. 本体上 `nft --version`（要 0.9 以上）。没有 `nft` 就先停在这一步，把输出发回。
+2. `ip -brief addr`：本体有线口是 `eth0`、地址 192.168.123.164；Box 是 192.168.123.5。不一致的话先按上面“三处一起改”。
+3. 按 `deploy/g1-guardian-firewall.service` 文件头的三步安装、启用。
+4. `sudo nft list table inet g1_guardian`：应有三条规则。
+5. Box 上 `python3 -m g1_guardian.client --host 192.168.123.164 status` 应正常返回；从 Wi-Fi 上的另一台机器发同样的命令应超时，第 4 步里 `drop` 的计数增加。
+6. 守护层启动日志里有 `access: local=[...] control=[...]`。
+
+回滚：`sudo systemctl disable --now g1-guardian-firewall`（删掉这张表，守护层不受影响；第 2 层照样生效）。
+
 ## 上机前必须实测
 
 在手臂有机械支撑、旁边有人能断电的前提下：
 
-1. 启动服务，`watch` 看 `state=idle`、`lowstate_age_ms` 正常，且没有 `foreign_writer_frames`。
+1. 启动服务，`watch` 看 `state=idle`、`lowstate_age_ms` 正常，且没有 `foreign_writer_frames`；先按上面的操作卡装好防火墙。
 2. `engage`：手臂应原地不动。
 3. 拔掉 Box 网线（或停 Box 上的节点）：手臂原地保持，状态变 `fault [link_lost]`。
 4. `estop` → `reset` → 客户端重新 `engage`：期间手臂不动。

@@ -7,6 +7,7 @@ programs can only ask for less (a kp scale <= 1), never for more.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 from dataclasses import dataclass, field
@@ -35,6 +36,40 @@ class GroupConfig:
     @property
     def size(self) -> int:
         return len(self.motors)
+
+
+@dataclass(frozen=True)
+class AccessConfig:
+    """Which source addresses may talk to the guardian, by role.
+
+    local    this computer (loopback, the bound address): every command, and
+             ``release`` even when it is not the owner (the operator's CLI)
+    control  the Box running the motion core: every command; ``release`` only
+             from the current owner
+    monitor  status and E-STOP only
+    Any other address is dropped without an answer. What each role may send
+    is decided in ``core.ROLE_COMMANDS``.
+    """
+
+    local: Tuple[str, ...]
+    control: Tuple[str, ...]
+    monitor: Tuple[str, ...] = ()
+
+    def role(self, source: Optional[str]) -> Optional[str]:
+        if source is None:
+            return None
+        if source in self.local:
+            return "local"
+        if source in self.control:
+            return "control"
+        if source in self.monitor:
+            return "monitor"
+        return None
+
+    @property
+    def remote(self) -> Tuple[str, ...]:
+        """Addresses that reach the guardian over the network (what the firewall must let in)."""
+        return self.control + self.monitor
 
 
 @dataclass(frozen=True)
@@ -68,6 +103,8 @@ class GuardianConfig:
     # Damping used while a group is fully compliant (kp scale 0, e.g. teach
     # mode); None keeps the body kd. Interpolated with the stiffness scale.
     compliant_kd: Optional[float] = None
+    # Who may send what (``access`` in the JSON). Required: a config without it does not load.
+    access: Optional[AccessConfig] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -98,6 +135,44 @@ def _floats(values: Any, n: int, what: str) -> Tuple[float, ...]:
     if not all(math.isfinite(v) for v in out):
         raise ConfigError(f"{what}: values must be finite")
     return out
+
+
+def _addresses(values: Any, what: str) -> Tuple[str, ...]:
+    if not isinstance(values, list):
+        raise ConfigError(f"access.{what}: expected a list of IPv4 addresses, got {values!r}")
+    out = []
+    for v in values:
+        try:
+            ip = ipaddress.ip_address(str(v))
+        except ValueError as exc:
+            raise ConfigError(f"access.{what}: {v!r} is not an IP address") from exc
+        if ip.version != 4:
+            raise ConfigError(f"access.{what}: {v!r}: the guardian listens on IPv4 only")
+        if str(ip) != v:
+            raise ConfigError(f"access.{what}: write {v!r} as {str(ip)!r}")
+        out.append(str(ip))
+    return tuple(out)
+
+
+def access_from_dict(d: Any) -> AccessConfig:
+    if not isinstance(d, dict):
+        raise ConfigError("missing access section: list the local, control and monitor addresses")
+    unknown = sorted(k for k in d if not k.startswith("_") and k not in ("local", "control", "monitor"))
+    if unknown:
+        raise ConfigError(f"access: unknown keys {unknown}")
+    local = _addresses(d.get("local", []), "local")
+    control = _addresses(d.get("control", []), "control")
+    monitor = _addresses(d.get("monitor", []), "monitor")
+    every = local + control + monitor
+    dup = sorted({a for a in every if every.count(a) > 1})
+    if dup:
+        raise ConfigError(f"access: {dup} listed more than once (each address has one role)")
+    if not local and not control:
+        raise ConfigError("access: no local or control address, nobody could engage")
+    for a in control + monitor:
+        if ipaddress.ip_address(a).is_loopback:
+            raise ConfigError(f"access: loopback {a} belongs in local")
+    return AccessConfig(local=local, control=control, monitor=monitor)
 
 
 def config_from_dict(d: Dict[str, Any]) -> GuardianConfig:
@@ -192,6 +267,7 @@ def config_from_dict(d: Dict[str, Any]) -> GuardianConfig:
         blackbox_seconds=float(timing.get("blackbox_seconds", 10.0)),
         stiffness_ramp_s=float(timing.get("stiffness_ramp_s", 0.25)),
         compliant_kd=None if limits.get("compliant_kd") is None else float(limits["compliant_kd"]),
+        access=access_from_dict(d.get("access")),
         extra={k: v for k, v in d.items() if k.startswith("_") or k in ("note", "joints")},
     )
     if cfg.rate_hz <= 0 or cfg.status_hz <= 0:
