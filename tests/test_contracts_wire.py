@@ -24,6 +24,7 @@ SAMPLES = [
     Ack(seq=5, verdict=Verdict.ACCEPTED),
     MotionState(stamp=Stamp(t_ns=1, host="box"), resource=Resource.RIGHT_ARM, q_meas=(0.1,), q_cmd=(0.2,),
                 lease_owner=None, safety=SafetyState.ESTOP_LATCHED, epoch=2),
+    LeaseRequest(resources=(Resource.RIGHT_ARM,), owner="refactor-node", max_speed_rad_s=1.0),  # 1.2
 ]
 
 
@@ -35,7 +36,7 @@ def test_every_type_round_trips_through_json(obj):
 
 def test_envelope_round_trip_and_version():
     msg = wire.message("goal", 7, request=wire.to_wire(SAMPLES[6]))
-    assert msg["v"] == CONTRACT_VERSION == "1.1"
+    assert msg["v"] == CONTRACT_VERSION == "1.2"
     back = wire.decode(wire.encode(msg), wire.CLIENT_TYPES)
     assert back == msg
     assert wire.from_wire(GoalRequest, back["request"]) == SAMPLES[6]
@@ -50,7 +51,7 @@ def test_envelope_round_trip_and_version():
     (json.dumps({"v": CONTRACT_VERSION, "type": "fly", "seq": 1}).encode(), "unsupported"),
     (json.dumps({"v": CONTRACT_VERSION, "type": "goal", "seq": -1}).encode(), "protocol"),
     (json.dumps({"v": CONTRACT_VERSION, "type": "goal", "seq": True}).encode(), "protocol"),
-    (b'{"v": "1.1", "type": "goal", "seq": 1, "x": NaN}', "protocol"),
+    (b'{"v": "1.2", "type": "goal", "seq": 1, "x": NaN}', "protocol"),
     (b"x" * (wire.MAX_MESSAGE_BYTES + 1), "protocol"),
 ])
 def test_bad_envelopes_are_refused_with_a_kind(data, kind):
@@ -86,6 +87,10 @@ def _goal(**over):
     (StreamSetpoint, {**wire.to_wire(SAMPLES[4]), "q": []}),
     (LeaseRequest, {"resources": "right_arm", "owner": "x"}),
     (LeaseRequest, {"resources": ["right_arm", "right_arm"], "owner": "x"}),
+    (LeaseRequest, {"resources": ["right_arm"], "owner": "x", "max_speed_rad_s": 0}),
+    (LeaseRequest, {"resources": ["right_arm"], "owner": "x", "max_speed_rad_s": -1.0}),
+    (LeaseRequest, {"resources": ["right_arm"], "owner": "x", "max_speed_rad_s": "fast"}),
+    (LeaseRequest, {"resources": ["right_arm"], "owner": "x", "max_speed_rad_s": True}),
     (Ack, {"seq": 1, "verdict": "maybe"}),
     (Stamp, {"t_ns": -1, "host": "box"}),
     (MotionState, "nope"),

@@ -159,9 +159,12 @@ class MotionClient:
         self.conn = conn
 
     def lease(self, resources: Sequence[Resource], owner: str, *,
-              heartbeat_ms: Optional[int] = None) -> RemoteLease:
-        """Acquire now; the returned lease is also a context manager (returned on exit)."""
-        req = LeaseRequest(resources=tuple(resources), owner=owner, heartbeat_ms=heartbeat_ms)
+              heartbeat_ms: Optional[int] = None, max_speed_rad_s: Optional[float] = None) -> RemoteLease:
+        """Acquire now; the returned lease is also a context manager (returned on exit).
+
+        ``max_speed_rad_s``: speed limit for the leased arms (D3); None = the core's global limit."""
+        req = LeaseRequest(resources=tuple(resources), owner=owner, heartbeat_ms=heartbeat_ms,
+                           max_speed_rad_s=max_speed_rad_s)
         reply = self.conn.request("lease", request=wire.to_wire(req))
         lease = wire.from_wire(Lease, reply.get("lease"))
         return RemoteLease(self.conn, lease, str(reply.get("token") or owner))

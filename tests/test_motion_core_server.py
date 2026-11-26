@@ -390,3 +390,15 @@ def test_jsonable_makes_numpy_and_nan_safe():
     out = jsonable({"a": np.float32(1.5), "b": np.array([1, 2]), "c": (np.bool_(True), float("nan")), 3: None})
     assert out == {"a": 1.5, "b": [1, 2], "c": [True, None], "3": None}
     wire.encode(wire.message("reply", 1, result=out))
+
+
+def test_lease_speed_travels_over_the_socket(proc, conns):
+    """D3：refactor 的租约带自己的限速（现场 1.0），页面的全局限速（这里 0.4）不受影响。"""
+    c = conns("refactor-node")
+    c.call("engage", timeout_s=30)
+    with MotionClient(c).lease([R], "refactor-node", max_speed_rad_s=1.0):
+        assert arm_st(proc)["speed_rad_s"] == 1.0 and arm_st(proc, "left")["speed_rad_s"] == 0.4
+    assert arm_st(proc)["speed_rad_s"] == 0.4
+    with pytest.raises(MotionRejected) as e:
+        MotionClient(c).lease([R], "refactor-node", max_speed_rad_s=2.0)
+    assert e.value.reason is Reason.INVALID

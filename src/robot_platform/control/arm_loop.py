@@ -25,6 +25,9 @@ from robot_platform.core.robot_profile import active as active_profile
 
 TAU_FF_LIMIT = 8.0
 TEACH_KD = 2.0
+# 限速的钳位（全局限速和租约自带的限速都钳在这里）
+MIN_SPEED_RAD_S = 0.02
+MAX_SPEED_RAD_S = 1.0
 
 
 def _clamp_span(value: float, span: tuple) -> float:
@@ -60,6 +63,9 @@ class _ArmState:
         self.payload_name: Optional[str] = None
         self.last_tau_ff = np.zeros(layout.n)
         self.owner: Optional[str] = None
+        # 占用者自带的限速（阶段 2 D3：refactor 用它自己的 --max-joint-speed）；只在 owner 不为空时生效，
+        # 占用一撤销 / 归还就回到全局限速
+        self.owner_speed: Optional[float] = None
 
     @property
     def desired_q(self) -> np.ndarray:
@@ -106,7 +112,7 @@ class ArmLoop:
         self._commander = commander
         self.kin = kin
         self.profile = active_profile()
-        self.max_speed = float(np.clip(max_speed_rad_s, 0.02, 1.0))
+        self.max_speed = float(np.clip(max_speed_rad_s, MIN_SPEED_RAD_S, MAX_SPEED_RAD_S))
         self._dt = 1.0 / float(rate_hz)
         self._loop_period = self._dt  # 实测循环周期（指数平均），给页面看实际频率
         self.kp_body = list(self.profile.kp)
@@ -168,16 +174,34 @@ class ArmLoop:
         return np.asarray(self.reader.read_arm(a.layout).q, dtype=float)
 
     def set_max_speed(self, v: float) -> None:
-        self.max_speed = float(np.clip(v, 0.02, 1.0))
+        """全局限速（页面滑条）：没被占用、或占用者没带限速的手按它走。"""
+        self.max_speed = float(np.clip(v, MIN_SPEED_RAD_S, MAX_SPEED_RAD_S))
+
+    @staticmethod
+    def check_speed(v: float) -> float:
+        """占用者自带的限速：必须在 [MIN_SPEED_RAD_S, MAX_SPEED_RAD_S] 内（不悄悄钳位，超了就拒绝）。"""
+        v = float(v)
+        if not (np.isfinite(v) and MIN_SPEED_RAD_S <= v <= MAX_SPEED_RAD_S):
+            raise ValueError(f"限速 {v} rad/s 不在 {MIN_SPEED_RAD_S}–{MAX_SPEED_RAD_S} rad/s 内")
+        return v
+
+    def _speed(self, a: "_ArmState") -> float:
+        """这只手这一拍的限速：被占用且占用者带了限速就用它，否则用全局限速。调用方持有 _lock。"""
+        if a.owner is not None and a.owner_speed is not None:
+            return a.owner_speed
+        return self.max_speed
 
     # ------------------------------------------------------------ 占用
     def owner(self, arm: str) -> Optional[str]:
         with self._lock:
             return self._arm(arm).owner
 
-    def acquire_owner(self, arm: str, owner: str) -> None:
-        """占用一只手：之后只有带同一个 owner 的目标能下到这只手。"""
+    def acquire_owner(self, arm: str, owner: str, *, max_speed: Optional[float] = None) -> None:
+        """占用一只手：之后只有带同一个 owner 的目标能下到这只手。
+
+        max_speed：占用期间这只手用的限速（None = 全局限速）；超出 [0.02, 1.0] rad/s 抛 ValueError。"""
         a = self._arm(arm)
+        speed = None if max_speed is None else self.check_speed(max_speed)
         with self._lock:
             self._refuse_if_blocked_locked()
             if a.owner is not None and a.owner != owner:
@@ -185,6 +209,7 @@ class ArmLoop:
             if a.float:
                 raise PermissionErrorMotion(f"{side_label(arm)}臂在拖拽，先退出拖拽")
             a.owner = owner
+            a.owner_speed = speed
 
     def release_owner(self, arm: str, owner: str) -> None:
         """归还占用（已经被撤销或换了占用者时什么都不做）。"""
@@ -192,6 +217,7 @@ class ArmLoop:
         with self._lock:
             if a.owner == owner:
                 a.owner = None
+                a.owner_speed = None
 
     def revoke_owners(self) -> Dict[str, str]:
         """撤销所有占用；返回 {手: 原占用者}。之后旧占用者再下目标会被拒绝。"""
@@ -199,6 +225,7 @@ class ArmLoop:
             out = {name: a.owner for name, a in self._arms.items() if a.owner is not None}
             for a in self._arms.values():
                 a.owner = None
+                a.owner_speed = None
         return out
 
     @contextmanager
@@ -544,6 +571,8 @@ class ArmLoop:
             "payload_name": a.payload_name,
             "gravity_mass_kg": a.grav.moving_mass_kg,
             "kp_vec": [float(self.kp_body[i]) for i in a.layout.motor_indices],
+            # 这只手现在用的限速（占用者自带的，或全局限速）
+            "speed_rad_s": self._speed(a),
             "joint_names": list(a.layout.joint_names),
         }
 
@@ -626,7 +655,7 @@ class ArmLoop:
 
     def _slew(self, a: _ArmState, dt: Optional[float] = None) -> None:
         # 每只手各按限速走、互不等待；每拍走的量按实际经过的时间算
-        step = self.max_speed * (self._dt if dt is None else dt)
+        step = self._speed(a) * (self._dt if dt is None else dt)
         delta = a.desired_q - a.cmd_q
         n = float(np.max(np.abs(delta))) if delta.size else 0.0
         if n > step and n > 1e-12:

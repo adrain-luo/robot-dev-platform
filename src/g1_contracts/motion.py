@@ -7,6 +7,10 @@ Standard library only. The types follow design review section 7
 - ``GoalRequest`` carries ``seq`` (so its ``Ack`` can be matched) and
   ``allow_detour`` (the core may plan around a collision).
 - ``MotionState`` carries ``resource`` and ``epoch``.
+- ``LeaseRequest.max_speed_rad_s`` (1.2) is optional: the joint speed limit the
+  core uses for the leased arms while the lease holds them (decision D3: each
+  program keeps its own configured speed). The core refuses values outside
+  its own clamp (0.02–1.0 rad/s); None = the core's current global limit.
 - ``LeaseRequest.heartbeat_ms`` is optional; an in-process core does not
   enforce heartbeats. Over IPC (phase 2) the core checks heartbeats per
   connection (``g1_contracts.wire.HEARTBEAT_TIMEOUT_MS``) and refuses a
@@ -26,7 +30,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import ContextManager, Iterable, Optional, Protocol, Sequence, Tuple, Union
 
-CONTRACT_VERSION = "1.1"  # 1.1: wire format (g1_contracts.wire); the types are unchanged
+CONTRACT_VERSION = "1.2"  # 1.1: wire format (g1_contracts.wire); 1.2: LeaseRequest.max_speed_rad_s
 
 
 class Resource(str, Enum):
@@ -120,6 +124,7 @@ class LeaseRequest:
     resources: Tuple[Resource, ...]
     owner: str                          # e.g. "skill:visual_align/task-0412"
     heartbeat_ms: Optional[int] = None  # v1: optional; revoke when no heartbeat for this long
+    max_speed_rad_s: Optional[float] = None  # 1.2: speed limit for the leased arms (None = core's global limit)
 
     def __post_init__(self) -> None:
         res = tuple(_resource(r) for r in self.resources)
@@ -131,6 +136,11 @@ class LeaseRequest:
         if not isinstance(self.owner, str) or not self.owner.strip():
             raise ValueError("LeaseRequest.owner must be a non-empty string")
         _positive_ms(self.heartbeat_ms, "LeaseRequest.heartbeat_ms", optional=True)
+        if self.max_speed_rad_s is not None:
+            v = self.max_speed_rad_s
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+                raise ValueError(f"LeaseRequest.max_speed_rad_s must be a positive number, got {v!r}")
+            object.__setattr__(self, "max_speed_rad_s", float(v))
 
 
 @dataclass(frozen=True)

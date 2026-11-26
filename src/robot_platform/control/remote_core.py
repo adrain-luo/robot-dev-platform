@@ -239,10 +239,10 @@ class RemoteMotionCore:
 
     # ------------------------------------------------------------ 租约
     def lease(self, resources: Sequence[Resource], owner: str, *,
-              heartbeat_ms: Optional[int] = None) -> "RemotePlatformLease":
+              heartbeat_ms: Optional[int] = None, max_speed_rad_s: Optional[float] = None) -> "RemotePlatformLease":
         self.connect()
         try:
-            inner = self._client.lease(resources, owner, heartbeat_ms=heartbeat_ms)
+            inner = self._client.lease(resources, owner, heartbeat_ms=heartbeat_ms, max_speed_rad_s=max_speed_rad_s)
         except MotionRejected:
             raise
         except (CoreUnavailable, CoreError) as exc:
