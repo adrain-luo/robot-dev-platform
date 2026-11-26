@@ -32,14 +32,11 @@ class StateMixin:
         mon = getattr(self, "cmd_monitor", None)
         if mon is not None:
             base["cmd_bus"] = mon.report()
-        if self.loop is None:
-            return base
-        loop_st = self.loop.status()
-        base.update(loop_st)
         core = getattr(self, "motion_core", None)
-        if core is not None:
-            # 租约、epoch、急停锁存、安全状态
-            base["motion"] = core.status(loop_st)
+        if core is None:
+            return base
+        # 控制循环状态，"motion" 里是租约、epoch、急停锁存、安全状态
+        base.update(core.page_status())
         for a in (base.get("arms") or {}).values():
             th = a.get("payload_theta")
             if th:

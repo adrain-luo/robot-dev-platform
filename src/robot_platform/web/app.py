@@ -106,20 +106,15 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
                     )
                     # 守护层后端：急停同时锁守护层（经守护层发令的别的程序也停；平台崩了锁存还在本体上）
                     self.motion_core = MotionCore(self.loop,
-                                                  external_estop=getattr(self.backend, "estop_guardian", None))
+                                                  external_estop=getattr(self.backend, "estop_guardian", None),
+                                                  external_reset=getattr(self.backend, "reset_guardian", None))
                     self.payload.restore(self.motion_core)
-                    self.attach_collision_guard(self.loop)
+                    self.attach_collision_guard(self.motion_core)
             return self._reader
 
     def require_motion(self) -> None:
         if not self.allow_real_motion:
             raise PermissionErrorMotion("只读模式，不能发运动指令（需 --allow-real-motion）")
-
-    def require_loop(self) -> ArmLoop:
-        self.reader()
-        if self.loop is None:
-            raise PermissionErrorMotion("未开 --allow-real-motion，不能发令")
-        return self.loop
 
     def _board_stereo(self):
         """棋盘触摸「看一眼」用：(左目→躯干变换, 双目相机, 匹配器工厂)。"""
@@ -136,7 +131,8 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         return T, cam, lambda: he._matcher_for(he._calib_yaml(cfg))
 
     def motion(self) -> MotionCore:
-        """任务拿运控客户端（进程内就是运控核心本身）；只读模式下抛 PermissionErrorMotion。"""
-        self.require_loop()
-        assert self.motion_core is not None
+        """运控核心：页面臂控指令和任务都只经它动手臂（进程内就是运控核心本身）；只读模式下抛 PermissionErrorMotion。"""
+        self.reader()
+        if self.motion_core is None:
+            raise PermissionErrorMotion("未开 --allow-real-motion，不能发令")
         return self.motion_core

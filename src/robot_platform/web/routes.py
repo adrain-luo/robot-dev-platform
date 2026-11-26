@@ -5,7 +5,7 @@ POST 的顺序有讲究，与拆分前一致：
 2. 配置锁定检查 runtime.guard_path；
 3. 手眼、负载、雷达三组（它们自带路由表）；
 4. TCP、工作姿态、棋盘、识别定位、空间点、单姿态、吸盘、立柱、底盘；
-5. 其余都是臂控指令，要求开了 --allow-real-motion。
+5. 其余都是臂控指令，要求开了 --allow-real-motion；它们只经运控核心（app.motion()），不碰控制循环。
 
 每个分组函数返回 (状态码, JSON) 表示已处理，返回 None 表示不归它管。
 """
@@ -170,8 +170,9 @@ def _board(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
     if path == "/api/board/stop":
         app.board.request_stop()
         # 只停摸棋盘的那只手，另一只手不受影响
-        if app.loop is not None and app.loop.status().get("engaged") and app.board.arm:
-            app.loop.hold_arm(app.board.arm)
+        core = app.motion_core
+        if core is not None and app.board.arm and core.page_status().get("engaged"):
+            core.hold_arm(app.board.arm)
         return 200, app.board.status()
     return 200, {"ok": False, "error": "没有这个棋盘接口"}
 
@@ -232,7 +233,7 @@ def _chassis(app, path: str, body: Dict[str, Any]) -> Optional[Reply]:
 
 # ---------------------------------------------------------------- 臂控指令
 
-def _waist_step(app, loop, body: Dict[str, Any]) -> None:
+def _waist_step(app, core, body: Dict[str, Any]) -> None:
     """相对当前目标（或实测）步进；与立柱 step 同思路。"""
     spec = app.profile.waist
     if spec is None:
@@ -248,10 +249,10 @@ def _waist_step(app, loop, body: Dict[str, Any]) -> None:
             raise ValueError(f"{app.profile.name} 的腰没有{'俯仰' if role == 'pitch' else role}轴")
         m = spec.joint(role).motor
         new[role] = float(tgt.get(str(m), st_w[m]["q"])) + math.radians(float(d))
-    loop.set_waist(new.get("yaw"), new.get("pitch"))
+    core.set_waist(new.get("yaw"), new.get("pitch"))
 
 
-def _hold(app, loop, body: Dict[str, Any]) -> None:
+def _hold(app, core, body: Dict[str, Any]) -> None:
     """急停（锁存）：底盘停、运控核心急停、立柱停。
 
     运控核心急停在一步里撤销全部租约（任务的下一步一律被拒，在等的任务也马上醒来停下）、
@@ -262,7 +263,7 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
     failed: List[BaseException] = []
     stoppers = (
         lambda: app.chassis_stop("急停"),  # 底盘最先停（它不受手臂接管影响）
-        lambda: app.motion().estop("页面急停"),
+        lambda: core.estop("页面急停"),
         lambda: app.lift_post("/api/lift/stop", {}),
     )
     for stop in stoppers:
@@ -275,56 +276,52 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
         raise failed[0]
 
 
-def _estop_reset(app, loop, body: Dict[str, Any]) -> None:
+def _estop_reset(app, core, body: Dict[str, Any]) -> None:
     """解除运控核心的急停锁存（现场确认安全后；页面在调用前要让人确认）。手臂仍保持当前姿态。
 
     不碰守护层：守护层自己的急停 / 故障锁存走 /api/guardian/reset。"""
-    app.motion().reset_estop()
+    core.reset_estop()
 
 
-def _guardian_reset(app, loop, body: Dict[str, Any]) -> None:
+def _guardian_reset(app, core, body: Dict[str, Any]) -> None:
     """守护层急停 / 故障锁存后：复位守护层，再从实测角重新接管。只有 guardian 后端有。
 
     复位是现场确认安全之后的操作：页面在调用前要让人确认。不解除运控核心的急停锁存。"""
-    reset = getattr(app.backend, "reset_guardian", None)
-    if reset is None:
-        raise PermissionErrorMotion("当前后端不经守护层，没有守护层可复位")
-    reset()
-    app.motion().engage()
+    core.reset_external_estop()
+    core.engage()
 
 
-def _teach(app, loop, body: Dict[str, Any]) -> None:
+def _teach(app, core, body: Dict[str, Any]) -> None:
     """拖拽：body.arm 指定哪只手（不给 = 两只手）；另一只手照常受控。"""
     arm = str(body.get("arm") or "")
     if bool(body.get("enabled", True)):
         app.unlock_work_pose("teach", arm)
-        loop.enable_teach(arm or None)
+        core.enable_teach(arm or None)
     else:
-        loop.disable_teach(arm or None)
+        core.disable_teach(arm or None)
 
 
-def _speed(app, loop, body: Dict[str, Any]) -> None:
-    loop.set_max_speed(float(body["max_speed_rad_s"]))
-    app.settings.max_speed_rad_s = loop.max_speed
+def _speed(app, core, body: Dict[str, Any]) -> None:
+    app.settings.max_speed_rad_s = core.set_max_speed(float(body["max_speed_rad_s"]))
 
 
-def _target(app, loop, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _target(app, core, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     arm = app.body_arm(body)
-    plan = app.motion().manual_target(body["q"], arm=arm, detour=True)
+    plan = core.manual_target(body["q"], arm=arm, detour=True)
     # 手动目标被接受了才解锁这只手的工作姿态：手被任务租着（拒绝）时，任务依赖的锁定不能被这一下解掉
     app.unlock_work_pose("arm_control", arm)
     return {"detour": plan} if plan else None
 
 
-def _arm_stop(app, loop, body: Dict[str, Any]) -> None:
+def _arm_stop(app, core, body: Dict[str, Any]) -> None:
     """只停一只手（取消它没走完的目标）；占用它的任务不受影响，要停任务用急停。"""
-    loop.hold_arm(app.body_arm(body))
+    core.hold_arm(app.body_arm(body))
 
 
-def _waist(app, loop, body: Dict[str, Any]) -> None:
+def _waist(app, core, body: Dict[str, Any]) -> None:
     yaw = body.get("yaw_deg")
     pitch = body.get("pitch_deg")
-    loop.set_waist(
+    core.set_waist(
         None if yaw in (None, "") else math.radians(float(yaw)),
         None if pitch in (None, "") else math.radians(float(pitch)),
     )
@@ -332,29 +329,29 @@ def _waist(app, loop, body: Dict[str, Any]) -> None:
 
 ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], Optional[Dict[str, Any]]]] = {
     # 接管 / 释放经运控核心：会先撤销全部租约
-    "/api/engage": lambda app, loop, body: app.motion().engage(),
-    "/api/release": lambda app, loop, body: app.motion().release(),
+    "/api/engage": lambda app, core, body: core.engage(),
+    "/api/release": lambda app, core, body: core.release(),
     "/api/guardian/reset": _guardian_reset,
     "/api/hold": _hold,
     "/api/estop/reset": _estop_reset,
     "/api/teach": _teach,
-    "/api/gravity": lambda app, loop, body: loop.set_gravity_ff(bool(body.get("enabled", True))),
-    "/api/gravity-imu": lambda app, loop, body: loop.set_gravity_imu(bool(body.get("enabled", True))),
+    "/api/gravity": lambda app, core, body: core.set_gravity_ff(bool(body.get("enabled", True))),
+    "/api/gravity-imu": lambda app, core, body: core.set_gravity_imu(bool(body.get("enabled", True))),
     "/api/speed": _speed,
     "/api/target": _target,
     "/api/waist": _waist,
     "/api/waist/step": _waist_step,
-    "/api/waist/stop": lambda app, loop, body: loop.hold_waist(),
+    "/api/waist/stop": lambda app, core, body: core.hold_waist(),
     "/api/arm/stop": _arm_stop,
 }
 
 
 def _arm(app, path: str, body: Dict[str, Any]) -> Reply:
-    loop = app.require_loop()
+    core = app.motion()
     fn = ARM_COMMANDS.get(path)
     if fn is None:
         return NOT_FOUND
-    extra = fn(app, loop, body)
+    extra = fn(app, core, body)
     return 200, {
         "ok": True,
         "ctrl": app.ctrl_status(),

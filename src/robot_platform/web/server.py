@@ -129,8 +129,8 @@ def main() -> int:
             APP.handeye.close()
         if APP.lidar:
             APP.lidar.close()
-        if APP.loop:
-            APP.loop.shutdown()
+        if APP.motion_core is not None:
+            APP.motion_core.shutdown()
         backend.close()
     return 0
 

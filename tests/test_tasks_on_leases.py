@@ -232,13 +232,12 @@ def test_refused_manual_target_does_not_unlock_the_work_pose():
     def refuse(q, *, arm, detour):
         raise PermissionErrorMotion("右臂正被「空间点碰点#3」使用")
 
-    app = SimpleNamespace(body_arm=lambda body: "right", unlock_work_pose=lambda *a: unlocked.append(a),
-                          motion=lambda: SimpleNamespace(manual_target=refuse))
+    app = SimpleNamespace(body_arm=lambda body: "right", unlock_work_pose=lambda *a: unlocked.append(a))
     with pytest.raises(PermissionErrorMotion):
-        routes._target(app, None, {"q": [0.0] * 7, "arm": "right"})
+        routes._target(app, SimpleNamespace(manual_target=refuse), {"q": [0.0] * 7, "arm": "right"})
     assert unlocked == []
-    app.motion = lambda: SimpleNamespace(manual_target=lambda q, *, arm, detour: None)
-    assert routes._target(app, None, {"q": [0.0] * 7, "arm": "right"}) is None
+    core = SimpleNamespace(manual_target=lambda q, *, arm, detour: None)
+    assert routes._target(app, core, {"q": [0.0] * 7, "arm": "right"}) is None
     assert unlocked == [("arm_control", "right")]
 
 

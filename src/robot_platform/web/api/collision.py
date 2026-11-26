@@ -79,8 +79,8 @@ class CollisionMixin:
             pass
         return q
 
-    def attach_collision_guard(self, loop) -> None:
-        loop.collision_guard = self.collision_guard()
+    def attach_collision_guard(self, core) -> None:
+        core.set_collision_guard(self.collision_guard())
 
     def _collision_arms_q(self) -> Optional[Dict[str, Any]]:
         """两只手的实测关节角。"""
@@ -99,9 +99,9 @@ class CollisionMixin:
         except Exception as exc:  # noqa: BLE001
             out = g.status(None)
             out["error"] = f"{type(exc).__name__}: {exc}"
-        # 控制循环上挂的是不是这个闸门（没挂上 = 下目标时不检查）；只读模式没有控制循环
-        loop = getattr(self, "loop", None)
-        out["gate_attached"] = None if loop is None else (getattr(loop, "collision_guard", None) is g)
+        # 控制循环上挂的是不是这个闸门（没挂上 = 下目标时不检查）；只读模式没有运控核心
+        core = getattr(self, "motion_core", None)
+        out["gate_attached"] = None if core is None else (core.collision_guard is g)
         return out
 
     def collision_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:

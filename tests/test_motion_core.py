@@ -446,3 +446,56 @@ def test_history_is_recorded_by_the_loop_and_pruned(rig):
     meas = loop.arm_sample("right")["q_meas"]
     assert st.q_meas == pytest.approx(meas, abs=1e-3)
     assert core.state(R).q_cmd == pytest.approx(_cmd(loop).tolist())
+
+
+# ------------------------------------------------------------- 页面手动来源 / 设置
+def test_page_methods_pass_through_to_the_loop(rig, core):
+    """网页只经运控核心碰控制循环：每个页面方法都落到 ArmLoop 上，拒绝原样抛出。"""
+    profile, backend, cmd, loop = rig
+    st = core.page_status()
+    assert st["engaged"] is True and st["motion"]["safety"] == "normal"
+    assert set(st["arms"]) == set(profile.arms)
+    assert core.set_max_speed(5.0) == 1.0 and loop.max_speed == 1.0, "钳位仍在 ArmLoop 里"
+    assert core.set_max_speed(0.4) == 0.4
+    core.set_gravity_ff(False)
+    assert loop.status()["gravity_ff"] is False
+    core.set_gravity_ff(True)
+    core.set_gravity_imu(False)
+    up = core.gravity_up()
+    assert len(up) == 3 and up == pytest.approx([0.0, 0.0, 1.0])
+
+    core.enable_teach("right")
+    assert loop.status()["arms"]["right"]["float"] is True
+    with pytest.raises(PermissionErrorMotion, match="拖拽"):
+        core.set_waist(0.1)
+    core.disable_teach("right")
+    assert loop.status()["arms"]["right"]["float"] is False
+
+    q = np.array(loop.status()["arms"]["right"]["cmd_rad"])
+    core.manual_target((q + 0.2).tolist(), arm="right")
+    core.hold_arm("right")
+    st = loop.arm_status("right")
+    assert st["desired_rad"] == pytest.approx(st["cmd_rad"], abs=0.05), "停手：目标改成当前角"
+
+    guard = object()
+    core.set_collision_guard(guard)
+    assert core.collision_guard is guard and loop.collision_guard is guard
+    core.set_collision_guard(None)
+
+
+def test_guardian_reset_without_a_guardian_is_refused(core):
+    assert core.has_external_estop is False
+    with pytest.raises(PermissionErrorMotion, match="没有守护层"):
+        core.reset_external_estop()
+
+
+def test_external_hooks_are_called(rig):
+    _, _, _, loop = rig
+    calls = []
+    core = MotionCore(loop, external_estop=lambda r: calls.append(("estop", r)),
+                      external_reset=lambda: calls.append(("reset",)))
+    core.reset_external_estop()
+    core.estop("测试")
+    assert calls == [("reset",), ("estop", "测试")]
+    assert core.status()["external_estop"] is True
+    core.reset_estop()

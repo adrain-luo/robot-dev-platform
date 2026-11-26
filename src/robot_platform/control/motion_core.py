@@ -85,10 +85,13 @@ class MotionCore:
         max_observation_age_ms: Optional[int] = None,
         install: bool = True,
         external_estop: Optional[Callable[[str], None]] = None,
+        external_reset: Optional[Callable[[], None]] = None,
     ) -> None:
         self._loop = loop
         # 核心锁存之后再锁的外部急停（守护层）；它出错时核心照样已锁存，错误抛给调用方
         self._external_estop = external_estop
+        # 复位外部急停 / 故障锁存（守护层复位）；不解除核心自己的锁存
+        self._external_reset = external_reset
         self.host = str(host)
         self._clock = clock_ns
         self._history_ns = int(float(history_s) * 1e9)
@@ -159,6 +162,58 @@ class MotionCore:
         st = self._loop.status()
         st.update(st["arms"][arm])
         return st
+
+    # ------------------------------------------------------------ 页面：手动来源与设置（不经租约）
+    # 网页只经这些方法碰控制循环（阶段 2 起网页可能在另一个进程，见 g1_motion_core）。
+    # 拒绝时 ArmLoop 抛 PermissionErrorMotion / ValueError，和以前直接调 ArmLoop 一样。
+    def page_status(self) -> dict:
+        """控制循环状态加运控核心状态（"motion"）：页面轮询的 ctrl。"""
+        st = self._loop.status()
+        st["motion"] = self.status(st)
+        return st
+
+    def hold_arm(self, arm: str) -> None:
+        """只停这一只手、锁在实测角（占用它的任务不受影响，要停任务用急停）。"""
+        self._loop.hold_arm(arm)
+
+    def set_waist(self, yaw_rad: Optional[float] = None, pitch_rad: Optional[float] = None) -> None:
+        self._loop.set_waist(yaw_rad, pitch_rad)
+
+    def hold_waist(self) -> None:
+        self._loop.hold_waist()
+
+    def enable_teach(self, arm: Optional[str] = None) -> None:
+        self._loop.enable_teach(arm)
+
+    def disable_teach(self, arm: Optional[str] = None) -> None:
+        self._loop.disable_teach(arm)
+
+    def set_gravity_ff(self, on: bool) -> None:
+        self._loop.set_gravity_ff(on)
+
+    def set_gravity_imu(self, on: bool) -> None:
+        self._loop.set_gravity_imu(on)
+
+    def gravity_up(self) -> List[float]:
+        """躯干系里实测的「竖直向上」（躯干 IMU 不可用时为躯干 +z）：「可平转」工作姿态的转轴。"""
+        return [float(v) for v in self._loop.gravity.up_dir()]
+
+    def set_max_speed(self, v: float) -> float:
+        """改限速（ArmLoop 钳在 0.02–1.0 rad/s），返回生效的值。"""
+        self._loop.set_max_speed(v)
+        return self._loop.max_speed
+
+    @property
+    def collision_guard(self):
+        return self._loop.collision_guard
+
+    def set_collision_guard(self, guard) -> None:
+        """装上自碰撞闸门（None = 不查）。"""
+        self._loop.collision_guard = guard
+
+    def shutdown(self, timeout_s: float = 30.0) -> None:
+        """进程退出时：释放（需要过渡的后端等过渡结束）并停掉控制循环。"""
+        self._loop.shutdown(timeout_s)
 
     # ------------------------------------------------------------ 租约
     def lease(self, resources: Sequence[Resource], owner: str, *,
@@ -311,6 +366,12 @@ class MotionCore:
     @property
     def has_external_estop(self) -> bool:
         return self._external_estop is not None
+
+    def reset_external_estop(self) -> None:
+        """复位守护层的急停 / 故障锁存（现场确认安全后）；之后要重新接管。不解除核心的锁存。"""
+        if self._external_reset is None:
+            raise PermissionErrorMotion("当前后端不经守护层，没有守护层可复位")
+        self._external_reset()
 
     def reset_estop(self) -> None:
         """现场确认安全后解除急停锁存。不碰守护层（守护层的锁存另有复位）。"""

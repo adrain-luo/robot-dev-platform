@@ -244,8 +244,7 @@ class RuntimeConfig:
         saved["arm"] = arm
         saved["name"] = d.get("name") or name
         iden.save_payload(arm, saved)
-        loop = self.app.loop
-        if loop is not None:  # 两只手都在控制循环里，补偿立刻进这只手的前馈
+        if getattr(self.app, "motion_core", None) is not None:  # 两只手都在控制循环里，补偿立刻进这只手的前馈
             self.app.payload.apply_payload_dict(saved, name=saved["name"])
         return self.snapshot()
 

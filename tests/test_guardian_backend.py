@@ -647,15 +647,41 @@ def test_guardian_reset_route_resets_then_engages():
     from robot_platform.web import routes
 
     calls = []
-    # 重新接管经运控核心（它会先撤销全部租约），不直接调 ArmLoop
-    core = SimpleNamespace(engage=lambda: calls.append("core.engage"))
-    app = SimpleNamespace(backend=SimpleNamespace(reset_guardian=lambda: calls.append("reset")),
-                          motion=lambda: core)
-    loop = SimpleNamespace(engage=lambda: calls.append("loop.engage"))
-    routes._guardian_reset(app, loop, {})
-    assert calls == ["reset", "core.engage"]
-    with pytest.raises(PermissionErrorMotion):
-        routes._guardian_reset(SimpleNamespace(backend=object()), loop, {})
+    # 复位和重新接管都经运控核心（守护层的复位由核心转给后端；接管会先撤销全部租约），不直接调后端或 ArmLoop
+    core = SimpleNamespace(reset_external_estop=lambda: calls.append("core.reset_external_estop"),
+                           engage=lambda: calls.append("core.engage"))
+    app = SimpleNamespace(backend=SimpleNamespace(reset_guardian=lambda: calls.append("backend.reset")))
+    routes._guardian_reset(app, core, {})
+    assert calls == ["core.reset_external_estop", "core.engage"]
+
+
+def test_core_forwards_the_guardian_reset_to_the_backend():
+    from robot_platform.core.config_loader import load_settings
+    from robot_platform.web.app import App
+
+    settings = load_settings(backend="mock")
+    profile = settings.profile
+    kin = RobotKinematics(settings.urdf, settings.base_link, list(profile.arms))
+    backend = MockBackend(profile)
+    calls = []
+    backend.reset_guardian = lambda: calls.append("reset")
+    app = App(settings, kin, allow_real_motion=True, backend=backend)
+    try:
+        app.reader()
+        app.motion().reset_external_estop()
+        assert calls == ["reset"]
+    finally:
+        app.loop.shutdown()
+        backend.close()
+    plain = MockBackend(profile)
+    app = App(settings, kin, allow_real_motion=True, backend=plain)
+    try:
+        app.reader()
+        with pytest.raises(PermissionErrorMotion, match="没有守护层"):
+            app.motion().reset_external_estop()
+    finally:
+        app.loop.shutdown()
+        plain.close()
 
 
 # -------------------------------------------------- 守护层配置与机型是否一致
