@@ -11,6 +11,9 @@
 - state_at：按时间戳查当时的实测角 / 指令角（约 2 s 历史，线性插值，只认本机时间戳）。
 - 急停锁存：estop() 撤销租约、两手锁在实测角、禁止一切新运动（包括页面手动），
   只有 reset_estop() 能解除；接管、释放、保持照常可用。
+- 外部急停（external_estop，守护层后端时是守护层的急停）：核心锁存之后再锁它，
+  这样经守护层发令的别的程序也被拦住，平台进程崩了锁存也还在本体上。
+  它的复位另走（守护层复位），reset_estop() 不碰它。
 
 不改发帧：限速、限位、增益、前馈、频率都还在 ArmLoop（和守护层）里，这里只做仲裁。
 """
@@ -81,8 +84,11 @@ class MotionCore:
         history_s: float = HISTORY_S,
         max_observation_age_ms: Optional[int] = None,
         install: bool = True,
+        external_estop: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._loop = loop
+        # 核心锁存之后再锁的外部急停（守护层）；它出错时核心照样已锁存，错误抛给调用方
+        self._external_estop = external_estop
         self.host = str(host)
         self._clock = clock_ns
         self._history_ns = int(float(history_s) * 1e9)
@@ -288,7 +294,9 @@ class MotionCore:
                 self._transition = False
 
     def estop(self, reason: str = "") -> None:
-        """急停锁存：撤销全部租约、两手锁在实测角（退出拖拽）、禁止一切新运动，直到 reset_estop()。"""
+        """急停锁存：撤销全部租约、两手锁在实测角（退出拖拽）、禁止一切新运动，直到 reset_estop()。
+
+        有外部急停（守护层）时随后也锁它；它失败（连不上、没应答）时抛出，但核心这边已经锁存。"""
         text = "急停已锁定" + (f"（{reason}）" if reason else "") + "：确认现场安全后点「复位急停」"
         with self._lock:
             self._latched = text
@@ -297,6 +305,12 @@ class MotionCore:
             self._loop.estop_hold(latch=text)
         for rec in recs:
             rec.cancelled.set()
+        if self._external_estop is not None:
+            self._external_estop(reason)
+
+    @property
+    def has_external_estop(self) -> bool:
+        return self._external_estop is not None
 
     def reset_estop(self) -> None:
         """现场确认安全后解除急停锁存。不碰守护层（守护层的锁存另有复位）。"""
@@ -545,6 +559,8 @@ class MotionCore:
             "safety": self.safety(loop_status).value,
             "leases": leases,
             "last_revoke": last,
+            # 急停同时锁守护层（复位要两步：守护层、核心各一次）
+            "external_estop": self._external_estop is not None,
         }
 
 

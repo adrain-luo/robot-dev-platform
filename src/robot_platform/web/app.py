@@ -104,7 +104,9 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
                         # 直写后端：lowstate 过期就停在指令角保持；守护层后端 / mock 为 None
                         lowstate_max_age_s=self.backend.lowstate_max_age_s(),
                     )
-                    self.motion_core = MotionCore(self.loop)
+                    # 守护层后端：急停同时锁守护层（经守护层发令的别的程序也停；平台崩了锁存还在本体上）
+                    self.motion_core = MotionCore(self.loop,
+                                                  external_estop=getattr(self.backend, "estop_guardian", None))
                     self.payload.restore(self.motion_core)
                     self.attach_collision_guard(self.loop)
             return self._reader

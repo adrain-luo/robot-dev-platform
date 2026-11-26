@@ -256,6 +256,7 @@ def _hold(app, loop, body: Dict[str, Any]) -> None:
 
     运控核心急停在一步里撤销全部租约（任务的下一步一律被拒，在等的任务也马上醒来停下）、
     两手锁在实测角、禁止一切新运动，直到「复位急停」。所以这里不用再逐个通知任务。
+    守护层后端时它随后也锁守护层的急停（见 MotionCore 的 external_estop）。
     各项互不影响：某项出错也继续往下停，最后再报错。
     """
     failed: List[BaseException] = []

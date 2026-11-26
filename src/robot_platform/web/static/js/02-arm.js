@@ -297,7 +297,12 @@ $("btn-hold").onclick = async () => {
 $("btn-estop-reset").onclick = async () => {
   const ask = "确认现场安全、手臂周围没有人和障碍，解除急停锁定？\n\n解除后手臂仍保持当前姿态，不会自己动；被急停打断的任务不会继续，要重新开始。";
   if (!confirm(ask)) return;
-  try { await post("/api/estop/reset", {}); flash("急停已解除：手臂保持当前姿态", true); } catch (e) { flash(String(e), false); }
+  // 经守护层发令时急停也锁了守护层：这里只解除运控核心，守护层要在「接管」时另外确认复位
+  const g = window.ROBOT?.guardian;
+  const done = g
+    ? "运控核心的急停已解除；守护层的急停还锁着：点「接管」，确认后复位守护层并重新接管"
+    : "急停已解除：手臂保持当前姿态";
+  try { await post("/api/estop/reset", {}); flash(done, true); } catch (e) { flash(String(e), false); }
 };
 
 // 拖拽按手分开：一只手卸力拖拽时，另一只手照常受控

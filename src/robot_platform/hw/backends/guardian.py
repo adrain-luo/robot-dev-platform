@@ -38,6 +38,8 @@ STATUS_MAX_AGE_S = 0.5
 # 第一次接管时守护层要退出运控（ReleaseMode），可能要几秒
 ENGAGE_TIMEOUT_S = 20.0
 POKE_PERIOD_S = 1.0
+# 等守护层确认急停的上限（只是等应答；守护层收到就锁存，与这里等多久无关）。与 GuardianClient.estop 的默认值一致
+ESTOP_ACK_TIMEOUT_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -408,6 +410,18 @@ class GuardianBackend(Backend):
         self.commander()
         assert self._commander is not None
         self._commander.reset()
+
+    def estop_guardian(self, reason: str = "") -> None:
+        """锁守护层的急停（任何客户端都能锁，平台没接管时也锁）：守护层原地保持、拒绝所有客户端的设定，
+        直到有人复位守护层。守护层协议的 estop 不带原因，reason 只用于报错文字。"""
+        from g1_guardian.client import GuardianError
+
+        try:
+            self.client().estop(timeout=ESTOP_ACK_TIMEOUT_S)
+        except GuardianError as exc:
+            raise PermissionErrorMotion(
+                f"守护层 {self.settings.address} 没确认急停（{exc}）：运控核心这边已锁存，"
+                f"守护层没锁上，经守护层发令的别的程序不受这次急停约束") from None
 
     # 立柱、底盘、IMU 都不经守护层
     def lift_reader(self):
