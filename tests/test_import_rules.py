@@ -7,6 +7,8 @@
 - 感知（perception/）不导入任务。
 - g1_contracts 只用标准库；g1_guardian 只用标准库和（延迟导入的）unitree_sdk2py，绝不导入 robot_platform。
 - g1_motion_client 只用标准库和 g1_contracts（refactor 的系统 Python 也要能直接用）。
+- g1_motion_core.server 只用标准库和 g1_contracts；任务、标定、感知、网页都不导入 g1_motion_core
+  （它们经 g1_motion_client 和核心进程说话）。
 
 每条规则都有自测：往一段假源码里放违规，检查器必须报出来，免得规则写错了永远“通过”。
 """
@@ -146,6 +148,19 @@ def test_contracts_use_only_the_standard_library():
 def test_motion_client_uses_only_the_standard_library_and_contracts():
     assert _scan(SRC / "g1_motion_client",
                  lambda s: import_violations(s, allowed_top=["g1_motion_client", "g1_contracts"])) == []
+
+
+def test_motion_core_server_uses_only_the_standard_library_and_contracts():
+    src = (SRC / "g1_motion_core" / "server.py").read_text(encoding="utf-8")
+    assert import_violations(src, allowed_top=["g1_motion_core", "g1_contracts"]) == []
+
+
+def test_nothing_but_the_core_process_imports_the_core_package():
+    found = []
+    for sub in ("tasks", "calib", "perception", "web", "control", "core", "hw"):
+        found += _scan(PLATFORM / sub, lambda s: forbidden_import_violations(s, prefixes=["g1_motion_core"]))
+    found += _scan(SRC / "g1_motion_client", lambda s: forbidden_import_violations(s, prefixes=["g1_motion_core"]))
+    assert found == []
 
 
 def test_guardian_stays_free_of_platform_code():

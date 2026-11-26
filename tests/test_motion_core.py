@@ -499,3 +499,39 @@ def test_external_hooks_are_called(rig):
     assert calls == [("reset",), ("estop", "测试")]
     assert core.status()["external_estop"] is True
     core.reset_estop()
+
+
+# ------------------------------------------------------------- 阶段 2：只撤销一个租约 / 停住手动来源
+def test_revoke_lease_drops_one_lease_and_keeps_the_epoch(rig, core):
+    _, _, _, loop = rig
+    lr = core.lease([R], "task:r")
+    ll = core.lease([L], "task:l")
+    lr.move_to(_away(loop).tolist())
+    epoch = core.epoch
+    assert core.revoke_lease(lr.lease.lease_id, "连接断开") is True
+    assert core.revoke_lease(lr.lease.lease_id, "again") is False
+    assert lr.cancelled.is_set() and lr.revoked == "连接断开"
+    assert core.epoch == epoch, "别的租约不受影响：epoch 不变"
+    assert np.allclose(_desired(loop), _cmd(loop)), "停在指令角"
+    assert loop.owner("right") is None
+    with pytest.raises(LeaseRevoked, match="连接断开"):
+        lr.move_to(_away(loop).tolist())
+    assert ll.move_to(_away(loop, "left", -0.1).tolist()).ok
+    assert core.status()["last_revoke"]["owners"] == [lr.owner]
+
+
+def test_hold_manual_leaves_leased_arms_alone(rig, core):
+    _, _, _, loop = rig
+    lease = core.lease([L], "task:l")
+    tgt_l = _away(loop, "left", -0.3)
+    lease.move_to(tgt_l.tolist())
+    core.manual_target(_away(loop, "right", -0.3).tolist(), arm="right")
+    core.hold_manual("right")
+    core.hold_manual("left")
+    assert np.allclose(_desired(loop), _cmd(loop))
+    assert np.allclose(_desired(loop, "left"), tgt_l), "租约的手不归手动来源停"
+    lease.release()
+    core.enable_teach("left")
+    core.hold_manual("left")
+    assert loop.arm_status("left")["float"] is False, "拖拽中的手退出拖拽"
+    core.hold_manual("waist")  # 不抛

@@ -311,6 +311,46 @@ class MotionCore:
         }
         return recs
 
+    def revoke_lease(self, lease_id: str, reason: str) -> bool:
+        """只撤销这一个租约（持有它的连接断了 / 心跳超时）：它的手停在指令角，不动别的租约、不改 epoch。
+
+        返回 False = 没有这个租约（已归还或已撤销）。"""
+        with self._lock:
+            rec = self._leases.pop(lease_id, None)
+            if rec is None:
+                return False
+            rec.revoked = reason
+            self._remember_gone(lease_id, f"已撤销：{reason}")
+            for arm in rec.arms:
+                if self._by_arm.get(arm) == lease_id:
+                    del self._by_arm[arm]
+                dl = self._deadlines.get(arm)
+                if dl is not None and dl[2] == lease_id:
+                    del self._deadlines[arm]
+                self._loop.release_owner(arm, rec.token)
+            self._last_revoke = {"reason": reason, "epoch": self._epoch, "owners": [rec.token], "t_ns": self._clock()}
+        for arm in rec.arms:
+            self._loop.hold_at_command(arm)
+        rec.cancelled.set()
+        return True
+
+    def hold_manual(self, what: str) -> None:
+        """停住手动来源动着的手或腰（发令的那个连接没了）。被租约占着的手不动（它归任务管）；
+        拖拽中的手退出拖拽、全刚度锁在实测角；其它停在指令角。腰：锁在实测角（同页面「停腰」）。"""
+        if what == "waist":
+            try:
+                self._loop.hold_waist()
+            except PermissionErrorMotion:
+                pass  # 没接管：没有要停的腰
+            return
+        with self._lock:
+            if what in self._by_arm:
+                return
+        if self._loop.arm_status(what)["float"]:
+            self._loop.disable_teach(what)
+        else:
+            self._loop.hold_at_command(what)
+
     def revoke(self, reason: str) -> int:
         """撤销全部租约（不锁存）；被撤销的手停在指令角。返回撤销了几个。"""
         with self._lock:
@@ -663,6 +703,19 @@ class CoreLease:
     @property
     def cancelled(self) -> threading.Event:
         return self._rec.cancelled
+
+    @property
+    def revoked(self) -> Optional[str]:
+        """撤销原因（没撤销为 None）。"""
+        return self._rec.revoked
+
+    @property
+    def returned(self) -> bool:
+        return self._rec.returned
+
+    @property
+    def holder_cancelled(self) -> bool:
+        return self._rec.holder_cancelled
 
     def check(self) -> None:
         rec = self._rec

@@ -59,6 +59,19 @@ class _Pending:
         self.reply: Optional[Dict[str, Any]] = None
 
 
+def _close(sock: socket.socket) -> None:
+    """Shut down first: a plain close() while the reader thread is blocked in recv() does not reach the
+    peer until that recv returns, so the core would see the disconnect up to a timeout late."""
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
 def raise_for_error(err: Dict[str, Any]) -> None:
     kind = str(err.get("kind") or "internal")
     detail = str(err.get("detail") or "")
@@ -240,10 +253,7 @@ class CoreConnection:
     def _drop_estop_socket(self) -> None:
         sock, self._estop_sock = self._estop_sock, None
         if sock is not None:
-            try:
-                sock.close()
-            except OSError:
-                pass
+            _close(sock)
 
     # ------------------------------------------------------------ threads
     def _rx_loop(self, sock: socket.socket, gen: int) -> None:
@@ -302,10 +312,7 @@ class CoreConnection:
             pending = list(self._pending.values())
             listeners = list(self._lease_listeners.items())
             self._lease_listeners.clear()
-        try:
-            sock.close()
-        except OSError:
-            pass
+        _close(sock)
         for p in pending:
             p.event.set()  # reply stays None: the caller raises CoreUnavailable
         for lid, fn in listeners:

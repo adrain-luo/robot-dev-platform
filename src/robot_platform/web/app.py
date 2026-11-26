@@ -11,6 +11,7 @@ from robot_platform.calib.handeye.service import HandEyeAPI
 from robot_platform.calib.payload.api import PayloadAPI
 from robot_platform.calib.tcp import TcpSession
 from robot_platform.control.arm_loop import ArmLoop, PermissionErrorMotion
+from robot_platform.control.assembly import build_motion_core
 from robot_platform.control.fk_scene import RobotKinematics
 from robot_platform.control.motion_core import MotionCore
 from robot_platform.core.runtime_config import RuntimeConfig
@@ -88,26 +89,9 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
                 except Exception:  # noqa: BLE001  检测起不来不影响读状态；接管时 commander 还会再建
                     traceback.print_exc()
                 if self.allow_real_motion:
-                    torso_imu = None
-                    try:
-                        torso_imu = self.backend.torso_imu()
-                    except Exception:  # noqa: BLE001  IMU 起不来：前馈照旧按躯干竖直算
-                        traceback.print_exc()
-                    self.loop = ArmLoop(
-                        reader=self._reader,
-                        commander=self.backend.commander(),
-                        kin=self.kin,
-                        max_speed_rad_s=self.settings.max_speed_rad_s,
-                        urdf_path=self.settings.urdf,
-                        base_link=self.settings.base_link,
-                        torso_imu=torso_imu,
-                        # 直写后端：lowstate 过期就停在指令角保持；守护层后端 / mock 为 None
-                        lowstate_max_age_s=self.backend.lowstate_max_age_s(),
-                    )
-                    # 守护层后端：急停同时锁守护层（经守护层发令的别的程序也停；平台崩了锁存还在本体上）
-                    self.motion_core = MotionCore(self.loop,
-                                                  external_estop=getattr(self.backend, "estop_guardian", None),
-                                                  external_reset=getattr(self.backend, "reset_guardian", None))
+                    # 和运控核心进程同一份组装（control/assembly.py）：直写后端时 lowstate 过期就停在指令角保持；
+                    # 守护层后端时急停同时锁守护层
+                    self.loop, self.motion_core = build_motion_core(self.settings, self.kin, self.backend, self._reader)
                     self.payload.restore(self.motion_core)
                     self.attach_collision_guard(self.motion_core)
             return self._reader

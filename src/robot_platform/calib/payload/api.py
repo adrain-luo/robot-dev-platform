@@ -32,10 +32,7 @@ class PayloadAPI:
 
     def restore(self, motion) -> None:
         """两只手各自带上最后应用的负载补偿（motion：运控核心）。"""
-        for arm in motion.arm_names:
-            d = iden.load_payload(arm)
-            if d and d.get("theta"):
-                motion.set_payload_theta(d["theta"], d.get("name"), arm=arm)
+        iden.restore_payloads(motion)
 
     def apply_payload_dict(self, d: Dict[str, Any], *, name: Optional[str] = None,
                            arm: Optional[str] = None) -> Dict[str, Any]:
