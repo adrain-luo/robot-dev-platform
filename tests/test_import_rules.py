@@ -6,6 +6,7 @@
   只经运控核心（app.motion() / motion_core）；阶段 2 起核心可以在另一个进程里。
 - 感知（perception/）不导入任务。
 - g1_contracts 只用标准库；g1_guardian 只用标准库和（延迟导入的）unitree_sdk2py，绝不导入 robot_platform。
+- g1_motion_client 只用标准库和 g1_contracts（refactor 的系统 Python 也要能直接用）。
 
 每条规则都有自测：往一段假源码里放违规，检查器必须报出来，免得规则写错了永远“通过”。
 """
@@ -140,6 +141,11 @@ def test_perception_does_not_import_tasks():
 
 def test_contracts_use_only_the_standard_library():
     assert _scan(SRC / "g1_contracts", lambda s: import_violations(s, allowed_top=["g1_contracts"])) == []
+
+
+def test_motion_client_uses_only_the_standard_library_and_contracts():
+    assert _scan(SRC / "g1_motion_client",
+                 lambda s: import_violations(s, allowed_top=["g1_motion_client", "g1_contracts"])) == []
 
 
 def test_guardian_stays_free_of_platform_code():
