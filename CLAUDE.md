@@ -21,6 +21,7 @@ Design background: `docs/architecture-review.md` (Chinese, 2026-11-23; §十二 
 - `core.py` has no I/O and takes time as an argument. Every new behaviour needs a fake-clock test in `tests/test_guardian_core.py`. If it involves the loop or the network, it also needs a real-UDP test in `tests/test_guardian_service.py`.
 - The service loop is single-threaded. Never block it, and never let an exception end it.
 - `dds.py` has only been run against a fake SDK. Treat it as unverified until it has run on hardware.
+- Access control: every network message is checked by source address against the config's `access` section (`core.permitted`, and `GuardianService._drain` before decoding). The owner is the client id plus the address it engaged from. Never answer, or push status to, an address outside the lists. `deploy/g1-guardian-firewall.nft` must let in exactly `access.control + access.monitor` (`tests/test_guardian_access.py`).
 
 ## Commands
 
