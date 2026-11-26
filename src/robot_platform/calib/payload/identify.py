@@ -62,6 +62,14 @@ def load_payload(arm: str) -> Optional[Dict]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def restore_payloads(motion) -> None:
+    """两只手各自带上最后应用的负载补偿（motion：运控核心；网页进程和运控核心进程启动时都用它）。"""
+    for arm in motion.arm_names:
+        d = load_payload(arm)
+        if d and d.get("theta"):
+            motion.set_payload_theta(d["theta"], d.get("name"), arm=arm)
+
+
 def clear_payload(arm: str) -> None:
     """清掉该臂「最后应用」快照（不影响命名补偿文件）。"""
     arm = "left" if arm == "left" else "right"

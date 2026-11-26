@@ -1,9 +1,16 @@
-"""App：持有设置、后端、控制循环和各功能会话；具体接口方法按功能放在 web/api/ 下。"""
+"""App：持有设置、后端、运控核心和各功能会话；具体接口方法按功能放在 web/api/ 下。
+
+运控核心两种跑法（--motion-core）：
+- inprocess（默认，即阶段 1 的现状）：本进程建控制循环和运控核心，本进程就是指令写入者；
+- ipc（阶段 2a）：运控核心在自己的进程里（python -m g1_motion_core.service），本进程不建控制循环、
+  不建指令出口、不碰指令话题，只经套接字调它；网页崩溃时手臂由核心保持。
+"""
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Union
 import json
+import os
 import threading
 import traceback
 
@@ -11,8 +18,10 @@ from robot_platform.calib.handeye.service import HandEyeAPI
 from robot_platform.calib.payload.api import PayloadAPI
 from robot_platform.calib.tcp import TcpSession
 from robot_platform.control.arm_loop import ArmLoop, PermissionErrorMotion
+from robot_platform.control.assembly import build_motion_core
 from robot_platform.control.fk_scene import RobotKinematics
 from robot_platform.control.motion_core import MotionCore
+from robot_platform.control.remote_core import RemoteMotionCore, RemoteStateSource
 from robot_platform.core.runtime_config import RuntimeConfig
 from robot_platform.hw.backends.base import Backend, LiftDriver, LiftReader, StateSource
 from robot_platform.hw.lift_control import LiftController
@@ -34,9 +43,18 @@ from robot_platform.web.api.suction import SuctionMixin
 from robot_platform.web.api.collision import CollisionMixin
 
 
+MOTION_CORE_MODES = ("inprocess", "ipc")
+
+
 class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMixin, RuntimeMixin,
           SinglePoseMixin, SuctionMixin, CollisionMixin):
-    def __init__(self, settings, kin: RobotKinematics, allow_real_motion: bool, backend: Backend):
+    def __init__(self, settings, kin: RobotKinematics, allow_real_motion: bool, backend: Backend, *,
+                 motion_core: str = "inprocess", core_dir: Optional[str] = None):
+        if motion_core not in MOTION_CORE_MODES:
+            raise ValueError(f"--motion-core 只能是 {' / '.join(MOTION_CORE_MODES)}")
+        self.motion_core_mode = motion_core
+        self._core_dir = core_dir
+        self._remote: Optional[RemoteMotionCore] = None  # ipc：到运控核心进程的连接
         self.settings = settings
         self.profile = settings.profile
         self.kin = kin
@@ -48,8 +66,9 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         self._lift_ctrl: Optional[LiftController] = None
         self._chassis_ctrl = None  # 底盘遥控（web/api/chassis.py），第一次遥控时才建
         self.loop: Optional[ArmLoop] = None
-        # 运控核心：任务只经它的租约动手臂；接管 / 释放 / 急停也走它（control/motion_core.py）
-        self.motion_core: Optional[MotionCore] = None
+        # 运控核心：任务只经它的租约动手臂；接管 / 释放 / 急停也走它（control/motion_core.py；
+        # ipc 时是 control/remote_core.py 的 RemoteMotionCore，方法一样）
+        self.motion_core: Optional[Union[MotionCore, RemoteMotionCore]] = None
         self.cmd_monitor = None
         self._lock = threading.Lock()
         self.payload = PayloadAPI(self)
@@ -80,7 +99,9 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
 
     def reader(self) -> StateSource:
         with self._lock:
-            if self._reader is None:
+            if self._reader is None and self.motion_core_mode == "ipc":
+                self._connect_core_locked()
+            elif self._reader is None:
                 self._reader = self.backend.state()
                 # 指令话题占用检测：只读模式也开始听，页面一直显示有没有别的程序在发令
                 try:
@@ -88,36 +109,42 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
                 except Exception:  # noqa: BLE001  检测起不来不影响读状态；接管时 commander 还会再建
                     traceback.print_exc()
                 if self.allow_real_motion:
-                    torso_imu = None
-                    try:
-                        torso_imu = self.backend.torso_imu()
-                    except Exception:  # noqa: BLE001  IMU 起不来：前馈照旧按躯干竖直算
-                        traceback.print_exc()
-                    self.loop = ArmLoop(
-                        reader=self._reader,
-                        commander=self.backend.commander(),
-                        kin=self.kin,
-                        max_speed_rad_s=self.settings.max_speed_rad_s,
-                        urdf_path=self.settings.urdf,
-                        base_link=self.settings.base_link,
-                        torso_imu=torso_imu,
-                        # 直写后端：lowstate 过期就停在指令角保持；守护层后端 / mock 为 None
-                        lowstate_max_age_s=self.backend.lowstate_max_age_s(),
-                    )
-                    self.motion_core = MotionCore(self.loop)
+                    # 和运控核心进程同一份组装（control/assembly.py）：直写后端时 lowstate 过期就停在指令角保持；
+                    # 守护层后端时急停同时锁守护层
+                    self.loop, self.motion_core = build_motion_core(self.settings, self.kin, self.backend, self._reader)
                     self.payload.restore(self.motion_core)
-                    self.attach_collision_guard(self.loop)
+                    self.attach_collision_guard(self.motion_core)
             return self._reader
+
+    def _connect_core_locked(self) -> None:
+        """ipc：连运控核心进程（连不上抛 PermissionErrorMotion，下次调用再试）。实测角也从核心读。"""
+        if self._remote is None:
+            from g1_motion_client import CoreConnection
+
+            conn = CoreConnection(self._core_dir, client=f"web:{self.profile.name}:{os.getpid()}")
+            self._remote = RemoteMotionCore(conn, self.profile, connect=False)
+        self._remote.connect()
+        self._reader = RemoteStateSource(self._remote.lowstate, self.profile)
+        if self.allow_real_motion:
+            self.motion_core = self._remote
+
+    def remote_core(self) -> Optional[RemoteMotionCore]:
+        """ipc 时到运控核心进程的连接（只读模式也有，用于状态和碰撞检查显示）；inprocess 为 None。"""
+        if self.motion_core_mode != "ipc":
+            return None
+        self.reader()
+        return self._remote
+
+    def shutdown_motion(self) -> None:
+        """进程退出时：inprocess 释放手臂并停控制循环（同以前）；ipc 只断开连接，手臂由核心保持。"""
+        if self._remote is not None:
+            self._remote.shutdown()
+        elif self.motion_core is not None:
+            self.motion_core.shutdown()
 
     def require_motion(self) -> None:
         if not self.allow_real_motion:
             raise PermissionErrorMotion("只读模式，不能发运动指令（需 --allow-real-motion）")
-
-    def require_loop(self) -> ArmLoop:
-        self.reader()
-        if self.loop is None:
-            raise PermissionErrorMotion("未开 --allow-real-motion，不能发令")
-        return self.loop
 
     def _board_stereo(self):
         """棋盘触摸「看一眼」用：(左目→躯干变换, 双目相机, 匹配器工厂)。"""
@@ -134,7 +161,8 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         return T, cam, lambda: he._matcher_for(he._calib_yaml(cfg))
 
     def motion(self) -> MotionCore:
-        """任务拿运控客户端（进程内就是运控核心本身）；只读模式下抛 PermissionErrorMotion。"""
-        self.require_loop()
-        assert self.motion_core is not None
+        """运控核心：页面臂控指令和任务都只经它动手臂（进程内就是运控核心本身）；只读模式下抛 PermissionErrorMotion。"""
+        self.reader()
+        if self.motion_core is None:
+            raise PermissionErrorMotion("未开 --allow-real-motion，不能发令")
         return self.motion_core

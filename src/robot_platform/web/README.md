@@ -17,6 +17,8 @@ python serve.py --allow-real-motion --max-speed 0.2    # 真机
 
 不接机器人时可用仿真：`python serve.py --backend mock`（见 [`hw/backends/README.md`](../hw/backends/README.md)）。
 
+运控核心单独成进程（可选）：先起 `python -m g1_motion_core.service --allow-real-motion --instance <实例>`，再 `python serve.py --allow-real-motion --motion-core ipc --instance <实例>`。这样网页不发令，网页崩溃时手臂由核心保持。见 [`docs/阶段2a_运控核心进程.md`](../../../docs/阶段2a_运控核心进程.md)。
+
 真机前：停掉占用指令话题（G1D `rt/lowcmd`、G1 `rt/arm_sdk`）的其它任务；顶部标签显示有没有别人在发，有就不能接管。有人扶臂、守急停。
 
 ## 网页结构（书签）

@@ -11,6 +11,9 @@
 - state_at：按时间戳查当时的实测角 / 指令角（约 2 s 历史，线性插值，只认本机时间戳）。
 - 急停锁存：estop() 撤销租约、两手锁在实测角、禁止一切新运动（包括页面手动），
   只有 reset_estop() 能解除；接管、释放、保持照常可用。
+- 外部急停（external_estop，守护层后端时是守护层的急停）：核心锁存之后再锁它，
+  这样经守护层发令的别的程序也被拦住，平台进程崩了锁存也还在本体上。
+  它的复位另走（守护层复位），reset_estop() 不碰它。
 
 不改发帧：限速、限位、增益、前馈、频率都还在 ArmLoop（和守护层）里，这里只做仲裁。
 """
@@ -81,8 +84,14 @@ class MotionCore:
         history_s: float = HISTORY_S,
         max_observation_age_ms: Optional[int] = None,
         install: bool = True,
+        external_estop: Optional[Callable[[str], None]] = None,
+        external_reset: Optional[Callable[[], None]] = None,
     ) -> None:
         self._loop = loop
+        # 核心锁存之后再锁的外部急停（守护层）；它出错时核心照样已锁存，错误抛给调用方
+        self._external_estop = external_estop
+        # 复位外部急停 / 故障锁存（守护层复位）；不解除核心自己的锁存
+        self._external_reset = external_reset
         self.host = str(host)
         self._clock = clock_ns
         self._history_ns = int(float(history_s) * 1e9)
@@ -153,6 +162,58 @@ class MotionCore:
         st = self._loop.status()
         st.update(st["arms"][arm])
         return st
+
+    # ------------------------------------------------------------ 页面：手动来源与设置（不经租约）
+    # 网页只经这些方法碰控制循环（阶段 2 起网页可能在另一个进程，见 g1_motion_core）。
+    # 拒绝时 ArmLoop 抛 PermissionErrorMotion / ValueError，和以前直接调 ArmLoop 一样。
+    def page_status(self) -> dict:
+        """控制循环状态加运控核心状态（"motion"）：页面轮询的 ctrl。"""
+        st = self._loop.status()
+        st["motion"] = self.status(st)
+        return st
+
+    def hold_arm(self, arm: str) -> None:
+        """只停这一只手、锁在实测角（占用它的任务不受影响，要停任务用急停）。"""
+        self._loop.hold_arm(arm)
+
+    def set_waist(self, yaw_rad: Optional[float] = None, pitch_rad: Optional[float] = None) -> None:
+        self._loop.set_waist(yaw_rad, pitch_rad)
+
+    def hold_waist(self) -> None:
+        self._loop.hold_waist()
+
+    def enable_teach(self, arm: Optional[str] = None) -> None:
+        self._loop.enable_teach(arm)
+
+    def disable_teach(self, arm: Optional[str] = None) -> None:
+        self._loop.disable_teach(arm)
+
+    def set_gravity_ff(self, on: bool) -> None:
+        self._loop.set_gravity_ff(on)
+
+    def set_gravity_imu(self, on: bool) -> None:
+        self._loop.set_gravity_imu(on)
+
+    def gravity_up(self) -> List[float]:
+        """躯干系里实测的「竖直向上」（躯干 IMU 不可用时为躯干 +z）：「可平转」工作姿态的转轴。"""
+        return [float(v) for v in self._loop.gravity.up_dir()]
+
+    def set_max_speed(self, v: float) -> float:
+        """改限速（ArmLoop 钳在 0.02–1.0 rad/s），返回生效的值。"""
+        self._loop.set_max_speed(v)
+        return self._loop.max_speed
+
+    @property
+    def collision_guard(self):
+        return self._loop.collision_guard
+
+    def set_collision_guard(self, guard) -> None:
+        """装上自碰撞闸门（None = 不查）。"""
+        self._loop.collision_guard = guard
+
+    def shutdown(self, timeout_s: float = 30.0) -> None:
+        """进程退出时：释放（需要过渡的后端等过渡结束）并停掉控制循环。"""
+        self._loop.shutdown(timeout_s)
 
     # ------------------------------------------------------------ 租约
     def lease(self, resources: Sequence[Resource], owner: str, *,
@@ -250,6 +311,46 @@ class MotionCore:
         }
         return recs
 
+    def revoke_lease(self, lease_id: str, reason: str) -> bool:
+        """只撤销这一个租约（持有它的连接断了 / 心跳超时）：它的手停在指令角，不动别的租约、不改 epoch。
+
+        返回 False = 没有这个租约（已归还或已撤销）。"""
+        with self._lock:
+            rec = self._leases.pop(lease_id, None)
+            if rec is None:
+                return False
+            rec.revoked = reason
+            self._remember_gone(lease_id, f"已撤销：{reason}")
+            for arm in rec.arms:
+                if self._by_arm.get(arm) == lease_id:
+                    del self._by_arm[arm]
+                dl = self._deadlines.get(arm)
+                if dl is not None and dl[2] == lease_id:
+                    del self._deadlines[arm]
+                self._loop.release_owner(arm, rec.token)
+            self._last_revoke = {"reason": reason, "epoch": self._epoch, "owners": [rec.token], "t_ns": self._clock()}
+        for arm in rec.arms:
+            self._loop.hold_at_command(arm)
+        rec.cancelled.set()
+        return True
+
+    def hold_manual(self, what: str) -> None:
+        """停住手动来源动着的手或腰（发令的那个连接没了）。被租约占着的手不动（它归任务管）；
+        拖拽中的手退出拖拽、全刚度锁在实测角；其它停在指令角。腰：锁在实测角（同页面「停腰」）。"""
+        if what == "waist":
+            try:
+                self._loop.hold_waist()
+            except PermissionErrorMotion:
+                pass  # 没接管：没有要停的腰
+            return
+        with self._lock:
+            if what in self._by_arm:
+                return
+        if self._loop.arm_status(what)["float"]:
+            self._loop.disable_teach(what)
+        else:
+            self._loop.hold_at_command(what)
+
     def revoke(self, reason: str) -> int:
         """撤销全部租约（不锁存）；被撤销的手停在指令角。返回撤销了几个。"""
         with self._lock:
@@ -288,7 +389,9 @@ class MotionCore:
                 self._transition = False
 
     def estop(self, reason: str = "") -> None:
-        """急停锁存：撤销全部租约、两手锁在实测角（退出拖拽）、禁止一切新运动，直到 reset_estop()。"""
+        """急停锁存：撤销全部租约、两手锁在实测角（退出拖拽）、禁止一切新运动，直到 reset_estop()。
+
+        有外部急停（守护层）时随后也锁它；它失败（连不上、没应答）时抛出，但核心这边已经锁存。"""
         text = "急停已锁定" + (f"（{reason}）" if reason else "") + "：确认现场安全后点「复位急停」"
         with self._lock:
             self._latched = text
@@ -297,6 +400,18 @@ class MotionCore:
             self._loop.estop_hold(latch=text)
         for rec in recs:
             rec.cancelled.set()
+        if self._external_estop is not None:
+            self._external_estop(reason)
+
+    @property
+    def has_external_estop(self) -> bool:
+        return self._external_estop is not None
+
+    def reset_external_estop(self) -> None:
+        """复位守护层的急停 / 故障锁存（现场确认安全后）；之后要重新接管。不解除核心的锁存。"""
+        if self._external_reset is None:
+            raise PermissionErrorMotion("当前后端不经守护层，没有守护层可复位")
+        self._external_reset()
 
     def reset_estop(self) -> None:
         """现场确认安全后解除急停锁存。不碰守护层（守护层的锁存另有复位）。"""
@@ -545,6 +660,8 @@ class MotionCore:
             "safety": self.safety(loop_status).value,
             "leases": leases,
             "last_revoke": last,
+            # 急停同时锁守护层（复位要两步：守护层、核心各一次）
+            "external_estop": self._external_estop is not None,
         }
 
 
@@ -586,6 +703,19 @@ class CoreLease:
     @property
     def cancelled(self) -> threading.Event:
         return self._rec.cancelled
+
+    @property
+    def revoked(self) -> Optional[str]:
+        """撤销原因（没撤销为 None）。"""
+        return self._rec.revoked
+
+    @property
+    def returned(self) -> bool:
+        return self._rec.returned
+
+    @property
+    def holder_cancelled(self) -> bool:
+        return self._rec.holder_cancelled
 
     def check(self) -> None:
         rec = self._rec

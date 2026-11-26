@@ -90,11 +90,10 @@ class TcpMixin:
         """TCP 点动（body.arm 指定哪只手）：躯干系平移（保姿态）或绕 TCP 点旋转（轴沿躯干）。
 
         手动来源：不租这只手；这只手被任务租着、急停锁存时目标被拒。"""
-        loop = self.require_loop()
         motion = self.motion()
         arm = self.body_arm(body)
         side = "左" if arm == "left" else "右"
-        st = loop.status()
+        st = motion.page_status()
         if not st.get("engaged"):
             raise PermissionErrorMotion("先接管再点动 TCP")
         if st["arms"][arm].get("float"):
@@ -114,7 +113,7 @@ class TcpMixin:
         axis_vec = np.zeros(3, dtype=float)
         axis_vec[ax_i] = 1.0
 
-        q0 = np.asarray(self.reader().read_arm(loop.layout(arm)).q, dtype=float)
+        q0 = np.asarray(self.reader().read_arm(motion.layout(arm)).q, dtype=float)
         t, R = model.fk(q0)
         tcp = np.asarray(tcp, dtype=float).reshape(3)
         c = np.asarray(t, dtype=float).reshape(3) + R @ tcp

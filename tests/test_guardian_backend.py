@@ -33,6 +33,7 @@ from robot_platform.hw.backends.mock import MockBackend
 
 RELEASE_S = 0.5
 MAX_GAP_S = 0.040  # 守护层 200 Hz；CI 机器上留余量
+MAX_GAP_ESTOP_S = 0.100  # 跨守护层锁存（含黑匣子落盘）时；见用到它的测试
 
 
 def _cfg(name="g1d", **timing):
@@ -298,7 +299,7 @@ def test_guardian_estop_revokes_motion_core_leases_and_latches_stay_separate(g):
 
     core.estop("页面急停")
     time.sleep(0.1)
-    assert _gstate(g) in ("holding", "tracking"), "页面急停目前不锁存守护层（HANDOFF §6 待定）"
+    assert _gstate(g) in ("holding", "tracking"), "没装外部急停的核心不锁守护层（App 会装上，见下一个测试）"
     g.backend.reset_guardian()
     core.engage()
     assert core.latched and core.safety() is SafetyState.ESTOP_LATCHED
@@ -307,6 +308,154 @@ def test_guardian_estop_revokes_motion_core_leases_and_latches_stay_separate(g):
     core.reset_estop()
     with core.lease([Resource.RIGHT_ARM], "task:after") as l2:
         l2.move_to(_meas(g, g.right).tolist())
+
+
+def test_core_estop_also_latches_the_guardian_and_reset_takes_both_steps(g):
+    """页面急停（运控核心急停）同时锁守护层：手臂一直有帧、停在半路；复位要两步。"""
+    from g1_contracts.motion import LeaseRevoked, Resource
+    from robot_platform.control.motion_core import MotionCore
+
+    core = MotionCore(g.loop, external_estop=g.backend.estop_guardian)
+    assert core.status()["external_estop"] is True
+    core.engage()
+    lease = core.lease([Resource.RIGHT_ARM], "task:test")
+    tgt = _meas(g, g.right)
+    tgt[3] += 0.5
+    lease.move_to(tgt.tolist())
+    time.sleep(0.2)
+    t0 = time.monotonic()
+    core.estop("页面急停")
+    assert _gstate(g) == "estop", "核心急停返回时守护层已经锁存"
+    assert lease.cancelled.is_set() and core.latched
+    time.sleep(0.3)
+    t1 = time.monotonic()
+    # 守护层锁存时会写黑匣子（同进程的写文件线程要抢 GIL），这台测试机还有虚拟机调度抖动：
+    # 这里只证明帧没停（停了会是整段 0.3 s），抖动指标以本体实测为准
+    assert max_gap(g.plant.since(t0), t0, t1) <= MAX_GAP_ESTOP_S, "急停前后守护层一直发帧"
+    held = _meas(g, g.right)
+    assert np.max(np.abs(held - tgt)) > 0.05, "停在半路"
+    time.sleep(0.2)
+    assert np.max(np.abs(_meas(g, g.right) - held)) < 5e-3, "急停后不动"
+    with pytest.raises(LeaseRevoked):
+        lease.move_to(tgt.tolist())
+
+    # 第一步：复位核心；守护层仍锁着，接管被拒
+    core.reset_estop()
+    with pytest.raises(PermissionErrorMotion, match="复位"):
+        core.engage()
+    # 第二步：复位守护层再接管，从实测角开始、不动
+    g.backend.reset_guardian()
+    core.engage()
+    wait_until(lambda: g.loop.status()["ready"], 1.0, "重新接管就绪")
+    time.sleep(0.2)
+    assert np.max(np.abs(_meas(g, g.right) - held)) < 5e-3
+    with core.lease([Resource.RIGHT_ARM], "task:after") as l2:
+        l2.move_to(held.tolist())
+
+
+def test_core_estop_stops_another_program_driving_through_the_guardian(g):
+    """平台没接管、别的程序（refactor）经守护层在动手臂：页面急停照样让它停下。"""
+    from robot_platform.control.motion_core import MotionCore
+
+    node = g.other("refactor-node")
+    epoch = node.engage()
+    wait_until(lambda: _gstate(g) == "holding", 1.0, "refactor 接管")
+    q = _meas(g, g.right)
+    tgt = q.copy()
+    tgt[3] += 0.3  # 守护层单次跳变上限 0.5 rad 以内
+    stop = threading.Event()
+
+    def stream():
+        while not stop.is_set():
+            node.setpoint({"right_arm": {"q": tgt.tolist()}}, valid_for_ms=100)
+            time.sleep(0.01)
+
+    th = threading.Thread(target=stream, daemon=True)
+    th.start()
+    try:
+        time.sleep(0.2)
+        core = MotionCore(g.loop, external_estop=g.backend.estop_guardian)
+        assert g.loop.status()["engaged"] is False
+        core.estop("页面急停")
+        assert _gstate(g) == "estop" and g.svc.core.owner == "refactor-node"
+        time.sleep(0.4)  # 守护层按加速度上限减速到停，仿真手臂再跟上
+        held = _meas(g, g.right)
+        cmd = np.array(g.svc.core.q_cmd["right_arm"])
+        time.sleep(0.3)
+        assert np.array(g.svc.core.q_cmd["right_arm"]) == pytest.approx(cmd), "refactor 还在发设定，但守护层不再执行"
+        assert np.max(np.abs(_meas(g, g.right) - held)) < 5e-3
+        assert np.max(np.abs(held - tgt)) > 0.05
+        assert g.svc.core.rejects.get("state_estop", 0) > 0, "守护层拒绝了 refactor 的设定"
+    finally:
+        stop.set()
+        th.join(1.0)
+    assert g.svc.core.epoch > epoch, "守护层急停作废了 refactor 的 epoch：复位后它要重新接管"
+
+
+class _DeadGuardianClient:
+    """连不上的守护层：每个命令都等不到应答。"""
+
+    def __init__(self):
+        self.estops = 0
+
+    def estop(self, timeout=1.0):
+        from g1_guardian.client import GuardianUnavailable
+
+        self.estops += 1
+        raise GuardianUnavailable("no answer to estop")
+
+    def close(self):
+        pass
+
+
+def test_core_estop_latches_locally_even_when_the_guardian_does_not_answer():
+    from g1_contracts.motion import Resource
+    from robot_platform.control.motion_core import MotionCore
+
+    profile = active()
+    mock = MockBackend(profile)
+    dead = _DeadGuardianClient()
+    backend = GuardianBackend(profile, mock, GuardianSettings(host="127.0.0.1", port=9),
+                              client_factory=lambda s: dead)
+    kin = RobotKinematics(profile.urdf, profile.base_link, list(profile.arms))
+    loop = ArmLoop(reader=mock.state(), commander=mock.commander(), kin=kin,
+                   urdf_path=profile.urdf, base_link=profile.base_link)
+    try:
+        core = MotionCore(loop, external_estop=backend.estop_guardian)
+        core.engage()
+        lease = core.lease([Resource.RIGHT_ARM], "task:test")
+        with pytest.raises(PermissionErrorMotion, match="守护层没锁上"):
+            core.estop("页面急停")
+        assert dead.estops == 1
+        assert core.latched and lease.cancelled.is_set() and loop.inhibited
+        assert loop.status()["engaged"] is True, "手臂照常保持"
+    finally:
+        loop.shutdown()
+        mock.close()
+
+
+def test_app_wires_the_backend_estop_into_the_core():
+    from robot_platform.core.config_loader import load_settings
+    from robot_platform.web.app import App
+
+    settings = load_settings(backend="mock")
+    profile = settings.profile
+    kin = RobotKinematics(settings.urdf, settings.base_link, list(profile.arms))
+    for with_guardian in (False, True):
+        backend = MockBackend(profile)
+        calls = []
+        if with_guardian:
+            backend.estop_guardian = lambda reason="": calls.append(reason)
+        app = App(settings, kin, allow_real_motion=True, backend=backend)
+        try:
+            app.reader()
+            assert app.motion().has_external_estop is with_guardian
+            app.motion().estop("页面急停")
+            assert calls == (["页面急停"] if with_guardian else [])
+        finally:
+            app.motion().reset_estop()
+            app.loop.shutdown()
+            backend.close()
 
 
 def test_engage_refused_while_another_program_owns_the_guardian(g):
@@ -498,15 +647,41 @@ def test_guardian_reset_route_resets_then_engages():
     from robot_platform.web import routes
 
     calls = []
-    # 重新接管经运控核心（它会先撤销全部租约），不直接调 ArmLoop
-    core = SimpleNamespace(engage=lambda: calls.append("core.engage"))
-    app = SimpleNamespace(backend=SimpleNamespace(reset_guardian=lambda: calls.append("reset")),
-                          motion=lambda: core)
-    loop = SimpleNamespace(engage=lambda: calls.append("loop.engage"))
-    routes._guardian_reset(app, loop, {})
-    assert calls == ["reset", "core.engage"]
-    with pytest.raises(PermissionErrorMotion):
-        routes._guardian_reset(SimpleNamespace(backend=object()), loop, {})
+    # 复位和重新接管都经运控核心（守护层的复位由核心转给后端；接管会先撤销全部租约），不直接调后端或 ArmLoop
+    core = SimpleNamespace(reset_external_estop=lambda: calls.append("core.reset_external_estop"),
+                           engage=lambda: calls.append("core.engage"))
+    app = SimpleNamespace(backend=SimpleNamespace(reset_guardian=lambda: calls.append("backend.reset")))
+    routes._guardian_reset(app, core, {})
+    assert calls == ["core.reset_external_estop", "core.engage"]
+
+
+def test_core_forwards_the_guardian_reset_to_the_backend():
+    from robot_platform.core.config_loader import load_settings
+    from robot_platform.web.app import App
+
+    settings = load_settings(backend="mock")
+    profile = settings.profile
+    kin = RobotKinematics(settings.urdf, settings.base_link, list(profile.arms))
+    backend = MockBackend(profile)
+    calls = []
+    backend.reset_guardian = lambda: calls.append("reset")
+    app = App(settings, kin, allow_real_motion=True, backend=backend)
+    try:
+        app.reader()
+        app.motion().reset_external_estop()
+        assert calls == ["reset"]
+    finally:
+        app.loop.shutdown()
+        backend.close()
+    plain = MockBackend(profile)
+    app = App(settings, kin, allow_real_motion=True, backend=plain)
+    try:
+        app.reader()
+        with pytest.raises(PermissionErrorMotion, match="没有守护层"):
+            app.motion().reset_external_estop()
+    finally:
+        app.loop.shutdown()
+        plain.close()
 
 
 # -------------------------------------------------- 守护层配置与机型是否一致

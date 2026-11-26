@@ -52,8 +52,8 @@ class SinglePoseMixin:
 
     def _single_pose_record(self, body: Dict[str, Any]) -> Dict[str, Any]:
         arm = sp.check_arm(str(body.get("arm") or ""))
-        loop = self.loop
-        layout = loop.layout(arm) if loop is not None else None
+        core = self.motion_core
+        layout = core.layout(arm) if core is not None else None
         if layout is None:
             from robot_platform.core.layout import get_arm
             layout = get_arm(arm)

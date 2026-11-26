@@ -8,7 +8,9 @@ Standard library only. The types follow design review section 7
   ``allow_detour`` (the core may plan around a collision).
 - ``MotionState`` carries ``resource`` and ``epoch``.
 - ``LeaseRequest.heartbeat_ms`` is optional; an in-process core does not
-  enforce heartbeats (phase 2, with IPC, will).
+  enforce heartbeats. Over IPC (phase 2) the core checks heartbeats per
+  connection (``g1_contracts.wire.HEARTBEAT_TIMEOUT_MS``) and refuses a
+  lease that sets its own.
 - ``MotionRejected`` / ``LeaseRevoked`` exceptions and the ``MotionClient`` /
   ``LeaseHandle`` protocols.
 
@@ -24,7 +26,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import ContextManager, Iterable, Optional, Protocol, Sequence, Tuple, Union
 
-CONTRACT_VERSION = "1.0"
+CONTRACT_VERSION = "1.1"  # 1.1: wire format (g1_contracts.wire); the types are unchanged
 
 
 class Resource(str, Enum):

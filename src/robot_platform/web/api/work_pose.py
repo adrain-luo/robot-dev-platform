@@ -36,11 +36,10 @@ class WorkPoseMixin:
 
     def gravity_up(self) -> np.ndarray:
         """躯干系里的「竖直向上」：有躯干 IMU 用实测，否则躯干 +z。"""
-        loop = getattr(self, "loop", None)
-        grav = getattr(loop, "gravity", None) if loop is not None else None
-        if grav is not None:
+        core = getattr(self, "motion_core", None)
+        if core is not None:
             try:
-                return np.asarray(grav.up_dir(), dtype=float)
+                return np.asarray(core.gravity_up(), dtype=float)
             except Exception:  # noqa: BLE001
                 pass
         return np.array([0.0, 0.0, 1.0])

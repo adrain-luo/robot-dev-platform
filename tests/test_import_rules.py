@@ -2,8 +2,13 @@
 
 - 任务代码（tasks/、calib/）：不碰 app.loop / require_loop / hw. / unitree_sdk2py / ArmLoop / ArmView，
   只经运控客户端（租约）动手臂；tasks/ 里连 app 都不出现（App 不再把自己传给任务）。
+- 网页（web/）：除了组装进程的 web/app.py，不碰控制循环（ArmLoop、.loop、require_loop），
+  只经运控核心（app.motion() / motion_core）；阶段 2 起核心可以在另一个进程里。
 - 感知（perception/）不导入任务。
 - g1_contracts 只用标准库；g1_guardian 只用标准库和（延迟导入的）unitree_sdk2py，绝不导入 robot_platform。
+- g1_motion_client 只用标准库和 g1_contracts（refactor 的系统 Python 也要能直接用）。
+- g1_motion_core.server 只用标准库和 g1_contracts；任务、标定、感知、网页都不导入 g1_motion_core
+  （它们经 g1_motion_client 和核心进程说话）。
 
 每条规则都有自测：往一段假源码里放违规，检查器必须报出来，免得规则写错了永远“通过”。
 """
@@ -68,6 +73,32 @@ def task_violations(source: str, *, forbid_app: bool) -> List[str]:
     return out
 
 
+LOOP_HOLDERS = {"app", "self", "APP"}
+
+
+def web_violations(source: str) -> List[str]:
+    """网页代码：不导入 ArmLoop / ArmView，不碰 app/self/APP 的 .loop，不调 require_loop。"""
+    tree = ast.parse(source)
+    out = []
+    for module, names in _imports(tree):
+        bad = TASK_FORBIDDEN_NAMES.intersection(names)
+        if bad:
+            out.append(f"imports {', '.join(sorted(bad))} from {module}")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            base = node.value
+            holder = (isinstance(base, ast.Name) and base.id in LOOP_HOLDERS) or \
+                     (isinstance(base, ast.Attribute) and base.attr == "app")
+            if node.attr == "loop" and holder:
+                out.append(f"line {node.lineno}: .loop")
+            if node.attr == "require_loop":
+                out.append(f"line {node.lineno}: require_loop")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr":
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) and node.args[1].value == "loop":
+                out.append(f"line {node.lineno}: getattr(..., 'loop')")
+    return out
+
+
 def import_violations(source: str, *, allowed_top: Iterable[str]) -> List[str]:
     allowed = STDLIB | set(allowed_top)
     return [f"imports {m}" for m, _ in _imports(ast.parse(source)) if m.split(".")[0] not in allowed]
@@ -95,6 +126,16 @@ def test_calibration_tasks_use_the_motion_client_not_the_loop_or_hardware():
     assert _scan(PLATFORM / "calib", lambda s: task_violations(s, forbid_app=False)) == []
 
 
+def test_web_goes_through_the_motion_core_not_the_loop():
+    found = []
+    for path in sorted((PLATFORM / "web").rglob("*.py")):
+        if path.relative_to(PLATFORM / "web").as_posix() == "app.py":
+            continue  # 组装进程：这里建控制循环和运控核心
+        for v in web_violations(path.read_text(encoding="utf-8")):
+            found.append(f"{path.relative_to(SRC)}: {v}")
+    assert found == []
+
+
 def test_perception_does_not_import_tasks():
     assert _scan(PLATFORM / "perception",
                  lambda s: forbidden_import_violations(s, prefixes=["robot_platform.tasks"])) == []
@@ -102,6 +143,24 @@ def test_perception_does_not_import_tasks():
 
 def test_contracts_use_only_the_standard_library():
     assert _scan(SRC / "g1_contracts", lambda s: import_violations(s, allowed_top=["g1_contracts"])) == []
+
+
+def test_motion_client_uses_only_the_standard_library_and_contracts():
+    assert _scan(SRC / "g1_motion_client",
+                 lambda s: import_violations(s, allowed_top=["g1_motion_client", "g1_contracts"])) == []
+
+
+def test_motion_core_server_uses_only_the_standard_library_and_contracts():
+    src = (SRC / "g1_motion_core" / "server.py").read_text(encoding="utf-8")
+    assert import_violations(src, allowed_top=["g1_motion_core", "g1_contracts"]) == []
+
+
+def test_nothing_but_the_core_process_imports_the_core_package():
+    found = []
+    for sub in ("tasks", "calib", "perception", "web", "control", "core", "hw"):
+        found += _scan(PLATFORM / sub, lambda s: forbidden_import_violations(s, prefixes=["g1_motion_core"]))
+    found += _scan(SRC / "g1_motion_client", lambda s: forbidden_import_violations(s, prefixes=["g1_motion_core"]))
+    assert found == []
 
 
 def test_guardian_stays_free_of_platform_code():
@@ -134,6 +193,25 @@ def test_checker_catches_each_kind_of_task_violation():
     assert calib == ["line 3: app.loop"]
     ok = "from robot_platform.control.arm_loop import PermissionErrorMotion\ndef f(motion):\n    motion.lease_arm('right', 't')\n"
     assert task_violations(ok, forbid_app=True) == []
+
+
+def test_checker_catches_each_kind_of_web_violation():
+    bad = '''
+from robot_platform.control.arm_loop import ArmLoop
+def f(self, app):
+    self.loop.status()
+    app.loop.hold_arm("right")
+    APP.loop.shutdown()
+    self.app.loop
+    self.require_loop()
+    getattr(self, "loop", None)
+'''
+    found = web_violations(bad)
+    for needle in ("imports ArmLoop", "line 4: .loop", "line 5: .loop", "line 6: .loop", "line 7: .loop",
+                   "require_loop", "getattr(..., 'loop')"):
+        assert any(needle in v for v in found), (needle, found)
+    ok = "def f(self, core):\n    core.hold_arm('right')\n    loop = self.motion()\n    loop.status()\n"
+    assert web_violations(ok) == []
 
 
 def test_checker_catches_non_stdlib_and_forbidden_imports():
