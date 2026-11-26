@@ -27,7 +27,7 @@ def _goal(**kw):
 
 
 def test_version_is_exported():
-    assert g1_contracts.CONTRACT_VERSION == CONTRACT_VERSION == "1.0"
+    assert g1_contracts.CONTRACT_VERSION == CONTRACT_VERSION == "1.1"
 
 
 def test_enum_values_are_stable_strings():
