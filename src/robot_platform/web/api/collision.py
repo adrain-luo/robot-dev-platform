@@ -51,7 +51,16 @@ class CollisionMixin:
         except Exception:  # noqa: BLE001
             return None
 
+    def _collision_remote(self):
+        """ipc：闸门在运控核心进程里，/api/collision/* 转给它。"""
+        if getattr(self, "motion_core_mode", "inprocess") != "ipc":
+            return None
+        return self.remote_core()
+
     def collision_status(self, with_distance: bool = True) -> Dict[str, Any]:
+        remote = self._collision_remote()
+        if remote is not None:
+            return remote.collision("/api/collision/status", {})["collision"]
         g = self.collision_guard()
         # 控制循环上挂的是不是这个闸门（没挂上 = 下目标时不检查）；只读模式没有运控核心
         core = getattr(self, "motion_core", None)
@@ -60,4 +69,10 @@ class CollisionMixin:
         return setup.guard_status(g, self.profile.name, arms_q, gate_attached=attached)
 
     def collision_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        remote = self._collision_remote()
+        if remote is not None:
+            if path == "/api/collision/config" and getattr(self, "motion_core", None) is None:
+                return {"ok": False, "error": "只读模式不能改运控核心的碰撞检查设置",
+                        "collision": self.collision_status()}
+            return remote.collision(path, body)
         return setup.guard_request(self.collision_guard(), path, body, self.collision_status)

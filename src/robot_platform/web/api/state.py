@@ -34,6 +34,12 @@ class StateMixin:
             base["cmd_bus"] = mon.report()
         core = getattr(self, "motion_core", None)
         if core is None:
+            # ipc 只读：本进程不听指令话题，指令话题占用由运控核心报
+            remote = self.remote_core() if getattr(self, "motion_core_mode", "inprocess") == "ipc" else None
+            if remote is not None:
+                bus = remote.page_status().get("cmd_bus")
+                if bus is not None:
+                    base["cmd_bus"] = bus
             return base
         # 控制循环状态，"motion" 里是租约、epoch、急停锁存、安全状态
         base.update(core.page_status())
