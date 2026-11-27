@@ -200,8 +200,11 @@ class RemoteMotionCore:
                     f"急停没送到运控核心（{exc}）：核心若还在，手臂按它自己的状态保持；请用现场断电或遥控") from None
             raise _translate(exc) from None
 
-    def reset_estop(self) -> None:
-        self._call("reset_estop")
+    def reset_estop(self, expect_epoch: Optional[int] = None) -> None:
+        if expect_epoch is None:
+            self._call("reset_estop")
+        else:
+            self._call("reset_estop", expect_epoch=int(expect_epoch))
 
     def reset_external_estop(self) -> None:
         self._call("reset_external_estop", timeout_s=LONG_CALL_S)

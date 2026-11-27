@@ -147,7 +147,7 @@ def test_routes_refuse_to_start_tasks_while_latched(mock_server):
         code, d = c.post(path, {"name": name, "index": 0, "modes": ["baseline"]})
         assert code == 403 and "急停已锁定" in d["error"], (path, code, d)
     assert c.get("/api/identify")["identify"]["running"] is False
-    assert c.post("/api/estop/reset")[0] == 200
+    assert c.confirm_reset()[0] == 200
     c.post("/api/posesets/delete", {"name": name})
     c.post("/api/release")
 
@@ -187,7 +187,7 @@ def test_hold_stops_a_single_pose_goto(mock_server):
     d1 = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"]
     time.sleep(0.5)
     assert c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"] == d1
-    assert c.post("/api/estop/reset")[0] == 200
+    assert c.confirm_reset()[0] == 200
     c.post("/api/single-pose/delete", {"name": "lease_sp"})
     c.post("/api/release")
 

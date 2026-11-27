@@ -53,6 +53,14 @@ class Client:
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
 
+    def confirm_reset(self, kind: str = "estop"):
+        """页面上的复位：先要确认令牌，再带令牌复位（web/reset_confirm.py）。返回复位那一步的 (状态码, JSON)。"""
+        base = "/api/estop/reset" if kind == "estop" else "/api/guardian/reset"
+        code, d = self.post(base + "/request")
+        if code != 200:
+            return code, d
+        return self.post(base, {"token": d["token"]})
+
     def wait(self, pred, timeout_s: float = 5.0, period_s: float = 0.05):
         deadline = time.monotonic() + timeout_s
         while True:

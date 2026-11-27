@@ -38,6 +38,7 @@ from robot_platform.web.api.tcp import TcpMixin
 from robot_platform.web.api.work_pose import WorkPoseMixin
 from robot_platform.web.api.points import PointsMixin
 from robot_platform.web.api.runtime import RuntimeMixin
+from robot_platform.web.reset_confirm import ResetConfirm
 from robot_platform.web.api.single_pose import SinglePoseMixin
 from robot_platform.web.api.suction import SuctionMixin
 from robot_platform.web.api.collision import CollisionMixin
@@ -70,6 +71,8 @@ class App(StateMixin, LiftMixin, ChassisMixin, TcpMixin, WorkPoseMixin, PointsMi
         # ipc 时是 control/remote_core.py 的 RemoteMotionCore，方法一样）
         self.motion_core: Optional[Union[MotionCore, RemoteMotionCore]] = None
         self.cmd_monitor = None
+        # 页面复位（急停 / 守护层）的一次性确认令牌：复位要人在弹窗里确认（web/reset_confirm.py）
+        self.reset_confirm = ResetConfirm()
         self._lock = threading.Lock()
         self.payload = PayloadAPI(self)
         self.tcp = TcpSession()

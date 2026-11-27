@@ -645,13 +645,27 @@ def test_create_backend_guardian_with_settings_from_profile_and_env(monkeypatch)
 
 def test_guardian_reset_route_resets_then_engages():
     from robot_platform.web import routes
+    from robot_platform.web.reset_confirm import ResetConfirm
 
     calls = []
+    epoch = {"n": 4}
     # 复位和重新接管都经运控核心（守护层的复位由核心转给后端；接管会先撤销全部租约），不直接调后端或 ArmLoop
     core = SimpleNamespace(reset_external_estop=lambda: calls.append("core.reset_external_estop"),
-                           engage=lambda: calls.append("core.engage"))
-    app = SimpleNamespace(backend=SimpleNamespace(reset_guardian=lambda: calls.append("backend.reset")))
-    routes._guardian_reset(app, core, {})
+                           engage=lambda: calls.append("core.engage"),
+                           has_external_estop=True, status=lambda: {"epoch": epoch["n"]})
+    app = SimpleNamespace(backend=SimpleNamespace(reset_guardian=lambda: calls.append("backend.reset")),
+                          reset_confirm=ResetConfirm())
+    # 复位要人工确认：没带令牌什么都不做
+    with pytest.raises(PermissionErrorMotion, match="先在页面上确认"):
+        routes._guardian_reset(app, core, {})
+    # 确认之后网页又急停 / 接管 / 释放过（核心 epoch 变了）：不复位
+    req = routes._guardian_reset_request(app, core, {})
+    epoch["n"] += 1
+    with pytest.raises(PermissionErrorMotion, match="锁存变了"):
+        routes._guardian_reset(app, core, {"token": req["token"]})
+    assert calls == []
+    req = routes._guardian_reset_request(app, core, {})
+    routes._guardian_reset(app, core, {"token": req["token"]})
     assert calls == ["core.reset_external_estop", "core.engage"]
 
 

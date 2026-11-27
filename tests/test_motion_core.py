@@ -306,6 +306,21 @@ def test_estop_latch_blocks_everything_until_reset(rig, core):
         l3.move_to(_cmd(loop, "left"))
 
 
+def test_reset_with_an_expected_epoch_refuses_a_newer_latch(core):
+    """网页的复位确认带着人看到的 epoch：之后又急停（epoch 变了）就不解除，要重新确认。不带 = 不比较。"""
+    core.estop("页面急停")
+    seen = core.epoch
+    core.estop("另一个人又按了急停")
+    with pytest.raises(PermissionErrorMotion, match="锁存变了"):
+        core.reset_estop(expect_epoch=seen)
+    assert core.latched and "另一个人" in core.latched
+    core.reset_estop(expect_epoch=core.epoch)
+    assert core.latched is None and core.safety() is SafetyState.NORMAL
+    core.estop("测试")
+    core.reset_estop()  # 客户端接口（上位机 RESUME_HOME）不带 epoch
+    assert core.latched is None
+
+
 # ---------------------------------------------------------------- 指令出口失去就绪（守护层急停 / 失联）
 
 def test_output_losing_ready_revokes_leases_and_drops_their_targets(rig, core):

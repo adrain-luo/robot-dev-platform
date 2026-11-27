@@ -62,6 +62,7 @@ python serve.py --allow-real-motion --max-speed 0.2    # 真机
 | `web/app.py` | `App` 本体：设置、后端、控制循环、各功能会话 |
 | `web/api/` | `App` 按功能拆开的接口方法：`state`（状态 / 场景）、`lift`、`tcp`、`work_pose`、`points`、`runtime` |
 | `web/page.py` / `web/http_util.py` | 首页下拉框预填；HTTP 收发小工具 |
+| `web/reset_confirm.py` | 复位要人工确认：「复位急停」和守护层复位都先要一次性确认令牌（`.../reset/request`），人在弹窗里确认后带令牌复位；令牌 30 s 内有效、只能用一次，确认之后锁存变了（又急停、接管、释放）就拒绝 |
 | `web/static/` | 唯一前端：`index.html`、`style.css`、三维 `viewer.js`（ES 模块） |
 | `web/static/js/` | 页面脚本按功能分文件：`00-util`、`01-robot`、`02-arm`、`03-body`、`04-ui`、`05-payload`、`06-runtime`、`07-tcp`、`08-spatial`、`09-camera-handeye`、`10-render`、`11-detect`、`12-workflow`、`99-main`（启动，放最后）。服务端按文件名顺序拼成 `/static/app.js`，共用一个脚本作用域；新文件按编号插进去即可 |
 | `control/arm_loop.py` | `ArmLoop` 限速、接管、腰保持、拼指令帧 |

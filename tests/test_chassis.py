@@ -131,6 +131,6 @@ def test_api_drives_mock_base_and_estop_stops_it(mock_server):
     assert code == 200
     assert _wait(lambda: c.get("/api/scene")["chassis"]["odom"]["vx"] == 0.0, timeout=1.0)
     assert c.get("/api/scene")["chassis"]["stop_reason"] == "急停"
-    assert c.post("/api/estop/reset")[0] == 200
+    assert c.confirm_reset()[0] == 200
     assert c.post("/api/chassis/stop")[1]["ok"]
     c.post("/api/chassis/limit", {"lin_mps": SPEC.default_lin_mps, "yaw_rad_s": SPEC.default_yaw_rad_s})
