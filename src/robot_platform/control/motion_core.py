@@ -419,9 +419,16 @@ class MotionCore:
             raise PermissionErrorMotion("当前后端不经守护层，没有守护层可复位")
         self._external_reset()
 
-    def reset_estop(self) -> None:
-        """现场确认安全后解除急停锁存。不碰守护层（守护层的锁存另有复位）。"""
+    def reset_estop(self, expect_epoch: Optional[int] = None) -> None:
+        """现场确认安全后解除急停锁存。不碰守护层（守护层的锁存另有复位）。
+
+        expect_epoch：人确认时看到的 epoch（网页的复位确认带上它）。之后又急停、接管、释放过，
+        epoch 就变了：拒绝，不解除，要重新确认。比较和解除在同一把锁里，中间插不进新的急停。
+        不给 = 不比较（客户端接口，例如上位机经 ROS 发的 RESUME_HOME）。"""
         with self._lock:
+            if expect_epoch is not None and int(expect_epoch) != self._epoch:
+                raise PermissionErrorMotion(
+                    "确认之后锁存变了（又按了急停、接管或释放）：请看清现在的状态，重新点复位并确认")
             self._latched = None
             self._loop.clear_inhibit()
 

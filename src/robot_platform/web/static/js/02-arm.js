@@ -266,10 +266,15 @@ $("btn-engage").onclick = async () => {
     : "将发布 rt/lowcmd 接管（会退出高层运动模式）。请扶住机器人。继续？";
   if (!confirm(ask)) return;
   try { await post("/api/engage", {}); flash("已接管：保持当前姿态", true); } catch (e) {
-    // 守护层急停 / 故障锁存：现场确认安全后可以在这里复位并重新接管
-    if (g && /复位/.test(String(e)) && confirm(`${String(e)}\n\n现场已确认安全，复位守护层并重新接管？`)) {
-      try { await post("/api/guardian/reset", {}); flash("守护层已复位，已重新接管：保持当前姿态", true); } catch (e2) { flash(String(e2), false); }
-      return;
+    // 守护层急停 / 故障锁存：现场确认安全后可以在这里复位并重新接管。
+    // 复位要人工确认：先要一次性确认令牌，人在弹窗里确认后带令牌复位（web/reset_confirm.py）
+    if (g && /复位/.test(String(e))) {
+      let req;
+      try { req = await post("/api/guardian/reset/request", {}); } catch (e2) { flash(String(e2), false); return; }
+      if (confirm(`${String(e)}\n\n现场已确认安全，复位守护层并重新接管？\n（${Math.round(req.expires_in_s)} 秒内确认有效）`)) {
+        try { await post("/api/guardian/reset", { token: req.token }); flash("守护层已复位，已重新接管：保持当前姿态", true); } catch (e2) { flash(String(e2), false); }
+        return;
+      }
     }
     flash(String(e), false);
   }
@@ -295,14 +300,19 @@ $("btn-hold").onclick = async () => {
 };
 
 $("btn-estop-reset").onclick = async () => {
-  const ask = "确认现场安全、手臂周围没有人和障碍，解除急停锁定？\n\n解除后手臂仍保持当前姿态，不会自己动；被急停打断的任务不会继续，要重新开始。";
+  // 复位要人工确认：先向服务器要一次性确认令牌（它记下此刻是哪一次锁存），弹窗里给人看锁存原因，
+  // 确认后带令牌复位。确认期间又按了急停 / 接管 / 释放，服务器会拒绝，要重新确认
+  let req;
+  try { req = await post("/api/estop/reset/request", {}); } catch (e) { flash(String(e), false); return; }
+  const ask = `${req.latch_reason || "急停已锁定"}\n\n确认现场安全、手臂周围没有人和障碍，解除急停锁定？\n\n` +
+    `解除后手臂仍保持当前姿态，不会自己动；被急停打断的任务不会继续，要重新开始。\n（${Math.round(req.expires_in_s)} 秒内确认有效）`;
   if (!confirm(ask)) return;
   // 经守护层发令时急停也锁了守护层：这里只解除运控核心，守护层要在「接管」时另外确认复位
   const g = window.ROBOT?.guardian;
   const done = g
     ? "运控核心的急停已解除；守护层的急停还锁着：点「接管」，确认后复位守护层并重新接管"
     : "急停已解除：手臂保持当前姿态";
-  try { await post("/api/estop/reset", {}); flash(done, true); } catch (e) { flash(String(e), false); }
+  try { await post("/api/estop/reset", { token: req.token }); flash(done, true); } catch (e) { flash(String(e), false); }
 };
 
 // 拖拽按手分开：一只手卸力拖拽时，另一只手照常受控

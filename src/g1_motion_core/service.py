@@ -194,7 +194,9 @@ class CoreProcess:
             # 整机
             "engage": lambda ctx, a: core.engage(),
             "release": lambda ctx, a: core.release(),
-            "reset_estop": lambda ctx, a: core.reset_estop(),
+            # expect_epoch：网页的复位确认带上（见 robot_platform/web/reset_confirm.py）；客户端不带
+            "reset_estop": lambda ctx, a: core.reset_estop(
+                None if a.get("expect_epoch") is None else int(a["expect_epoch"])),
             "reset_external_estop": lambda ctx, a: core.reset_external_estop(),
         }
         return {name: _jsonable_result(fn) for name, fn in table.items()}

@@ -51,7 +51,7 @@ def test_engage_target_hold_release(mock_server):
     a = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"][3]
     b = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"][3]
     assert a == b and abs(a - tgt2[3]) > 0.05
-    assert c.post("/api/estop/reset")[0] == 200
+    assert c.confirm_reset()[0] == 200
 
     code, d = c.post("/api/release")
     assert code == 200 and not d["ctrl"]["engaged"]
@@ -245,7 +245,7 @@ def test_hold_stops_multi_pose_tasks(mock_server):
     d2 = c.get("/api/scene")["ctrl"]["arms"]["right"]["desired_rad"]
     assert d1 == d2, "急停后手臂又被发了新目标"
     c.post("/api/posesets/delete", {"name": name})
-    assert c.post("/api/estop/reset")[0] == 200
+    assert c.confirm_reset()[0] == 200
     c.post("/api/release")
 
 
@@ -270,7 +270,53 @@ def test_estop_latches_until_reset(mock_server):
     assert code == 200 and d["ctrl"]["motion"]["latched"] is True
     assert d["ctrl"]["motion"]["epoch"] == epoch + 2  # 释放、接管各撤销一次
     assert c.post("/api/target", {"q": q0, "arm": "right"})[0] == 403
-    code, d = c.post("/api/estop/reset")
+    code, d = c.confirm_reset()
     assert code == 200 and d["ctrl"]["motion"]["latched"] is False and d["ctrl"]["inhibited"] is None
     assert c.post("/api/target", {"q": q0, "arm": "right"})[0] == 200
     c.post("/api/release")
+
+
+def test_estop_reset_needs_a_confirmation_for_this_latch(mock_server):
+    """复位要人工确认（负责人 2026-11-26）：一个 POST 不能复位；确认令牌只能用一次，
+    而且只对发令牌那一刻的锁存有效，之后又急停 / 释放过就要重新确认。"""
+    c = mock_server
+    assert c.post("/api/engage")[0] == 200
+    code, d = c.post("/api/estop/reset/request")
+    assert code == 403 and "没有锁定" in d["error"]
+    assert c.post("/api/hold")[0] == 200
+
+    code, d = c.post("/api/estop/reset")
+    assert code == 403 and "先在页面上确认" in d["error"]
+    code, d = c.post("/api/estop/reset", {"token": "made-up"})
+    assert code == 403 and "确认无效" in d["error"]
+    assert c.get("/api/scene")["ctrl"]["motion"]["latched"] is True
+
+    # 要令牌时给页面看锁存原因
+    code, req = c.post("/api/estop/reset/request")
+    assert code == 200 and "页面急停" in req["latch_reason"] and req["expires_in_s"] > 0
+    # 弹窗开着时又有人按了急停：旧的确认不算数，锁存还在
+    assert c.post("/api/hold")[0] == 200
+    code, d = c.post("/api/estop/reset", {"token": req["token"]})
+    assert code == 403 and "锁存变了" in d["error"]
+    assert c.get("/api/scene")["ctrl"]["motion"]["latched"] is True
+    # 释放也会让确认作废（epoch 变了）
+    code, req = c.post("/api/estop/reset/request")
+    assert c.post("/api/release")[0] == 200
+    code, d = c.post("/api/estop/reset", {"token": req["token"]})
+    assert code == 403 and "锁存变了" in d["error"]
+
+    code, req = c.post("/api/estop/reset/request")
+    code, d = c.post("/api/estop/reset", {"token": req["token"]})
+    assert code == 200 and d["ctrl"]["motion"]["latched"] is False
+    assert c.post("/api/hold")[0] == 200
+    code, d = c.post("/api/estop/reset", {"token": req["token"]})
+    assert code == 403 and "已用过" in d["error"], "令牌只能用一次"
+    assert c.confirm_reset()[0] == 200
+
+
+def test_guardian_reset_needs_a_confirmation_too(mock_server):
+    c = mock_server
+    code, d = c.post("/api/guardian/reset")
+    assert code == 403 and "先在页面上确认" in d["error"]
+    code, d = c.post("/api/guardian/reset/request")
+    assert code == 403 and "没有守护层" in d["error"], "mock 后端不经守护层"

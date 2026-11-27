@@ -22,6 +22,7 @@ from robot_platform.core.runtime_config import ConfigLockedError
 from robot_platform.paths import STATIC_DIR
 from robot_platform.web.http_util import safe_under, send_bytes, send_file, send_json
 from robot_platform.web.page import page_html
+from robot_platform.web.reset_confirm import estop_fingerprint
 
 Reply = Tuple[int, Dict[str, Any]]
 NOT_FOUND: Reply = (404, {})  # 交给 send_error(404)
@@ -276,17 +277,42 @@ def _hold(app, core, body: Dict[str, Any]) -> None:
         raise failed[0]
 
 
-def _estop_reset(app, core, body: Dict[str, Any]) -> None:
-    """解除运控核心的急停锁存（现场确认安全后；页面在调用前要让人确认）。手臂仍保持当前姿态。
+def _estop_reset_request(app, core, body: Dict[str, Any]) -> Dict[str, Any]:
+    """复位急停第一步：发一次性确认令牌，记下此刻的锁存，把锁存原因交给页面弹窗（web/reset_confirm.py）。"""
+    st = core.status()
+    if not st.get("latched"):
+        raise PermissionErrorMotion("急停没有锁定，不用复位")
+    token, ttl = app.reset_confirm.issue("estop", estop_fingerprint(st))
+    return {"token": token, "expires_in_s": ttl, "latch_reason": st.get("latch_reason")}
 
+
+def _estop_reset(app, core, body: Dict[str, Any]) -> None:
+    """复位急停第二步：人在弹窗里确认后带令牌来，解除运控核心的急停锁存。手臂仍保持当前姿态。
+
+    令牌对不上、过期、或者确认之后锁存变了（epoch 变了）都拒绝。epoch 交给核心在解除的同一把锁里
+    再比一次，所以比完到解除之间插进来的急停也不会被一起解除。
     不碰守护层：守护层自己的急停 / 故障锁存走 /api/guardian/reset。"""
-    core.reset_estop()
+    fp = estop_fingerprint(core.status())
+    app.reset_confirm.redeem("estop", body.get("token"), fp)
+    core.reset_estop(expect_epoch=fp[0])
+
+
+def _guardian_reset_request(app, core, body: Dict[str, Any]) -> Dict[str, Any]:
+    """守护层复位第一步：发一次性确认令牌（同 _estop_reset_request）。只有 guardian 后端有。
+
+    记下的是运控核心的 epoch：之后网页又急停、接管、释放过就要重新确认。别的程序经守护层协议
+    锁的急停这里看不见（见 web/reset_confirm.py）。"""
+    if not core.has_external_estop:
+        raise PermissionErrorMotion("当前后端不经守护层，没有守护层可复位")
+    token, ttl = app.reset_confirm.issue("guardian", core.status().get("epoch"))
+    return {"token": token, "expires_in_s": ttl}
 
 
 def _guardian_reset(app, core, body: Dict[str, Any]) -> None:
-    """守护层急停 / 故障锁存后：复位守护层，再从实测角重新接管。只有 guardian 后端有。
+    """守护层急停 / 故障锁存后：人在弹窗里确认、带令牌来，复位守护层，再从实测角重新接管。
 
-    复位是现场确认安全之后的操作：页面在调用前要让人确认。不解除运控核心的急停锁存。"""
+    不解除运控核心的急停锁存。"""
+    app.reset_confirm.redeem("guardian", body.get("token"), core.status().get("epoch"))
     core.reset_external_estop()
     core.engage()
 
@@ -331,8 +357,11 @@ ARM_COMMANDS: Dict[str, Callable[[Any, Any, Dict[str, Any]], Optional[Dict[str, 
     # 接管 / 释放经运控核心：会先撤销全部租约
     "/api/engage": lambda app, core, body: core.engage(),
     "/api/release": lambda app, core, body: core.release(),
+    # 复位分两步：先要确认令牌（.../request），人在弹窗里确认后带令牌复位
+    "/api/guardian/reset/request": _guardian_reset_request,
     "/api/guardian/reset": _guardian_reset,
     "/api/hold": _hold,
+    "/api/estop/reset/request": _estop_reset_request,
     "/api/estop/reset": _estop_reset,
     "/api/teach": _teach,
     "/api/gravity": lambda app, core, body: core.set_gravity_ff(bool(body.get("enabled", True))),

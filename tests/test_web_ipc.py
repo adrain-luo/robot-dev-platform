@@ -122,8 +122,15 @@ def test_page_commands_land_in_the_core_process(core, web):
     assert code == 200 and core.core.latched
     code, d = web.post("/api/target", {"q": tgt, "arm": "right"})
     assert code == 403 and "急停" in d["error"]
-    assert web.post("/api/estop/reset")[0] == 200 and not core.core.latched
-    code, d = web.post("/api/guardian/reset")
+    code, d = web.post("/api/estop/reset")
+    assert code == 403 and "先在页面上确认" in d["error"] and core.core.latched, "复位要人工确认"
+    code, req = web.post("/api/estop/reset/request")
+    assert code == 200 and "页面急停" in req["latch_reason"]
+    web.post("/api/hold")
+    code, d = web.post("/api/estop/reset", {"token": req["token"]})
+    assert code == 403 and "锁存变了" in d["error"] and core.core.latched
+    assert web.confirm_reset()[0] == 200 and not core.core.latched
+    code, d = web.confirm_reset("guardian")
     assert code == 403 and "没有守护层" in d["error"]
 
     code, d = web.post("/api/collision/status")

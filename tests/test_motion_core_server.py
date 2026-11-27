@@ -337,6 +337,20 @@ def test_estop_latches_at_once_while_core_sock_is_flooded(proc, conns):
     assert not proc.core.latched
 
 
+def test_reset_estop_carries_the_expected_epoch_over_ipc(proc, conns):
+    """网页（ipc）的复位确认把人看到的 epoch 交给核心，在解除的同一把锁里再比一次。"""
+    panel = conns("panel")
+    panel.estop("页面急停")
+    seen = proc.core.epoch
+    panel.estop("又按了一次")
+    with pytest.raises(CoreError) as e:
+        panel.call("reset_estop", expect_epoch=seen)
+    assert e.value.kind == "permission" and "锁存变了" in e.value.detail
+    assert proc.core.latched
+    panel.call("reset_estop", expect_epoch=proc.core.epoch)
+    assert not proc.core.latched
+
+
 # ---------------------------------------------------------------- 协议 / 启动
 def test_wrong_version_or_no_hello_is_refused(proc):
     for first in (wire.encode({"v": "1.0", "type": "hello", "seq": 1, "client": "old"}),
