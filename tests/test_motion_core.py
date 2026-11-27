@@ -535,3 +535,47 @@ def test_hold_manual_leaves_leased_arms_alone(rig, core):
     core.hold_manual("left")
     assert loop.arm_status("left")["float"] is False, "拖拽中的手退出拖拽"
     core.hold_manual("waist")  # 不抛
+
+
+# ------------------------------------------------------------- D3：租约自带限速
+def _step_per_cycle(loop, arm="right"):
+    """拿一拍（10 ms）走的量，换算成 rad/s：直接调 _slew，不靠循环计时。"""
+    a = loop._arm(arm)
+    with loop._lock:
+        before = a.cmd_q.copy()
+        loop._slew(a, 0.01)
+        moved = float(np.max(np.abs(a.cmd_q - before)))
+        a.desired_q = a.cmd_q.copy()  # 停住，免得循环接着走
+    return moved / 0.01
+
+
+def test_lease_speed_applies_only_while_the_lease_holds_the_arm(rig, core):
+    _, _, _, loop = rig
+    assert loop.max_speed == 0.4
+    with core.lease([R], "refactor-node", max_speed_rad_s=1.0) as lease:
+        assert loop.arm_status("right")["speed_rad_s"] == 1.0
+        assert core.status()["leases"][0]["max_speed_rad_s"] == 1.0
+        with loop._lock:
+            loop._arm("right").desired_q = loop._arm("right").cmd_q + 0.5
+        assert _step_per_cycle(loop) == pytest.approx(1.0)
+        assert loop.arm_status("left")["speed_rad_s"] == 0.4, "另一只手照旧用全局限速"
+        del lease
+    assert loop.arm_status("right")["speed_rad_s"] == 0.4, "归还后回到全局限速"
+    with core.lease([R], "page-task"):
+        assert loop.arm_status("right")["speed_rad_s"] == 0.4, "不带限速的租约用全局限速"
+    lease2 = core.lease([R], "refactor-node", max_speed_rad_s=0.8)
+    core.estop("测试")
+    assert lease2.cancelled.is_set() and loop.arm_status("right")["speed_rad_s"] == 0.4, "撤销后回到全局限速"
+    core.reset_estop()
+
+
+def test_lease_speed_outside_the_clamp_is_refused_and_takes_nothing(rig, core):
+    _, _, _, loop = rig
+    for bad in (1.5, 0.01):
+        with pytest.raises(MotionRejected) as e:
+            core.lease([L, R], "fast-task", max_speed_rad_s=bad)
+        assert e.value.reason is Reason.INVALID and "rad/s" in str(e.value)
+        assert loop.owner("right") is None and loop.owner("left") is None
+        assert core.status()["leases"] == []
+    with pytest.raises(ValueError):
+        core.lease([R], "x", max_speed_rad_s=0)

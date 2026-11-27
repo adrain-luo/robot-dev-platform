@@ -58,6 +58,7 @@ class _LeaseRec:
     revoked: Optional[str] = None    # 撤销原因
     returned: bool = False
     holder_cancelled: bool = False
+    max_speed: Optional[float] = None  # 租约自带的限速（None = 全局限速）
 
 
 @dataclass(frozen=True)
@@ -217,9 +218,12 @@ class MotionCore:
 
     # ------------------------------------------------------------ 租约
     def lease(self, resources: Sequence[Resource], owner: str, *,
-              heartbeat_ms: Optional[int] = None) -> "CoreLease":
-        """申请资源。返回的租约本身是上下文管理器（with 结束时归还）；不能给时抛 MotionRejected。"""
-        req = LeaseRequest(resources=tuple(resources), owner=owner, heartbeat_ms=heartbeat_ms)
+              heartbeat_ms: Optional[int] = None, max_speed_rad_s: Optional[float] = None) -> "CoreLease":
+        """申请资源。返回的租约本身是上下文管理器（with 结束时归还）；不能给时抛 MotionRejected。
+
+        max_speed_rad_s：租约期间这几只手用的限速（D3：各程序用自己配置的限速）；None = 全局限速（页面滑条）。"""
+        req = LeaseRequest(resources=tuple(resources), owner=owner, heartbeat_ms=heartbeat_ms,
+                           max_speed_rad_s=max_speed_rad_s)
         return self.acquire(req)
 
     def lease_arm(self, arm: str, owner: str) -> "CoreLease":
@@ -247,18 +251,20 @@ class MotionCore:
                 raise rejection(_reject(0, Reason.NOT_READY, why))
             n = next(self._ids)
             lease = Lease(lease_id=f"L{n}", epoch=self._epoch, resources=tuple(req.resources), owner=req.owner)
-            rec = _LeaseRec(lease=lease, token=f"{req.owner}#{n}", arms=tuple(arms))
+            rec = _LeaseRec(lease=lease, token=f"{req.owner}#{n}", arms=tuple(arms), max_speed=req.max_speed_rad_s)
             taken: List[str] = []
             try:
                 for arm in arms:
                     if arm in self._by_arm:
                         holder = self._leases[self._by_arm[arm]].token
                         raise PermissionErrorMotion(f"{side_label(arm)}臂正被「{holder}」使用，等它结束或先急停")
-                    self._loop.acquire_owner(arm, rec.token)
+                    self._loop.acquire_owner(arm, rec.token, max_speed=req.max_speed_rad_s)
                     taken.append(arm)
-            except PermissionErrorMotion as exc:
+            except (PermissionErrorMotion, ValueError) as exc:
                 for arm in taken:
                     self._loop.release_owner(arm, rec.token)
+                if isinstance(exc, ValueError):  # 租约带的限速超出核心的钳位
+                    raise rejection(_reject(0, Reason.INVALID, str(exc))) from None
                 reason = Reason.ESTOP_LATCHED if self._loop.inhibited else Reason.BUSY
                 raise rejection(_reject(0, reason, str(exc))) from None
             self._leases[lease.lease_id] = rec
@@ -646,7 +652,7 @@ class MotionCore:
             leases = [
                 {"lease_id": r.lease.lease_id, "owner": r.lease.owner, "token": r.token,
                  "resources": [x.value for x in r.lease.resources], "epoch": r.lease.epoch,
-                 "cancelled": r.holder_cancelled}
+                 "cancelled": r.holder_cancelled, "max_speed_rad_s": r.max_speed}
                 for r in self._leases.values()
             ]
             last = dict(self._last_revoke) if self._last_revoke else None

@@ -4,7 +4,7 @@ Standard library only. One message is one JSON object (UTF-8), sent as one
 record on a Unix ``SOCK_SEQPACKET`` socket (record boundaries are kept, so no
 framing is needed)::
 
-    {"v": "1.1", "type": "<message type>", "seq": <int >= 0>, ...fields}
+    {"v": "1.2", "type": "<message type>", "seq": <int >= 0>, ...fields}
 
 - ``v`` is ``CONTRACT_VERSION``. A peer that receives any other version
   rejects the message and closes the connection; there is no negotiation.
@@ -205,7 +205,8 @@ def to_wire(obj: Any) -> Dict[str, Any]:
     if isinstance(obj, Stamp):
         return _stamp_to(obj)
     if isinstance(obj, LeaseRequest):
-        return {"resources": [r.value for r in obj.resources], "owner": obj.owner, "heartbeat_ms": obj.heartbeat_ms}
+        return {"resources": [r.value for r in obj.resources], "owner": obj.owner, "heartbeat_ms": obj.heartbeat_ms,
+                "max_speed_rad_s": obj.max_speed_rad_s}
     if isinstance(obj, Lease):
         return {"lease_id": obj.lease_id, "epoch": obj.epoch, "resources": [r.value for r in obj.resources],
                 "owner": obj.owner}
@@ -239,12 +240,14 @@ def _from_wire(cls, d):
     if cls is Stamp:
         return _stamp_from(d)
     if cls is LeaseRequest:
-        d = _fields(d, cls, ("resources", "owner"), ("heartbeat_ms",))
+        d = _fields(d, cls, ("resources", "owner"), ("heartbeat_ms", "max_speed_rad_s"))
         if not isinstance(d["resources"], list):
             raise WireError("protocol", "LeaseRequest.resources must be a list")
+        speed = d.get("max_speed_rad_s")
         return LeaseRequest(resources=tuple(_enum(Resource, r, "LeaseRequest.resources") for r in d["resources"]),
                             owner=_str(d["owner"], "LeaseRequest.owner"),
-                            heartbeat_ms=_opt_int(d.get("heartbeat_ms"), "LeaseRequest.heartbeat_ms"))
+                            heartbeat_ms=_opt_int(d.get("heartbeat_ms"), "LeaseRequest.heartbeat_ms"),
+                            max_speed_rad_s=None if speed is None else _number(speed, "LeaseRequest.max_speed_rad_s"))
     if cls is Lease:
         d = _fields(d, cls, ("lease_id", "epoch", "resources", "owner"))
         if not isinstance(d["resources"], list):
