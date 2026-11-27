@@ -306,6 +306,7 @@ def test_arm_state_follows_waypoints():
     wp = [np.full(7, 0.1), np.full(7, 0.2), np.full(7, 0.05)]
     a.set_path(wp)
     fake = SimpleNamespace(max_speed=1.0, _dt=0.01)
+    fake._speed = lambda arm: ArmLoop._speed(fake, arm)  # 每只手的限速（租约自带限速，2b）
     seen = []
     for _ in range(200):
         ArmLoop._slew(fake, a, 0.01)
